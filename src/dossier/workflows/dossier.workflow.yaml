@@ -1,0 +1,84 @@
+# dossier MVP workflow — the declared state machine regista enforces.
+# DRAFT: validate against the installed regista with `regista` workflow lint
+# before relying on it (regista 0.4.0 workflow schema).
+#
+# Design intent lives in docs/provenance-model.md. Keep this minimal — the MVP
+# status model is fixed (open -> in_progress -> blocked -> done), not configurable.
+
+name: dossier
+version: 1
+regista_version: "0.4.0"
+
+# Fixed status model. `open` is the entry state; `done` is terminal.
+states:
+  - name: open
+    initial: true
+  - name: in_progress
+  - name: blocked
+  - name: done
+    terminal: true
+
+# Who may act. MVP keeps roles coarse: any authenticated member may move work;
+# `system` is reserved for regista/maintenance. Agents act under `member` too,
+# distinguished at the actor level (actor_kind/on_behalf_of), not by role.
+roles:
+  - name: member
+  - name: system
+
+# Allowed transitions. Every move an issue can make is here; regista rejects
+# anything not declared, and gates each on allowed_roles.
+transitions:
+  - name: start
+    from: open
+    to: in_progress
+    allowed_roles: [member]
+  - name: block
+    from: in_progress
+    to: blocked
+    allowed_roles: [member]
+  - name: unblock
+    from: blocked
+    to: in_progress
+    allowed_roles: [member]
+  - name: complete
+    from: in_progress
+    to: done
+    allowed_roles: [member]
+  - name: reopen
+    from: done
+    to: open
+    allowed_roles: [member]
+  # Allow closing straight from open (e.g. won't-fix / duplicate triage).
+  - name: close_from_open
+    from: open
+    to: done
+    allowed_roles: [member]
+
+# Issue types. `assignee` is a custom field for the MVP (regista *claims* are the
+# richer "who is actively working this" model — deferred). Priority is an enum so
+# the UI can render and filter it.
+work_item_types:
+  - name: bug
+    custom_fields:
+      - name: assignee
+        type: string
+        required: false
+        ui_visible: true
+      - name: priority
+        type: enum
+        enum_values: [low, normal, high, urgent]
+        default: normal
+        ui_visible: true
+  - name: task
+    custom_fields:
+      - name: assignee
+        type: string
+        required: false
+        ui_visible: true
+      - name: priority
+        type: enum
+        enum_values: [low, normal, high, urgent]
+        default: normal
+        ui_visible: true
+
+# No cross-issue links in the MVP (scope: out). link_types intentionally omitted.

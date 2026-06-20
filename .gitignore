@@ -1,0 +1,30 @@
+# Hard rule (portfolio-wide): never commit real work-domain data or secrets.
+
+# Never commit
+samples/
+secrets/
+*.env
+*.db
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+
+# Vendored patina is committed; local design-system build caches are not
+.patina-cache/
