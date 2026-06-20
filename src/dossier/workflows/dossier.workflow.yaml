@@ -2,36 +2,40 @@
 # DRAFT: validate against the installed regista with `regista` workflow lint
 # before relying on it (regista 0.4.0 workflow schema).
 #
-# Design intent lives in docs/provenance-model.md. Keep this minimal — the MVP
-# status model is fixed (open -> in_progress -> blocked -> done), not configurable.
+# Design intent lives in docs/provenance-model.md; review semantics in
+# plans/005-adversarial-review.md. The status model is fixed (not configurable),
+# and `done` is reachable ONLY through adversarial review (`in_review`), except a
+# pre-work triage close from `open`.
 
 name: dossier
 version: 1
 regista_version: "0.4.0"
 
-# Fixed status model. `open` is the entry state; `done` is terminal.
+# Fixed status model. `open` is the entry state; `done` is terminal. `in_review`
+# is a MANDATORY gate on the path to done — review is structural, not a flag.
 states:
   - name: open
     initial: true
   - name: in_progress
   - name: blocked
+  - name: in_review
   - name: done
     terminal: true
 
 # Who may act. MVP keeps roles coarse: any authenticated member may move work;
-# `system` is reserved for regista/maintenance. Agents act under `member` too,
-# distinguished at the actor level (actor_kind/on_behalf_of), not by role.
+# `system` is reserved for regista/maintenance. The adversarial property of review
+# is NOT enforced by role (a role can't tell self-review from independent review);
+# it is enforced by the `adversarial_review` validator (plans/005).
 roles:
   - name: member
   - name: system
 
-# Allowed transitions. Every move an issue can make is here; regista rejects
-# anything not declared, and gates each on allowed_roles.
 transitions:
   - name: start
     from: open
     to: in_progress
     allowed_roles: [member]
+
   - name: block
     from: in_progress
     to: blocked
@@ -40,26 +44,51 @@ transitions:
     from: blocked
     to: in_progress
     allowed_roles: [member]
-  - name: complete
+
+  # Hand work to review. The submitter is recorded as (an) author for the
+  # distinct-reviewer check.
+  - name: submit_for_review
     from: in_progress
+    to: in_review
+    allowed_roles: [member]
+
+  # The two adversarial-review exits. BOTH gate on `adversarial_review`:
+  # the acting reviewer must be a different actor than the work's author(s), and
+  # (per plans/005) agent-authored work requires a human reviewer. Rejection is a
+  # first-class, expected outcome — not an error path.
+  - name: request_changes        # adversarial review found problems -> back to work
+    from: in_review
+    to: in_progress
+    allowed_roles: [member]
+    validator: adversarial_review
+  - name: accept                 # review attests the work -> done
+    from: in_review
     to: done
     allowed_roles: [member]
+    validator: adversarial_review
+
   - name: reopen
     from: done
     to: open
     allowed_roles: [member]
-  # Allow closing straight from open (e.g. won't-fix / duplicate triage).
+
+  # The ONE review-exempt path: dismissing an item before any work (won't-fix /
+  # duplicate). Valid only from `open`; anything that did work goes through review.
   - name: close_from_open
     from: open
     to: done
     allowed_roles: [member]
 
 # Issue types. `assignee` is a custom field for the MVP (regista *claims* are the
-# richer "who is actively working this" model — deferred). Priority is an enum so
-# the UI can render and filter it.
+# richer "who is actively working this" model — deferred). `team` (Plan 004) scopes
+# writes. `priority` is an enum for render/filter.
 work_item_types:
   - name: bug
     custom_fields:
+      - name: team
+        type: string
+        required: false
+        ui_visible: true
       - name: assignee
         type: string
         required: false
@@ -71,6 +100,10 @@ work_item_types:
         ui_visible: true
   - name: task
     custom_fields:
+      - name: team
+        type: string
+        required: false
+        ui_visible: true
       - name: assignee
         type: string
         required: false

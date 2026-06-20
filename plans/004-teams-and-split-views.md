@@ -20,10 +20,11 @@ I'm building to this reading; correct me if it's wrong:
   scope for members, and for leads a **side-by-side multi-team view** (panes/lanes,
   one per team) so several teams' boards are visible at once.
 
-Two forks I'm **not** deciding unilaterally — flagged under "Decisions" with my
-recommendation:
-1. **Visibility = soft filter or hard access control?**
-2. **Team mapping = a `team` custom field or a regista project per team?**
+**Visibility is decided: universal read, team-scoped writes.** Every authenticated
+member can *read* every team's items (no read walls); but *writes* — create,
+transition, edit, comment, review — are authorized only for members of the item's
+owning team. One fork remains, flagged under "Decisions":
+1. **Team mapping = a `team` custom field or a regista project per team?**
 
 ## Principles this plan must hold
 
@@ -57,11 +58,16 @@ flagged for triage).
   viewer's teams by default; a lead with cross-team groups can pick which teams to
   pane.
 
-**Visibility model (the soft-vs-hard fork).** Recommend **soft for MVP**: everyone
-authenticated can *see* all teams' items; views *default and filter* to the viewer's
-team(s). Hard access control (members can only see their teams' items) is heavier —
-it implies real multi-tenant authorization and, done properly, may want a regista
-project per team. Ship soft; document the hard path; don't foreclose it.
+**Visibility model: universal read, team-scoped writes (decided).** Every
+authenticated member can *read* all teams' items — no read walls; the split views
+below are *organization*, not access control. **Writes are authorized by team:** a
+mutation (create / transition / edit / comment / review) is permitted only if the
+acting member belongs to the item's owning `team`. This authorization check lives in
+the regista gateway (`001` WI-3), right where the actor is injected — the same choke
+point that guarantees the actor isn't spoofed enforces that the actor is entitled to
+write this item. Team-less items are writable by any member until triaged onto a
+team. Note the interaction with review (Plan 005): the reviewer is a team member ≠
+the author, so adversarial review stays inside the team's write scope by default.
 
 ## Work items
 
@@ -72,19 +78,24 @@ project per team. Ship soft; document the hard path; don't foreclose it.
 - **WI-3 — "My work" default scoped view.**
 - **WI-4 — Single-team board view.**
 - **WI-5 — Split view:** side-by-side multi-team panes for leads, with a team picker.
-- **WI-6 — Visibility model:** implement soft filtering; write up the hard-isolation
-  option (regista-project-per-team) as a decision record, not code.
+- **WI-6 — Write authorization by team:** enforce "acting member ∈ item's team" for
+  every mutation in the regista gateway; reads stay universal. Clear UI affordance
+  when a viewer can read but not write an item (controls disabled with a reason).
+  Test: a non-member is refused every write verb; any member can read.
 - **WI-7 — Record team context in `actor_metadata`** at action time (provenance).
 - **WI-8 — Tests:** mapping resolution, scoping correctness (a member sees their
   team by default), split-view rendering with multiple teams.
 
 ## Decisions to surface to a human
 
-1. **Visibility:** soft filter (recommended MVP) vs hard access control.
-2. **Team mapping:** `team` custom field (recommended MVP) vs regista-project-per-team
-   (real isolation, heavier, the hard-visibility enabler).
-3. Whether non-team-members can be assigned an item; what "split view" should default
-   to for a single-team member (probably just their team board).
+1. **Team mapping:** `team` custom field (recommended MVP) vs regista-project-per-team
+   (real isolation — only needed if read walls are ever wanted, which the
+   universal-read decision says they're not).
+2. Whether a member of one team can be *assigned* an item owned by another team
+   (assignment is a write — default: no, assignee must be in the owning team).
+3. What "split view" defaults to for a single-team member (probably just their team
+   board); how a cross-team lead is identified (an AD group mapped to a "lead" team
+   set, or a flag).
 
 ## Sequencing / relationships
 

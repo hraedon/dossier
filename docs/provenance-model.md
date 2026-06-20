@@ -20,6 +20,7 @@ dossier introduces no new state model. It maps directly onto regista primitives:
 | Assignment / "who's on it" | custom field `assignee` (MVP); regista *claims* later |
 | Priority, etc. | typed custom fields (`ui_visible`) |
 | Comment | event carrying comment text |
+| Adversarial review verdict | `accept` / `request_changes` transition event, by an actor ≠ the author |
 | Activity / history | the work-item's event log |
 | Issue key (`DOSSIER-42`) | dossier-minted display key over the work-item id |
 
@@ -52,6 +53,13 @@ who (human/agent, on whose behalf), when, and whether the chain verifies. Proven
 nobody can read is not provenance. *Mechanism:* the verified-history view renders
 the event log and surfaces an integrity status (chain intact / broken) from a
 replay/verify call.
+
+**Adversarial review is part of the record.** Because `done` is reachable only
+through review (`plans/005`), every completed work-item's dossier contains a signed
+verdict event: who challenged the work (an actor ≠ the author; a *human* if any
+author was an agent), when, and what they found. Review is structural, not a flag,
+and its outcome is provenance — "this was independently challenged, by this person,
+and here's the finding" is exactly the audit claim the regulated setting needs.
 
 ## 3. Explicitly deferred (seams left open, not redesigned)
 
