@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "agent-notes orient --path /projects/dossier 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
