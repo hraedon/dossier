@@ -1,0 +1,52 @@
+<section class="ds-history">
+  <div class="ds-history__head">
+    <h2 class="ds-history__title">verified history</h2>
+    {% if integrity_drift == 0 %}
+    <span class="ds-integrity-badge ds-integrity-badge--ok">
+      <span class="ds-pill__dot"></span>chain verified
+    </span>
+    {% else %}
+    <span class="ds-integrity-badge ds-integrity-badge--crit">
+      <span class="ds-pill__dot"></span>CHAIN BROKEN: {{ integrity_drift }} drift
+    </span>
+    {% endif %}
+  </div>
+
+  {% if events %}
+  <div class="ds-chain">
+    <div class="ds-chain__spine"></div>
+    {% for event in events %}
+    <div class="ds-chain__event">
+      <div class="ds-chain__rule"></div>
+      <div class="ds-chain__row">
+        <time class="ds-chain__time mono tnum">{{ format_timestamp(event.timestamp) }}</time>
+        <span class="ds-chain__action mono">{{ transition_label(event.transition) }}</span>
+      </div>
+      <div class="ds-chain__actor">
+        <span class="ds-chain__who">{{ actor_display(event) }}</span>
+        <span class="ds-badge ds-badge--{{ event.actor_kind }}">{{ event.actor_kind }}</span>
+        {% set ob = on_behalf_display(event) %}
+        {% if ob %}
+        <span class="ds-chain__delegation">on behalf of {{ ob }}</span>
+        {% endif %}
+      </div>
+      {% set verdict = event_verdict(event) %}
+      {% if verdict %}
+        {% if event.transition == 'accept' %}
+        <div class="ds-chain__verdict ds-chain__verdict--ok">{{ verdict }}</div>
+        {% elif event.transition == 'request_changes' %}
+        <div class="ds-chain__verdict ds-chain__verdict--warn">{{ verdict }}</div>
+        {% else %}
+        <div class="ds-chain__verdict">{{ verdict }}</div>
+        {% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="ds-empty">
+    <div class="ds-empty__title">no history</div>
+    <div class="ds-empty__sub">events will appear here</div>
+  </div>
+  {% endif %}
+</section>

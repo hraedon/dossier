@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}{{ issue_title(issue) }} — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">{{ issue_title(issue) }}</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-pill {{ status_pill_class(issue.current_state) }}"><span class="ds-pill__dot"></span>{{ issue.current_state }}</span>
+      <span class="ds-chip">{{ issue.work_item_type }}</span>
+      <span class="ds-chip mono">assignee: {{ issue_field(issue, 'assignee', '—') }}</span>
+      <span class="ds-chip mono">priority: {{ issue_field(issue, 'priority', 'normal') }}</span>
+    </div>
+  </div>
+  <a href="/" class="ds-btn ds-btn--ghost">back</a>
+</div>
+
+{% if issue_field(issue, 'description', '') %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose">{{ issue_field(issue, 'description', '') }}</div>
+</div>
+{% endif %}
+
+{% if error %}
+<div class="ds-callout ds-callout--crit">{{ error }}</div>
+{% endif %}
+
+{% if transitions %}
+<div class="ds-panel ds-panel--pad">
+  <form method="post" action="/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-transition-row">
+      <select class="ds-select" name="transition_name">
+        {% for name, label, needs_note in transitions %}
+        <option value="{{ name }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <input class="ds-input" type="text" name="review_note" placeholder="review note (required for accept / request changes)">
+      <button type="submit" class="ds-btn ds-btn--primary">apply</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+<div class="ds-panel ds-panel--pad">
+  <form method="post" action="/issues/{{ issue.work_item_id }}/comments" class="ds-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-field">
+      <label class="ds-label" for="comment-body">comment</label>
+      <textarea class="ds-input ds-input--area" id="comment-body" name="body" rows="2"></textarea>
+    </div>
+    <button type="submit" class="ds-btn ds-btn--primary">comment</button>
+  </form>
+</div>
+
+{% include "_history.html" %}
+{% endblock %}

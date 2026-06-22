@@ -22,7 +22,8 @@ def gateway(tmp_path):
 
 @pytest.fixture
 def make_issue(gateway):
-    def _make(*, actor=ALICE, work_item_type="bug", **fields):
+    def _make(*, actor=ALICE, work_item_type="bug", title="Test issue", **fields):
+        fields.setdefault("title", title)
         wi, _ = gateway.create_issue(
             actor=actor,
             work_item_type=work_item_type,

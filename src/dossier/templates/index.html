@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}issues — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">issues</h1>
+  <a href="/issues/new" class="ds-btn ds-btn--primary">new issue</a>
+</div>
+
+<form method="get" action="/" class="ds-filters">
+  <div class="ds-field ds-field--inline">
+    <label class="ds-label" for="f-assignee">assignee</label>
+    <input class="ds-input ds-input--sm" type="text" id="f-assignee" name="assignee" value="{{ filter_assignee }}">
+  </div>
+  <div class="ds-field ds-field--inline">
+    <label class="ds-label" for="f-status">status</label>
+    <select class="ds-select ds-select--sm" id="f-status" name="status">
+      <option value="">all</option>
+      {% set current = filter_states | first %}
+      <option value="open" {{ 'selected' if current == 'open' else '' }}>open</option>
+      <option value="in_progress" {{ 'selected' if current == 'in_progress' else '' }}>in progress</option>
+      <option value="blocked" {{ 'selected' if current == 'blocked' else '' }}>blocked</option>
+      <option value="in_review" {{ 'selected' if current == 'in_review' else '' }}>in review</option>
+      <option value="done" {{ 'selected' if current == 'done' else '' }}>done</option>
+    </select>
+  </div>
+  <button type="submit" class="ds-btn ds-btn--ghost">filter</button>
+</form>
+
+{% if issues %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>title</th>
+        <th>type</th>
+        <th>status</th>
+        <th>assignee</th>
+        <th>priority</th>
+        <th>updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for wi in issues %}
+      <tr>
+        <td><a href="/issues/{{ wi.work_item_id }}">{{ issue_title(wi) }}</a></td>
+        <td class="mono">{{ wi.work_item_type }}</td>
+        <td><span class="ds-pill {{ status_pill_class(wi.current_state) }}"><span class="ds-pill__dot"></span>{{ wi.current_state }}</span></td>
+        <td>{{ issue_field(wi, 'assignee', '—') }}</td>
+        <td class="mono">{{ issue_field(wi, 'priority', 'normal') }}</td>
+        <td class="mono tnum">{{ last_event_time(wi) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no issues</div>
+  <div class="ds-empty__sub">create one to get started</div>
+</div>
+{% endif %}
+{% endblock %}

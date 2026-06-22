@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-theme-key="dossier-theme">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>login — dossier</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='css/tokens.css') }}">
+  <script src="{{ url_for('static', path='theme.js') }}"></script>
+</head>
+<body>
+<div class="ds-app">
+  <main class="ds-page">
+    <div class="ds-wrap ds-wrap--narrow">
+      <div class="ds-login-card">
+        <h1 class="ds-login-card__title">dossier</h1>
+        <p class="ds-login-card__sub muted">sign in to continue</p>
+        {% if error %}
+        <div class="ds-callout ds-callout--crit">{{ error }}</div>
+        {% endif %}
+        <form method="post" action="/login" class="ds-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="ds-field">
+            <label class="ds-label" for="username">username</label>
+            <input class="ds-input" type="text" id="username" name="username" autocomplete="username" required>
+          </div>
+          <div class="ds-field">
+            <label class="ds-label" for="password">password</label>
+            <input class="ds-input" type="password" id="password" name="password" autocomplete="current-password" required>
+          </div>
+          <button type="submit" class="ds-btn ds-btn--primary">sign in</button>
+        </form>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

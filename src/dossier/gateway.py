@@ -65,6 +65,9 @@ class RegistaGateway:
         regista's ``create_work_item`` does not accept it (a regista-side
         limitation; agent-delegated creation is a future concern). Transitions
         and comments do thread ``on_behalf_of``.
+
+        ``custom_fields`` must include ``title`` (required by the workflow v2)
+        and typically includes ``description``, ``assignee``, and ``priority``.
         """
         return self._reg.create_work_item(
             workflow_name=WORKFLOW_NAME,

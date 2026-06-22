@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}new issue — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">new issue</h1>
+  <a href="/" class="ds-btn ds-btn--ghost">cancel</a>
+</div>
+
+{% if error %}
+<div class="ds-callout ds-callout--crit">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/issues" class="ds-form ds-form--panel">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="ds-field">
+    <label class="ds-label" for="type">type</label>
+    <select class="ds-select" id="type" name="type">
+      <option value="bug">bug</option>
+      <option value="task">task</option>
+    </select>
+  </div>
+  <div class="ds-field">
+    <label class="ds-label" for="title">title</label>
+    <input class="ds-input" type="text" id="title" name="title" required>
+  </div>
+  <div class="ds-field">
+    <label class="ds-label" for="description">description</label>
+    <textarea class="ds-input ds-input--area" id="description" name="description" rows="4"></textarea>
+  </div>
+  <div class="ds-field-row">
+    <div class="ds-field">
+      <label class="ds-label" for="assignee">assignee</label>
+      <input class="ds-input" type="text" id="assignee" name="assignee">
+    </div>
+    <div class="ds-field">
+      <label class="ds-label" for="priority">priority</label>
+      <select class="ds-select" id="priority" name="priority">
+        <option value="low">low</option>
+        <option value="normal" selected>normal</option>
+        <option value="high">high</option>
+        <option value="urgent">urgent</option>
+      </select>
+    </div>
+  </div>
+  <button type="submit" class="ds-btn ds-btn--primary">create</button>
+</form>
+{% endblock %}

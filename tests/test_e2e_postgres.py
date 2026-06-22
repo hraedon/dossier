@@ -45,7 +45,7 @@ def test_full_review_lifecycle_verified_chain(pg_gateway):
     wi, _ = pg_gateway.create_issue(
         actor=alice,
         work_item_type="bug",
-        custom_fields={"assignee": "bob", "priority": "high"},
+        custom_fields={"title": "e2e bug", "assignee": "bob", "priority": "high"},
     )
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
     pg_gateway.comment(actor=alice, work_item_id=wi.work_item_id, body="triaged, assigning to bob")
@@ -82,7 +82,7 @@ def test_verified_history_is_legible(pg_gateway):
     bob = _human("bob", "Bob")
     carol = _human("carol", "Carol")
 
-    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="task")
+    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="task", custom_fields={"title": "e2e task"})
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     pg_gateway.transition(actor=carol, work_item_id=wi.work_item_id, transition_name="accept")
@@ -106,7 +106,7 @@ def test_adversarial_gate_enforced_on_postgres(pg_gateway):
     alice = _human("alice", "Alice")
     bob = _human("bob", "Bob")
 
-    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="bug")
+    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="bug", custom_fields={"title": "gate test"})
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     with pytest.raises(RegistaError):
@@ -119,7 +119,7 @@ def test_reopen_requires_review_again(pg_gateway):
     bob = _human("bob", "Bob")
     carol = _human("carol", "Carol")
 
-    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="bug")
+    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="bug", custom_fields={"title": "reopen test"})
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     pg_gateway.transition(actor=carol, work_item_id=wi.work_item_id, transition_name="accept")

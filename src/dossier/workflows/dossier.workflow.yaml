@@ -8,7 +8,7 @@
 # pre-work triage close from `open`.
 
 name: dossier
-version: 1
+version: 2
 regista_version: "0.4.0"
 
 # Fixed status model. `open` is the entry state; `done` is terminal. `in_review`
@@ -85,6 +85,14 @@ transitions:
 work_item_types:
   - name: bug
     custom_fields:
+      - name: title
+        type: string
+        required: true
+        ui_visible: true
+      - name: description
+        type: string
+        required: false
+        ui_visible: true
       - name: team
         type: string
         required: false
@@ -100,6 +108,14 @@ work_item_types:
         ui_visible: true
   - name: task
     custom_fields:
+      - name: title
+        type: string
+        required: true
+        ui_visible: true
+      - name: description
+        type: string
+        required: false
+        ui_visible: true
       - name: team
         type: string
         required: false
