@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: dossier-postgres-dev
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: dossier
+      POSTGRES_PASSWORD: dossier
+      POSTGRES_DB: dossier
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dossier"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    networks:
+      - dossier-dev
+
+volumes:
+  postgres_data:
+
+networks:
+  dossier-dev:

@@ -3,7 +3,8 @@
 # Never commit
 samples/
 secrets/
-*.env
+.env
+*.env.local
 *.db
 *.sqlite3
 *.sqlite3-wal

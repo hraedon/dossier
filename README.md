@@ -72,7 +72,137 @@ with Jira; depending on any production/cloud infrastructure.
 
 ## Status
 
-Charter stage. Design spine in `docs/provenance-model.md`; draft regista workflow
-in `src/dossier/workflows/dossier.workflow.yaml`; MVP plan in `plans/001-mvp.md`.
-Needs a dedicated regista/Postgres instance. Private until a written sanitization
-review (`docs/publication-review.md`).
+Foundation slice landed. The provenance foundation is real and verified: the
+regista gateway (the sole choke point — a server-resolved `Actor` is injected on
+every mutation), the `adversarial_review` validator (structural separation-of-
+duties: no self-review; agent-authored work needs a human reviewer), local auth
+(signed session + CSRF + principal→actor), and an end-to-end test proving the
+signed hash-chain verifies (`replay()==0`) against real Postgres. regista's
+`ValidatorContext` was enriched (acting `actor_kind` + prior event history) to
+make the review gate possible — see the sibling
+[`plans/020-validator-context-enrichment.md`](../regista/plans/020-validator-context-enrichment.md).
+
+Not yet built: the server-rendered UI (list/board, issue view, the legible
+verified-history page — `plans/001` WI-5/7/8), the agent HTTP API (WI-9), and
+`docs/publication-review.md`. Private until that sanitization review lands.
+
+## Installation
+
+Requires **Python 3.12+**.
+
+```bash
+cd /projects/dossier
+python3 -m venv .venv
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+# Install the sibling regista library editable, or pin a version:
+uv pip install -e ../regista
+# Or: uv pip install regista==0.4.0
+```
+
+For development Postgres, start the compose service. **Note:** this binds
+`5432:5432`, the same port regista's `docker-compose.test.yml` uses, so only one
+container should run at a time.
+
+```bash
+docker compose up -d postgres
+```
+
+## Configuration
+
+Copy `.env.example` to `.env` (`.env` is gitignored) and fill in real values.
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `DOSSIER_DATABASE_URL` | yes | — | Postgres DSN passed to regista |
+| `DOSSIER_PROJECT` | no | `dossier` | regista project/schema name |
+| `DOSSIER_HMAC_KEY_PATH` | yes | — | path to the regista HMAC keyset JSON |
+| `DOSSIER_SESSION_SECRET` | yes | — | secret for itsdangerous signed session cookies |
+| `DOSSIER_SESSION_MAX_AGE_SECONDS` | no | `43200` | signed session cookie lifetime |
+| `DOSSIER_SECURE_COOKIES` | no | `true` | set `false` only for local dev without TLS |
+| `DOSSIER_REQUIRE_SSL` | no | `false` | pass `true` to regista to require an SSL Postgres connection |
+| `DOSSIER_USERS_PATH` | to serve | — | path to the local users JSON file (LocalBackend) |
+| `DOSSIER_AUTH_BACKEND` | no | `local` | auth backend selector (`local`; `ldap` is Plan 003) |
+
+### External PostgreSQL
+
+You can point dossier at an existing Postgres server instead of the local
+compose container.
+
+- `DOSSIER_DATABASE_URL` is handed directly to regista as its `dsn`. Use a
+  fully-qualified URL such as
+  `postgresql://dossier:replace-me@db.example.internal:5432/dossier_owner`.
+- `DOSSIER_PROJECT` becomes the Postgres schema name. One regista project lives in
+  one schema within the chosen database. Multiple dossier deployments can share a
+  single database as long as each uses a distinct project/schema name, or they
+  can use separate databases.
+
+#### Least-privilege database role
+
+Create a dedicated role and database. The role needs rights to create a schema
+(the project name becomes the schema) and then to create tables and indexes
+inside that schema. An example setup:
+
+```sql
+CREATE ROLE dossier LOGIN PASSWORD 'replace-with-strong-password';
+CREATE DATABASE dossier OWNER dossier;
+-- Connect to dossier as a superuser and grant create-schema rights
+\c dossier
+GRANT CREATE ON DATABASE dossier TO dossier;
+```
+
+regista will create the schema on first use. After creation, the role only
+needs read/write rights within its own schema; restrict further with
+`GRANT USAGE, CREATE ON SCHEMA dossier TO dossier` if you pre-create the schema.
+
+#### TLS/SSL
+
+Use two layers:
+
+1. Psycopg TLS: add `?sslmode=require` (or `verify-full`) to `DOSSIER_DATABASE_URL`
+   so the client refuses plaintext.
+2. regista-level enforcement: set `DOSSIER_REQUIRE_SSL=true`. When the app factory
+   passes `require_ssl=True` to regista, regista checks `pg_stat_ssl` on every
+   connection acquisition and raises if TLS is not active.
+
+Server-side, enforce TLS by adding a `hostssl` line in `pg_hba.conf` for the
+dossier role and reload Postgres. Plaintext `host` entries for that role should be
+removed or narrowed.
+
+#### Connection-pooling caveat
+
+regista uses `SET LOCAL search_path` per transaction to scope each query to the
+project schema. This is **incompatible with PgBouncer in transaction-pooling
+mode**, because transaction-scoped state may be dispatched across different
+physical backends. Use a direct Postgres connection, or run PgBouncer in
+**session mode**.
+
+### Signing keys
+
+Generate a regista-compatible HMAC keyset before starting the app:
+
+```bash
+mkdir -p /run/secrets
+.venv/bin/python -m dossier.cli keys generate --path /run/secrets/dossier-keys.json
+chmod 600 /run/secrets/dossier-keys.json
+```
+
+Set `DOSSIER_HMAC_KEY_PATH=/run/secrets/dossier-keys.json` and keep the file on
+a secrets volume. The file is created with mode `0o600` by default.
+
+### First run
+
+```bash
+cp .env.example .env          # edit .env with real values
+docker compose up -d postgres
+.venv/bin/python -m dossier.cli keys generate --path /run/secrets/dossier-keys.json
+.venv/bin/python -m dossier.cli init                       # create project + register workflow
+.venv/bin/python -m dossier.cli users add --username alice --display-name "Alice"
+.venv/bin/python -m dossier.cli serve                      # http://127.0.0.1:8000
+```
+
+`init` creates the regista project/schema and registers the `dossier` workflow
+(idempotent). `users add` appends a local user (it prompts for the password).
+`serve` runs the FastAPI app against the configured Postgres; the minimal auth
+surface (`/healthz`, `/csrf`, `/login`, `/logout`, `/me`) is live — the full
+board UI (`plans/001` WI-5) lands next.
