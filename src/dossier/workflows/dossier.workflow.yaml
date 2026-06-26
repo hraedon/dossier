@@ -1,31 +1,43 @@
-# dossier MVP workflow — the declared state machine regista enforces.
-# DRAFT: validate against the installed regista with `regista` workflow lint
-# before relying on it (regista 0.4.0 workflow schema).
+# dossier workflow v3 — canonical agentic lifecycle with cross-lineage adversarial
+# review and a human final gate. DRAFT: validate against the installed regista
+# with `regista` workflow lint before relying on it (regista 0.4.0 schema).
 #
 # Design intent lives in docs/provenance-model.md; review semantics in
 # plans/005-adversarial-review.md. The status model is fixed (not configurable),
-# and `done` is reachable ONLY through adversarial review (`in_review`), except a
-# pre-work triage close from `open`.
+# and `done` is reachable ONLY through the two-stage review, except a pre-work
+# triage close from `open`.
+#
+# Two-stage review:
+#   - `in_review` is the cross-lineage adversarial pass: a reviewer whose model
+#     lineage differs from every author (or a human, who is always
+#     cross-lineage) challenges the work. Same-lineage review is permitted only
+#     with an explicit `same_lineage_acknowledged` payload — never silent.
+#   - `in_human_review` is the human accountability gate: a human actor must
+#     accept or reject before the item reaches `done`. This is the final
+#     provenance claim — "a person signed off."
 
 name: dossier
-version: 2
+version: 3
 regista_version: "0.4.0"
 
 # Fixed status model. `open` is the entry state; `done` is terminal. `in_review`
-# is a MANDATORY gate on the path to done — review is structural, not a flag.
+# and `in_human_review` are MANDATORY gates on the path to done — review is
+# structural, not a flag.
 states:
   - name: open
     initial: true
   - name: in_progress
   - name: blocked
   - name: in_review
+  - name: in_human_review
   - name: done
     terminal: true
 
 # Who may act. MVP keeps roles coarse: any authenticated member may move work;
 # `system` is reserved for regista/maintenance. The adversarial property of review
-# is NOT enforced by role (a role can't tell self-review from independent review);
-# it is enforced by the `adversarial_review` validator (plans/005).
+# is NOT enforced by role (a role can't tell self-review from independent
+# review); it is enforced by the `adversarial_review` / `human_gate` validators
+# (plans/005).
 roles:
   - name: member
   - name: system
@@ -45,27 +57,42 @@ transitions:
     to: in_progress
     allowed_roles: [member]
 
-  # Hand work to review. The submitter is recorded as (an) author for the
-  # distinct-reviewer check.
+  # Hand work to the cross-lineage adversarial review. The submitter is recorded
+  # as (an) author for the distinct-reviewer check.
   - name: submit_for_review
     from: in_progress
     to: in_review
     allowed_roles: [member]
 
-  # The two adversarial-review exits. BOTH gate on `adversarial_review`:
-  # the acting reviewer must be a different actor than the work's author(s), and
-  # (per plans/005) agent-authored work requires a human reviewer. Rejection is a
-  # first-class, expected outcome — not an error path.
-  - name: request_changes        # adversarial review found problems -> back to work
+  # The two adversarial-review exits. BOTH gate on `adversarial_review`: the
+  # acting reviewer must differ from the work's author(s) (directly and via
+  # delegation), and a same-lineage agent reviewer must acknowledge the shared
+  # lineage. A human or a genuinely cross-lineage agent may pass the work to the
+  # human gate. Rejection is a first-class, expected outcome — not an error path.
+  - name: adversarial_pass        # cross-lineage reviewer approves -> human gate
+    from: in_review
+    to: in_human_review
+    allowed_roles: [member]
+    validator: adversarial_review
+  - name: request_changes         # adversarial review found problems -> back to work
     from: in_review
     to: in_progress
     allowed_roles: [member]
     validator: adversarial_review
-  - name: accept                 # review attests the work -> done
-    from: in_review
+
+  # The human final gate. BOTH exits gate on `human_gate`: the actor must be a
+  # human (the accountability step before `done`) and must differ from the
+  # work's author(s).
+  - name: accept                  # human final acceptance -> done
+    from: in_human_review
     to: done
     allowed_roles: [member]
-    validator: adversarial_review
+    validator: human_gate
+  - name: reject                  # human sends back for remediation
+    from: in_human_review
+    to: in_progress
+    allowed_roles: [member]
+    validator: human_gate
 
   - name: reopen
     from: done

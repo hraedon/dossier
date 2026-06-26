@@ -15,7 +15,7 @@ from .auth.backends import AuthBackend
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
 from .config import Settings
-from .gateway import RegistaGateway
+from .gateway import RegistaGateway, packaged_workflow_version
 from . import web
 
 _ACTOR_SESSION_KEY = "actor"
@@ -61,6 +61,7 @@ def create_app(
         actor_display=web.actor_display,
         on_behalf_display=web.on_behalf_display,
         event_verdict=web.event_verdict,
+        is_same_lineage_acknowledged=web.is_same_lineage_acknowledged,
         format_timestamp=web.format_timestamp,
         status_pill_class=web.status_pill_class,
         issue_title=web.issue_title,
@@ -105,6 +106,11 @@ def create_app(
             "actor": actor,
             "csrf_token": issue_csrf_token(request.session),
         }
+
+    def transitions_for(wi) -> list[tuple[str, str, bool]]:
+        version = getattr(wi, "workflow_version", None) or packaged_workflow_version()
+        tdefs = gateway.transitions_from(wi.current_state, version)
+        return [web.transition_tuple(t) for t in tdefs]
 
     @app.get("/healthz")
     def healthz() -> dict:
@@ -256,7 +262,7 @@ def create_app(
         if wi is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
         events = gateway.history(work_item_id)
-        transitions = web.transitions_from(wi.current_state)
+        transitions = transitions_for(wi)
         integrity = gateway.integrity()
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
@@ -282,8 +288,11 @@ def create_app(
         form = await request.form()
         transition_name = str(form.get("transition_name", ""))
         review_note = str(form.get("review_note", "")).strip()
+        same_lineage_ack = form.get("same_lineage_acknowledged") == "on"
 
-        payload = {"review_note": review_note} if review_note else None
+        payload: dict = {"review_note": review_note}
+        if same_lineage_ack:
+            payload["same_lineage_acknowledged"] = True
 
         try:
             gateway.transition(
@@ -297,7 +306,7 @@ def create_app(
             if wi is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
             events = gateway.history(work_item_id)
-            transitions = web.transitions_from(wi.current_state)
+            transitions = transitions_for(wi)
             integrity = gateway.integrity()
             ctx = actor_context(request, actor)
             return templates.TemplateResponse(

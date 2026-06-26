@@ -3,10 +3,12 @@ from __future__ import annotations
 import uuid
 from importlib.resources import files
 
+import yaml
+
 from regista import Event, Regista, ReplayReport, WorkItem
 
 from .actors import Actor
-from .validators import adversarial_review
+from .validators import adversarial_review, human_gate
 
 WORKFLOW_NAME = "dossier"
 
@@ -19,9 +21,20 @@ def packaged_workflow_yaml() -> str:
     )
 
 
+def packaged_workflow_version() -> int:
+    """The ``version`` declared in the packaged workflow YAML. Used only as a
+    defensive fallback when a ``WorkItem`` lacks ``workflow_version`` (which it
+    never should); the work-item's own version is authoritative.
+    """
+    return int(yaml.safe_load(packaged_workflow_yaml())["version"])
+
+
 def _metadata(actor: Actor) -> dict:
     role = "system" if actor.actor_kind == "system" else "member"
-    return {"display_name": actor.display_name, "role": role}
+    meta: dict = {"display_name": actor.display_name, "role": role}
+    if actor.model_lineage:
+        meta["model_lineage"] = actor.model_lineage
+    return meta
 
 
 class RegistaGateway:
@@ -37,6 +50,7 @@ class RegistaGateway:
     def __init__(self, regista: Regista) -> None:
         self._reg = regista
         self._reg.register_validator("adversarial_review", adversarial_review)
+        self._reg.register_validator("human_gate", human_gate)
 
     @classmethod
     def from_settings(cls, settings) -> RegistaGateway:
@@ -138,3 +152,12 @@ class RegistaGateway:
 
     def integrity(self) -> ReplayReport:
         return self._reg.replay()
+
+    def transitions_from(self, state: str, workflow_version: int):
+        """Return the ``TransitionDef``s whose ``from_state == state`` for the
+        registered dossier workflow at ``workflow_version``. The workflow YAML is
+        the single source of truth for the state machine; this avoids dossier
+        mirroring it in a second hand-maintained dict.
+        """
+        wf = self._reg.get_workflow(WORKFLOW_NAME, workflow_version)
+        return [t for t in wf.transitions if t.from_state == state]

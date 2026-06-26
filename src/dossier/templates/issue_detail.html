@@ -34,7 +34,10 @@
         <option value="{{ name }}">{{ label }}</option>
         {% endfor %}
       </select>
-      <input class="ds-input" type="text" name="review_note" placeholder="review note (required for accept / request changes)">
+      <input class="ds-input" type="text" name="review_note" placeholder="review note (required for review verdicts)">
+      {% if issue.current_state == "in_review" %}
+      <label class="ds-check"><input type="checkbox" name="same_lineage_acknowledged"> same-lineage ack</label>
+      {% endif %}
       <button type="submit" class="ds-btn ds-btn--primary">apply</button>
     </div>
   </form>

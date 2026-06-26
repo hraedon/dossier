@@ -229,16 +229,6 @@ def test_transition_self_review_error_renders(client):
     _login(client)
     new_page = client.get("/issues/new")
     csrf = _extract_csrf(new_page.text)
-    client.post(
-        "/issues",
-        data={"type": "bug", "title": "Self review test", "csrf_token": csrf},
-        follow_redirects=False,
-    )
-
-    from helpers import ALICE
-
-    new_page = client.get("/issues/new")
-    csrf = _extract_csrf(new_page.text)
     resp = client.post(
         "/issues",
         data={"type": "bug", "title": "Review gate test", "csrf_token": csrf},
@@ -246,7 +236,9 @@ def test_transition_self_review_error_renders(client):
     )
     issue_url = resp.headers["location"]
 
+    from helpers import ALICE
     from dossier.gateway import RegistaGateway
+
     gw: RegistaGateway = client.app.state.gateway
     import uuid
 
@@ -258,7 +250,7 @@ def test_transition_self_review_error_renders(client):
     csrf = _extract_csrf(detail.text)
     resp = client.post(
         f"{issue_url}/transitions",
-        data={"transition_name": "accept", "review_note": "lgtm", "csrf_token": csrf},
+        data={"transition_name": "adversarial_pass", "review_note": "lgtm", "csrf_token": csrf},
         follow_redirects=False,
     )
     assert resp.status_code == 400

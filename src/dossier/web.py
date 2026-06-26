@@ -8,42 +8,42 @@ _TRANSITION_LABELS: dict[str, str] = {
     "block": "blocked",
     "unblock": "unblocked",
     "submit_for_review": "submitted for review",
+    "adversarial_pass": "adversarial review passed",
     "request_changes": "requested changes",
     "accept": "accepted",
+    "reject": "rejected (send back)",
     "reopen": "reopened",
     "close_from_open": "closed",
     "comment": "commented",
 }
 
-_TRANSITIONS_FROM: dict[str, list[tuple[str, str, bool]]] = {
-    "open": [
-        ("start", "Start work", False),
-        ("close_from_open", "Close (won't fix)", False),
-    ],
-    "in_progress": [
-        ("block", "Block", False),
-        ("submit_for_review", "Submit for review", False),
-    ],
-    "blocked": [
-        ("unblock", "Unblock", False),
-    ],
-    "in_review": [
-        ("request_changes", "Request changes", True),
-        ("accept", "Accept", True),
-    ],
-    "done": [
-        ("reopen", "Reopen", False),
-    ],
+_BUTTON_LABELS: dict[str, str] = {
+    "start": "Start work",
+    "block": "Block",
+    "unblock": "Unblock",
+    "submit_for_review": "Submit for review",
+    "adversarial_pass": "Adversarial review passed",
+    "request_changes": "Request changes",
+    "accept": "Accept",
+    "reject": "Rejected (send back)",
+    "reopen": "Reopen",
+    "close_from_open": "Close (won't fix)",
 }
 
+_REVIEW_VERDICTS = frozenset({"adversarial_pass", "request_changes", "accept", "reject"})
 
-def transitions_from(state: str) -> list[tuple[str, str, bool]]:
-    """Return ``(transition_name, button_label, needs_note)`` for ``state``.
 
-    This mirrors the workflow YAML's declared transitions; regista still
-    enforces them. Kept in sync by hand.
+def transition_tuple(tdef) -> tuple[str, str, bool]:
+    """Return ``(name, button_label, needs_note)`` for a ``TransitionDef``.
+
+    ``needs_note`` is True for the review-verdict transitions
+    (``adversarial_pass``, ``request_changes``, ``accept``, ``reject``) and
+    False otherwise. The label falls back to the transition name.
     """
-    return list(_TRANSITIONS_FROM.get(state, []))
+    name = tdef.name
+    label = _BUTTON_LABELS.get(name, name)
+    needs_note = name in _REVIEW_VERDICTS
+    return name, label, needs_note
 
 
 def transition_label(transition: str) -> str:
@@ -73,7 +73,7 @@ def event_verdict(event) -> str | None:
     if not isinstance(payload, dict):
         return None
     transition = getattr(event, "transition", "")
-    if transition in {"accept", "request_changes"}:
+    if transition in _REVIEW_VERDICTS:
         note = payload.get("review_note")
         if note:
             return str(note)
@@ -82,6 +82,15 @@ def event_verdict(event) -> str | None:
         if body:
             return str(body)
     return None
+
+
+def is_same_lineage_acknowledged(event) -> bool:
+    """True iff this review-verdict event carried an explicit
+    ``same_lineage_acknowledged`` flag — surfaced in the verified-history view so
+    a same-lineage adversarial review is never mistaken for an independent one
+    (G3 legibility)."""
+    payload = getattr(event, "payload", None)
+    return isinstance(payload, dict) and payload.get("same_lineage_acknowledged") is True
 
 
 def format_timestamp(ts) -> str:
@@ -99,6 +108,7 @@ def status_pill_class(state: str) -> str:
         "in_progress": "ds-pill--info",
         "blocked": "ds-pill--warn",
         "in_review": "ds-pill--warn",
+        "in_human_review": "ds-pill--warn",
         "open": "ds-pill--muted",
     }.get(state, "ds-pill--muted")
 

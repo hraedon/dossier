@@ -32,13 +32,16 @@
       </div>
       {% set verdict = event_verdict(event) %}
       {% if verdict %}
-        {% if event.transition == 'accept' %}
+        {% if event.transition in ('accept', 'adversarial_pass') %}
         <div class="ds-chain__verdict ds-chain__verdict--ok">{{ verdict }}</div>
-        {% elif event.transition == 'request_changes' %}
+        {% elif event.transition in ('request_changes', 'reject') %}
         <div class="ds-chain__verdict ds-chain__verdict--warn">{{ verdict }}</div>
         {% else %}
         <div class="ds-chain__verdict">{{ verdict }}</div>
         {% endif %}
+      {% endif %}
+      {% if is_same_lineage_acknowledged(event) %}
+      <div class="ds-chain__verdict ds-chain__verdict--warn">same model lineage review — explicitly acknowledged</div>
       {% endif %}
     </div>
     {% endfor %}
