@@ -45,10 +45,12 @@ chain. Build the tracker honestly and you get the provenance for free.
 ## Scope
 
 **In (MVP):** projects → issues (`bug` / `task`); fixed workflow
-(`open → in_progress → blocked → done`); create / view / edit / reassign /
-transition; per-project list/board filtered by status and assignee; comments; and
-the **verified history view** (the legible event chain with an integrity check).
-An HTTP API underneath the UI so an agent client can later use the same backend.
+(`open → in_progress → blocked / deferred → in_review → in_human_review → done`,
+where `done` requires the two-stage review gate or a pre-work triage close);
+create / view / edit / reassign / transition; per-project list/board filtered by
+status and assignee; comments; and the **verified history view** (the legible
+event chain with an integrity check). An HTTP API underneath the UI so an agent
+client can later use the same backend.
 
 **Out (MVP):** sprints, epics, custom workflows, custom fields beyond the few
 declared, labels/components, email/notifications, cross-issue links, time tracking,

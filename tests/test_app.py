@@ -1,66 +1,6 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import pytest
-from fastapi.testclient import TestClient
-
-from dossier.app import create_app
-from dossier.auth.backends import LocalBackend
-from dossier.config import Settings
-
-
-def _settings(tmp_path: Path) -> Settings:
-    return Settings(
-        database_url="",
-        project="dossier_test",
-        hmac_key_path="",
-        session_secret="test-session-secret-not-for-prod",
-        session_max_age_seconds=43200,
-        secure_cookies=False,
-        require_ssl=False,
-        users_path="",
-        auth_backend="local",
-    )
-
-
-def _users_file(tmp_path: Path) -> Path:
-    path = tmp_path / "users.json"
-    path.write_text(
-        json.dumps(
-            [
-                {
-                    "stable_id": "11111111-1111-1111-1111-111111111111",
-                    "username": "alice",
-                    "display_name": "Alice",
-                    "password": _hash("s3cret"),
-                    "groups": [],
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
-    return path
-
-
-def _hash(pw: str) -> str:
-    from dossier.auth.passwords import hash_password
-
-    return hash_password(pw)
-
-
-@pytest.fixture
-def app(tmp_path, gateway):
-    settings = _settings(tmp_path)
-    backend = LocalBackend(_users_file(tmp_path))
-    return create_app(settings, gateway, backend)
-
-
-@pytest.fixture
-def client(app):
-    with TestClient(app) as c:
-        yield c
 
 
 def test_healthz_ok(client):

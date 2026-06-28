@@ -2,7 +2,7 @@
 
 **Status:** Proposed 2026-06-26. Cross-repo (dossier + agent-notes); spawns an
 agent-notes implementation plan. Builds on dossier Plan 006 (convergence, whose
-P1–P3 are delivered) and the dossier v3 review-gate workflow landed this session.
+P1–P3 are delivered) and the dossier v4 review-gate workflow landed this session.
 Not started.
 **Author:** glm-5.2 (session)
 **Strategic role:** Make dossier and agent-notes two **faces of one work-item
@@ -17,7 +17,7 @@ shows a mixed human+agent verified chain.
 **Compose, not replace.** Per the axis separation (Opus):
 
 - **Lifecycle** = domain state ("what state is this work in"). Human-legible.
-  The shared layer. → **the dossier v3 canonical workflow.**
+  The shared layer. → **the dossier v4 canonical workflow.**
 - **Lease** = concurrency control + liveness ("who holds it right now, are they
   alive"). Mostly machine-facing. → **regista's native claims primitive**, which
   is already orthogonal to workflow state and which agent-notes already uses
@@ -36,8 +36,8 @@ YAML inheritance.
 
 ## 2. Ground truth at time of writing
 
-- **dossier v3 workflow** landed this session: states
-  `open / in_progress / blocked / in_review / in_human_review / done`; two-stage
+- **dossier v4 workflow** landed: states
+  `open / in_progress / blocked / deferred / in_review / in_human_review / done`; two-stage
   review gate (`adversarial_review` validator on the `in_review` exits,
   `human_gate` on the `in_human_review` exits); cross-lineage rule +
   `same_lineage_acknowledged`; `human_gate` requires a human accepter distinct
@@ -65,7 +65,7 @@ agent-notes (CLI/skills/lease) ─┐
 dossier (web/lifecycle/review-gate) ──────────┘
 ```
 
-- **One regista project, one canonical lifecycle workflow** (dossier v3) for the
+- **One regista project, one canonical lifecycle workflow** (dossier v4) for the
   shared universe. A breadcrumb a human files and an issue an agent works are
   the *same* work-item.
 - **Lease = regista claims**, never a lifecycle state. agent-notes' breadcrumb
@@ -86,14 +86,14 @@ agent-notes' breadcrumb lifecycle must map onto the canonical workflow. Proposed
 | `open` | `open` | direct |
 | `claimed` | *(not a state)* | becomes a regista **claim**; lifecycle stays `open`/`in_progress` |
 | `in-progress agent work` | `in_progress` | agent `start`s; this is the remediation phase |
-| `deferred` | `blocked` *(or custom field)* | **decision** — see §7 |
+| `deferred` | `deferred` | direct (Plan 008 made it a first-class canonical state) |
 | `closed` | `done` | direct (but `done` requires the review gate — see §7) |
 | `amend_*` | non-state `amend` event | like `comment`: an attributed event that does not change state |
 
 ## 5. Work items
 
 - **WI-1 — Adopt the canonical workflow in agent-notes.** Point agent-notes at
-  the shared regista project; register/use the dossier v3 workflow; retire the
+  the shared regista project; register/use the dossier v4 workflow; retire the
   breadcrumb workflow for new writes (kept read-only). Agent actors must declare
   `model_lineage` (now required by the cross-lineage rule).
 - **WI-2 — Lease as claims, not state.** Ensure claim/release/heartbeat go to
@@ -114,9 +114,8 @@ agent-notes' breadcrumb lifecycle must map onto the canonical workflow. Proposed
 
 ## 6. Decisions to surface to a human
 
-1. **`deferred` mapping.** breadcrumb `deferred` → canonical `blocked`, or a
-   `deferred`/`triage` custom field, or a new canonical state? (Adding a state is
-   a workflow-contract change — AGENTS.md.)
+1. **`deferred` mapping.** ✅ Resolved by Plan 008: `deferred` is now a
+   first-class canonical state (v4), so breadcrumb `deferred` maps directly.
 2. **Does agent-authored work that reaches `done` require the full review gate?**
    The canonical workflow makes `done` reachable only through
    `in_review → in_human_review → accept`. agent-notes' `close_*` breadcrumb
@@ -132,7 +131,7 @@ agent-notes' breadcrumb lifecycle must map onto the canonical workflow. Proposed
 
 ## 7. Sequencing / dependencies
 
-Depends on: dossier v3 workflow (done), regista 021 (done), agent-notes 009
+Depends on: dossier v4 workflow (done), regista 021 (done), agent-notes 009
 P1–P3 (done). No new regista core work required — claims already exist.
 
 1. WI-1 + WI-2 (point agent-notes at the canonical workflow; lease→claims) — the

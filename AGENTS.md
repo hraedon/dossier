@@ -52,6 +52,18 @@ regista is a sibling library (`/projects/regista`). For dev, install it editable
 `regista_version`. regista needs Postgres 15+; its in-memory backend is for tests
 only, never for a real multi-user instance.
 
+## Workflow
+
+The canonical lifecycle is declared in `src/dossier/workflows/dossier.workflow.yaml`
+(currently **v4**). States: `open / in_progress / blocked / deferred / in_review /
+in_human_review / done`. `done` is reachable **only** through the two-stage review
+(`in_review → in_human_review → done`), except the pre-work triage close
+(`close_from_open`). `deferred` (Plan 008) is a non-terminal idle state distinct
+from `blocked` — it denotes a deliberate choice to wait with no dependency, carries
+no review gate, and cannot reach `done` directly. Adding or removing a state is a
+contract change: bump the workflow `version`, note it in the YAML changelog
+comment, and announce it here.
+
 ## UI
 
 Adopt the patina design system (vendored tokens + IBM Plex Mono, dark-default,

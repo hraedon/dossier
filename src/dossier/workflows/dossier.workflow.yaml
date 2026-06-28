@@ -1,11 +1,12 @@
-# dossier workflow v3 — canonical agentic lifecycle with cross-lineage adversarial
-# review and a human final gate. DRAFT: validate against the installed regista
-# with `regista` workflow lint before relying on it (regista 0.4.0 schema).
+# dossier workflow v4 — canonical agentic lifecycle with cross-lineage adversarial
+# review, a human final gate, and `deferred` as a first-class idle state.
+# DRAFT: validate against the installed regista with `regista` workflow lint
+# before relying on it (regista 0.4.0 schema).
 #
 # Design intent lives in docs/provenance-model.md; review semantics in
-# plans/005-adversarial-review.md. The status model is fixed (not configurable),
-# and `done` is reachable ONLY through the two-stage review, except a pre-work
-# triage close from `open`.
+# plans/005-adversarial-review.md; the `deferred` state in plans/008. The status
+# model is fixed (not configurable), and `done` is reachable ONLY through the
+# two-stage review, except a pre-work triage close from `open`.
 #
 # Two-stage review:
 #   - `in_review` is the cross-lineage adversarial pass: a reviewer whose model
@@ -15,19 +16,26 @@
 #   - `in_human_review` is the human accountability gate: a human actor must
 #     accept or reject before the item reaches `done`. This is the final
 #     provenance claim — "a person signed off."
+#
+# v4 changelog (from v3): added `deferred` state — a deliberate, no-dependency
+# idle state distinct from `blocked` (which denotes an external dependency).
+# `deferred` is non-terminal and carries no review gate; it re-enters the active
+# flow via `resume` (→ open) or `start` (→ in_progress). It cannot reach `done`
+# directly.
 
 name: dossier
-version: 3
+version: 4
 regista_version: "0.4.0"
 
 # Fixed status model. `open` is the entry state; `done` is terminal. `in_review`
 # and `in_human_review` are MANDATORY gates on the path to done — review is
-# structural, not a flag.
+# structural, not a flag. `deferred` is a non-terminal idle state (Plan 008).
 states:
   - name: open
     initial: true
   - name: in_progress
   - name: blocked
+  - name: deferred
   - name: in_review
   - name: in_human_review
   - name: done
@@ -54,6 +62,26 @@ transitions:
     allowed_roles: [member]
   - name: unblock
     from: blocked
+    to: in_progress
+    allowed_roles: [member]
+
+  # Park an item deliberately (no external dependency — that is `blocked`).
+  # `deferred` is an idle state with no review gate; it re-enters the flow via
+  # `resume` or `start` below. It cannot reach `done` directly (Plan 008).
+  - name: defer
+    from: open
+    to: deferred
+    allowed_roles: [member]
+  - name: defer
+    from: in_progress
+    to: deferred
+    allowed_roles: [member]
+  - name: resume
+    from: deferred
+    to: open
+    allowed_roles: [member]
+  - name: start
+    from: deferred
     to: in_progress
     allowed_roles: [member]
 
@@ -88,11 +116,15 @@ transitions:
     to: done
     allowed_roles: [member]
     validator: human_gate
+    validator_params:
+      require_human: true
   - name: reject                  # human sends back for remediation
     from: in_human_review
     to: in_progress
     allowed_roles: [member]
     validator: human_gate
+    validator_params:
+      require_human: true
 
   - name: reopen
     from: done

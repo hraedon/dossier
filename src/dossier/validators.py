@@ -24,9 +24,9 @@ def derive_authors(prior_events: Iterable) -> tuple[set[str], set[str], set[str]
     from a work-item's prior events.
 
     An "author" is any actor who performed a non-review, non-comment transition
-    on the item (creation, start, block/unblock, submit_for_review, reopen,
-    close_from_open). Prior review verdicts and comments are excluded, so a
-    reviewer who previously rejected work is not counted as an author and may
+    on the item (creation, start, block/unblock, defer/resume, submit_for_review,
+    reopen, close_from_open). Prior review verdicts and comments are excluded, so
+    a reviewer who previously rejected work is not counted as an author and may
     re-review once the work is resubmitted (the broad, harder-to-game author
     set recommended in plans/005).
 

@@ -14,7 +14,7 @@ dossier introduces no new state model. It maps directly onto regista primitives:
 |---|---|
 | Issue | work-item |
 | Issue type (`bug`, `task`) | work-item-type |
-| Status (`open`/`in_progress`/`blocked`/`done`) | workflow state |
+| Status (`open`/`in_progress`/`blocked`/`deferred`/`in_review`/`in_human_review`/`done`) | workflow state |
 | Moving an issue | validated transition (role-gated) |
 | Who reported / who acted | actor (`actor_kind` = human / agent / system) |
 | Assignment / "who's on it" | custom field `assignee` (MVP); regista *claims* later |
