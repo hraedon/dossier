@@ -1,7 +1,9 @@
 # Plan 010 — Unify the canonical workflow (one definition both faces register)
 
-**Status:** Proposed 2026-06-29; §4 decisions ratified 2026-06-29 (user). Cross-repo
-(regista + dossier + agent-notes). Not started — ready for WI-1.
+**Status:** WI-1 through WI-4 **implemented & CI-green 2026-06-29** (regista 1334 /
+agent-notes 396 / dossier 71 tests). §4 decisions ratified 2026-06-29 (user).
+Cross-repo (regista + dossier + agent-notes). Remaining: §6 live end-to-end proof
+against a real Postgres (the original #2 validation) — not yet run.
 **Author:** Opus 4.8
 **Strategic role:** Close the convergence gap found when trying to prove the
 end-to-end north star ("one work-item, mixed human+agent verified chain, driven
