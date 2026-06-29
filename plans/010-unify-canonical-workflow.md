@@ -1,7 +1,7 @@
 # Plan 010 — Unify the canonical workflow (one definition both faces register)
 
-**Status:** Proposed 2026-06-29. Cross-repo (regista + dossier + agent-notes).
-Not started.
+**Status:** Proposed 2026-06-29; §4 decisions ratified 2026-06-29 (user). Cross-repo
+(regista + dossier + agent-notes). Not started — ready for WI-1.
 **Author:** Opus 4.8
 **Strategic role:** Close the convergence gap found when trying to prove the
 end-to-end north star ("one work-item, mixed human+agent verified chain, driven
@@ -86,20 +86,18 @@ A single workflow definition, **shipped from regista** and registered *verbatim*
   §0a), `strict` registerable for a workplace deployment. One policy per
   registration — both faces must agree per project.
 
-## 4. Open decisions to ratify before implementing
+## 4. Decisions (ratified 2026-06-29)
 
-1. **Canonical workflow name.** `canonical` vs reusing `breadcrumb` (avoids an
-   agent-notes data migration of existing items' `workflow` field) vs a fresh
-   name. Trade-off: a neutral name is cleanest; reusing `breadcrumb` is cheapest
-   for existing agent-notes items.
-2. **Role vocabulary.** `{human, agent, system}` (recommended) vs keeping
-   `member`. If `human`, dossier's transition calls must map authenticated users
-   to role `human` (today: `member`).
-3. **Where the YAML lives in regista.** A packaged resource + a
-   `regista.canonical_workflow_yaml()` accessor, or a `register_canonical_workflow()`
-   helper. Faces should not hand-copy the text.
-4. **Versioning.** New canonical `version` (supersedes dossier v4 / breadcrumb v2)
-   and how existing items' `workflow_version` are treated (re-point vs leave).
+1. **Canonical workflow name = `canonical`** (neutral; not `dossier`/`breadcrumb`).
+   Accept the resulting agent-notes item migration (see §7 / WI-2).
+2. **Role vocabulary = `{human, agent, system}`** (drop `member`; mirrors
+   `actor_kind`, and the cross-lineage gate needs to distinguish agent from
+   human). dossier maps authenticated users to role `human` (today: `member`).
+3. **Ships from regista as a packaged YAML + accessor** —
+   `regista.canonical_workflow_yaml()`. Faces register those exact bytes; no
+   hand-copying.
+4. **New canonical `version`** (supersedes dossier v4 / breadcrumb v2). Existing
+   items keep their historical `workflow_version` (leave; do not re-point).
 
 ## 5. Work items
 
