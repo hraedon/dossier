@@ -1,9 +1,11 @@
 # Plan 010 — Unify the canonical workflow (one definition both faces register)
 
 **Status:** WI-1 through WI-4 **implemented & CI-green 2026-06-29** (regista 1334 /
-agent-notes 396 / dossier 71 tests). §4 decisions ratified 2026-06-29 (user).
-Cross-repo (regista + dossier + agent-notes). Remaining: §6 live end-to-end proof
-against a real Postgres (the original #2 validation) — not yet run.
+agent-notes 396 / dossier 71 tests). §6 live end-to-end proof **PASSED 2026-06-29**
+(`scripts/convergence_e2e_proof.py`, ephemeral Postgres): both real faces drove one
+item through `canonical` to `done` — mixed agent+human chain, hash chain verifies.
+§4 decisions ratified 2026-06-29 (user). Cross-repo (regista + dossier + agent-notes).
+Optional real-infra follow-up: provision the dedicated dossier Postgres and re-confirm.
 **Author:** Opus 4.8
 **Strategic role:** Close the convergence gap found when trying to prove the
 end-to-end north star ("one work-item, mixed human+agent verified chain, driven
