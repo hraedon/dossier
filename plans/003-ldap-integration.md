@@ -1,8 +1,10 @@
 # Plan 003 — LDAP / Active Directory integration
 
 **Status:** Proposed 2026-06-20; amended 2026-06-29 to add Entra-readiness
-guardrails (decision: guardrails only, no OIDC code now). Implements an
-`LdapBackend` for the auth backend protocol in `002-auth-and-identity.md`. Not started.
+guardrails (decision: guardrails only, no OIDC code now). Implemented
+2026-06-29 (all 9 work items landed; 30 mocked unit tests + 5 integration test
+scaffolding). Implements an `LdapBackend` for the auth backend protocol in
+`002-auth-and-identity.md`.
 **Author:** Opus 4.8
 **Strategic role:** Authenticate UI users against AD and source their group
 membership, so identity (and later teams, Plan 004) comes from the directory the

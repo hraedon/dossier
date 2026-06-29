@@ -20,6 +20,25 @@ class Settings:
     auth_backend: str
 
 
+@dataclass(frozen=True, slots=True)
+class LdapConfig:
+    """Configuration for the ``LdapBackend`` (Plan 003).
+
+    All values come from ``DOSSIER_LDAP_*`` environment variables. No real
+    domain data is committed — ``.env.example`` carries placeholders only.
+    """
+
+    server_urls: list[str]
+    base_dn: str
+    bind_dn: str
+    bind_password: str
+    user_filter: str
+    group_strategy: str
+    ca_cert_file: str
+    connect_timeout: int
+    domain: str
+
+
 def _parse_bool(name: str, raw: str) -> bool:
     lowered = raw.strip().lower()
     if lowered in _TRUE:
@@ -30,7 +49,7 @@ def _parse_bool(name: str, raw: str) -> bool:
 
 
 def _require(name: str, value: str) -> str:
-    if value == "":
+    if value.strip() == "":
         raise RuntimeError(f"{name} is required; set the environment variable.")
     return value
 
@@ -75,4 +94,62 @@ def load_settings(strict: bool = True) -> Settings:
         require_ssl=require_ssl,
         users_path=users_path,
         auth_backend=auth_backend,
+    )
+
+
+def load_ldap_config(strict: bool = True) -> LdapConfig:
+    """Load LDAP configuration from ``DOSSIER_LDAP_*`` environment variables.
+
+    When ``strict`` is False (used by ``dossier serve`` before the backend is
+    selected), missing values are allowed — the caller decides what is required.
+    """
+    raw_servers = os.environ.get("DOSSIER_LDAP_SERVER", "")
+    server_urls = [s.strip() for s in raw_servers.split(",") if s.strip()]
+    base_dn = os.environ.get("DOSSIER_LDAP_BASE_DN", "")
+    bind_dn = os.environ.get("DOSSIER_LDAP_BIND_DN", "")
+    bind_password = os.environ.get("DOSSIER_LDAP_BIND_PASSWORD", "")
+    user_filter = os.environ.get(
+        "DOSSIER_LDAP_USER_FILTER",
+        "(&(objectClass=user)(sAMAccountName={login}))",
+    )
+    group_strategy = os.environ.get("DOSSIER_LDAP_GROUP_STRATEGY", "direct")
+    ca_cert_file = os.environ.get("DOSSIER_LDAP_CA_CERT_FILE", "")
+    connect_timeout_raw = os.environ.get("DOSSIER_LDAP_CONNECT_TIMEOUT", "5") or "5"
+    domain = os.environ.get("DOSSIER_LDAP_DOMAIN", "")
+
+    if group_strategy not in ("direct", "nested"):
+        raise ValueError(
+            f"DOSSIER_LDAP_GROUP_STRATEGY must be 'direct' or 'nested', got {group_strategy!r}"
+        )
+
+    try:
+        connect_timeout = int(connect_timeout_raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"DOSSIER_LDAP_CONNECT_TIMEOUT must be an integer, got {connect_timeout_raw!r}"
+        ) from exc
+
+    if strict:
+        _require("DOSSIER_LDAP_SERVER", raw_servers)
+        _require("DOSSIER_LDAP_BASE_DN", base_dn)
+        _require("DOSSIER_LDAP_BIND_DN", bind_dn)
+        _require("DOSSIER_LDAP_BIND_PASSWORD", bind_password)
+        if not domain:
+            raise RuntimeError("DOSSIER_LDAP_DOMAIN is required for the ldap backend")
+        is_ldaps = any(s.lower().startswith("ldaps://") for s in server_urls)
+        if not is_ldaps:
+            raise RuntimeError(
+                "DOSSIER_LDAP_SERVER must use ldaps:// — plaintext LDAP is not permitted"
+            )
+
+    return LdapConfig(
+        server_urls=server_urls,
+        base_dn=base_dn,
+        bind_dn=bind_dn,
+        bind_password=bind_password,
+        user_filter=user_filter,
+        group_strategy=group_strategy,
+        ca_cert_file=ca_cert_file,
+        connect_timeout=connect_timeout,
+        domain=domain,
     )

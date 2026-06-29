@@ -65,8 +65,18 @@ def test_integrity_replay_zero_drift_on_clean_history(gateway, make_issue):
     wi = make_issue(actor=ALICE)
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
-    gateway.transition(actor=CAROL, work_item_id=wi.work_item_id, transition_name="adversarial_pass", payload={"review_note": "lgtm"})
-    gateway.transition(actor=DAVE, work_item_id=wi.work_item_id, transition_name="accept", payload={"review_note": "verified"})
+    gateway.transition(
+        actor=CAROL,
+        work_item_id=wi.work_item_id,
+        transition_name="adversarial_pass",
+        payload={"review_note": "lgtm"},
+    )
+    gateway.transition(
+        actor=DAVE,
+        work_item_id=wi.work_item_id,
+        transition_name="accept",
+        payload={"review_note": "verified"},
+    )
     report = gateway.integrity()
     assert report.replayed_drift == 0
     assert report.halted == 0

@@ -59,9 +59,7 @@ def test_deferred_to_done_via_full_gate(gateway, make_issue):
     gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="defer")
     gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="resume")
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
-    gateway.transition(
-        actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review"
-    )
+    gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     gateway.transition(
         actor=CAROL,
         work_item_id=wi.work_item_id,
@@ -239,18 +237,26 @@ def test_invalid_deferred_transition_rejected(gateway, make_issue, transition_na
         gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="defer")
     elif setup_state == "in_review":
         gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
-        gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+        gateway.transition(
+            actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+        )
     elif setup_state == "in_human_review":
         from helpers import AGENT_GLM, AGENT_KIMI
 
         gateway.transition(actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="start")
-        gateway.transition(actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="submit_for_review")
         gateway.transition(
-            actor=AGENT_KIMI, work_item_id=wi.work_item_id,
-            transition_name="adversarial_pass", payload={"review_note": "pass"},
+            actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+        )
+        gateway.transition(
+            actor=AGENT_KIMI,
+            work_item_id=wi.work_item_id,
+            transition_name="adversarial_pass",
+            payload={"review_note": "pass"},
         )
     elif setup_state == "done":
-        gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="close_from_open")
+        gateway.transition(
+            actor=ALICE, work_item_id=wi.work_item_id, transition_name="close_from_open"
+        )
 
     with pytest.raises(RegistaError):
         gateway.transition(
@@ -276,6 +282,8 @@ def test_defer_makes_actor_an_author_for_review(gateway, make_issue):
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     with pytest.raises(RegistaError):
         gateway.transition(
-            actor=ALICE, work_item_id=wi.work_item_id,
-            transition_name="adversarial_pass", payload={"review_note": "pass"},
+            actor=ALICE,
+            work_item_id=wi.work_item_id,
+            transition_name="adversarial_pass",
+            payload={"review_note": "pass"},
         )

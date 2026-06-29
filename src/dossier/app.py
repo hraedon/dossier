@@ -11,7 +11,7 @@ from starlette.responses import RedirectResponse
 from starlette.staticfiles import StaticFiles
 
 from .actors import Actor
-from .auth.backends import AuthBackend
+from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
 from .config import Settings
@@ -33,10 +33,39 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept
 
 
+async def _credential_login(
+    request: Request, backend: CredentialBackend
+) -> tuple[Principal | None, bool]:
+    """Extract credentials from the request and verify them via ``backend``.
+
+    This isolates the credential-in-hand assumption — a password arrives at
+    ``/login`` and is verified synchronously — so a future federated
+    ``/auth/callback`` route (Entra/OIDC) is a sibling that never edits this
+    path. Returns ``(principal, is_form_request)``.
+    """
+    form_req = _is_form_request(request)
+    if form_req:
+        form = await request.form()
+        username = str(form.get("username", ""))
+        password = str(form.get("password", ""))
+    else:
+        try:
+            payload = await request.json()
+        except Exception:
+            return None, form_req
+        if not isinstance(payload, dict):
+            return None, form_req
+        username = payload.get("username", "")
+        password = payload.get("password", "")
+
+    principal = backend.authenticate(username, password)
+    return principal, form_req
+
+
 def create_app(
     settings: Settings,
     gateway: RegistaGateway,
-    backend: AuthBackend,
+    backend: CredentialBackend,
 ) -> FastAPI:
     """Build the FastAPI app with session auth wired to ``gateway`` and ``backend``.
 
@@ -135,17 +164,7 @@ def create_app(
         request: Request,
         _: None = Depends(verify_csrf),
     ):
-        form_req = _is_form_request(request)
-        if form_req:
-            form = await request.form()
-            username = str(form.get("username", ""))
-            password = str(form.get("password", ""))
-        else:
-            payload = await request.json()
-            username = payload.get("username", "")
-            password = payload.get("password", "")
-
-        principal = backend.authenticate(username, password)
+        principal, form_req = await _credential_login(request, backend)
         if principal is None:
             if form_req:
                 csrf = issue_csrf_token(request.session)

@@ -75,18 +75,14 @@ def _cmd_users_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    from .config import load_settings
+    from .config import load_ldap_config, load_settings
 
     settings = load_settings(strict=True)
-    if not settings.users_path:
-        print("DOSSIER_USERS_PATH is required for the local auth backend.", file=sys.stderr)
-        return 2
 
     from regista import Regista
     from uvicorn import run as uvicorn_run
 
     from .app import create_app
-    from .auth.backends import LocalBackend
     from .gateway import RegistaGateway
 
     reg = Regista(
@@ -97,7 +93,28 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     )
     gw = RegistaGateway(reg)
     gw.register_workflow()
-    backend = LocalBackend(settings.users_path)
+
+    backend: object
+    if settings.auth_backend == "ldap":
+        from .auth.backends import LdapBackend
+
+        ldap_config = load_ldap_config(strict=True)
+        backend = LdapBackend.from_config(ldap_config)
+    elif settings.auth_backend == "local":
+        if not settings.users_path:
+            print("DOSSIER_USERS_PATH is required for the local auth backend.", file=sys.stderr)
+            return 2
+        from .auth.backends import LocalBackend
+
+        backend = LocalBackend(settings.users_path)
+    else:
+        print(
+            f"Unknown DOSSIER_AUTH_BACKEND={settings.auth_backend!r}; "
+            "supported values: 'local', 'ldap'.",
+            file=sys.stderr,
+        )
+        return 2
+
     app = create_app(settings, gw, backend)
     uvicorn_run(app, host=args.host, port=args.port)
     return 0
