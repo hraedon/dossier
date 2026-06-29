@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+import regista
 from helpers import ALICE, BOB, CAROL, DAVE
+
+from dossier.gateway import WORKFLOW_NAME, packaged_workflow_yaml
+
+
+def test_gateway_registers_regista_canonical_verbatim():
+    """WI-4 (Plan 010) anti-drift guard: dossier registers regista's single
+    canonical workflow verbatim — same bytes agent-notes registers — so the two
+    faces never re-fork into separate work-item universes (the convergence gap)."""
+    assert packaged_workflow_yaml() == regista.canonical_workflow_yaml()
+    assert WORKFLOW_NAME == "canonical"
 
 
 def test_create_and_history(gateway, make_issue):
@@ -65,4 +76,4 @@ def test_actor_metadata_records_display_name(gateway, make_issue):
     wi = make_issue(actor=ALICE)
     events = gateway.history(wi.work_item_id)
     assert events[0].actor_metadata["display_name"] == "Alice"
-    assert events[0].actor_metadata["role"] == "member"
+    assert events[0].actor_metadata["role"] == "human"

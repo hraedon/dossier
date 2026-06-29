@@ -1,24 +1,23 @@
 from __future__ import annotations
 
 import uuid
-from importlib.resources import files
 
 import yaml
 
+import regista
 from regista import Event, Regista, ReplayReport, WorkItem
 
 from .actors import Actor
-from .validators import adversarial_review, human_gate
 
-WORKFLOW_NAME = "dossier"
+# Plan 010 (WI-3): dossier registers the single canonical workflow shipped from
+# regista — the same one agent-notes registers — so human and agent work share
+# one work-item universe. The review-gate validators are regista built-ins
+# (Plan 023), auto-available by name; dossier no longer ships its own copies.
+WORKFLOW_NAME = "canonical"
 
 
 def packaged_workflow_yaml() -> str:
-    return (
-        files("dossier")
-        .joinpath("workflows", "dossier.workflow.yaml")
-        .read_text(encoding="utf-8")
-    )
+    return regista.canonical_workflow_yaml()
 
 
 def packaged_workflow_version() -> int:
@@ -30,7 +29,7 @@ def packaged_workflow_version() -> int:
 
 
 def _metadata(actor: Actor) -> dict:
-    role = "system" if actor.actor_kind == "system" else "member"
+    role = "system" if actor.actor_kind == "system" else "human"
     meta: dict = {"display_name": actor.display_name, "role": role}
     if actor.model_lineage:
         meta["model_lineage"] = actor.model_lineage
@@ -49,8 +48,8 @@ class RegistaGateway:
 
     def __init__(self, regista: Regista) -> None:
         self._reg = regista
-        self._reg.register_validator("adversarial_review", adversarial_review)
-        self._reg.register_validator("human_gate", human_gate)
+        # adversarial_review / human_gate are regista built-ins (Plan 023),
+        # auto-available by name — dossier registers no local copies (Plan 010).
 
     @classmethod
     def from_settings(cls, settings) -> RegistaGateway:

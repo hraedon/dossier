@@ -97,14 +97,16 @@ def test_deferred_listable_by_state(gateway, make_issue):
 
 def test_transitions_from_deferred_surfaces_resume_and_start(gateway, make_issue):
     """web.py derives transitions from the registered workflow; a deferred item
-    should offer `resume` and `start` (and only those)."""
+    should offer `resume` and `start` to re-enter the flow, plus `amend` (the
+    field-only self-transition the canonical workflow provides on every
+    non-terminal state — a field edit, not a lifecycle change)."""
     from dossier.web import transition_tuple
 
     wi = make_issue(actor=ALICE)
     gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="defer")
     tdefs = gateway.transitions_from("deferred", wi.workflow_version)
     names = {transition_tuple(t)[0] for t in tdefs}
-    assert names == {"resume", "start"}
+    assert names == {"resume", "start", "amend"}
 
 
 def test_transitions_from_open_includes_defer(gateway, make_issue):
