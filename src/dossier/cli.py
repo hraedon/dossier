@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import assert_never
 
 from . import __version__
 from .keys import generate_keyset
@@ -83,6 +85,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from uvicorn import run as uvicorn_run
 
     from .app import create_app
+    from .auth.backends import CredentialBackend
     from .gateway import RegistaGateway
 
     reg = Regista(
@@ -94,7 +97,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     gw = RegistaGateway(reg)
     gw.register_workflow()
 
-    backend: object
+    backend: CredentialBackend
     if settings.auth_backend == "ldap":
         from .auth.backends import LdapBackend
 
@@ -108,12 +111,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
         backend = LocalBackend(settings.users_path)
     else:
-        print(
-            f"Unknown DOSSIER_AUTH_BACKEND={settings.auth_backend!r}; "
-            "supported values: 'local', 'ldap'.",
-            file=sys.stderr,
-        )
-        return 2
+        assert_never(settings.auth_backend)
 
     app = create_app(settings, gw, backend)
     uvicorn_run(app, host=args.host, port=args.port)
@@ -169,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.set_defaults(func=_cmd_serve)
 
     parsed = parser.parse_args(argv)
-    func = getattr(parsed, "func", None)
+    func: Callable[[argparse.Namespace], int] | None = getattr(parsed, "func", None)
     if func is None:
         return _charter(parsed)
     return func(parsed)

@@ -6,7 +6,7 @@ import ssl
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, assert_never
 
 from .passwords import hash_password, verify_password
 
@@ -15,7 +15,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("dossier.auth.ldap")
 
-_DUMMY_HASH = hash_password("dossier-dummy-do-not-use")
+_DUMMY_HASH: str | None = None
+
+
+def _get_dummy_hash() -> str:
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password("dossier-dummy-do-not-use")
+    return _DUMMY_HASH
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +38,22 @@ class Principal:
     stable_id: str
     display_name: str
     source: str
-    raw_attributes: dict = field(default_factory=dict)
+    raw_attributes: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class GroupIdentity:
+    """A group identity keyed on immutable ``guid`` (Plan 003).
+
+    DNs break when groups are renamed/moved between OUs; ``objectGUID`` is
+    immutable. ``name`` is the human-readable label (the AD ``name`` attribute
+    or CN extracted from the DN). ``dn`` is retained for display and debugging.
+    For local users, ``guid`` is empty and ``name`` is the identifier.
+    """
+
+    guid: str
+    name: str
+    dn: str
 
 
 class CredentialBackend(Protocol):
@@ -50,7 +72,7 @@ class CredentialBackend(Protocol):
 
     def authenticate(self, identifier: str, password: str) -> Principal | None: ...
 
-    def fetch_groups(self, principal: Principal) -> list[str]: ...
+    def fetch_groups(self, principal: Principal) -> list[GroupIdentity]: ...
 
 
 class LocalBackend:
@@ -72,7 +94,7 @@ class LocalBackend:
         self._path = Path(users_path) if users_path is not None else None
         self._users = self._load(users_json)
 
-    def _load(self, users_json: str | None) -> dict[str, dict]:
+    def _load(self, users_json: str | None) -> dict[str, dict[str, Any]]:
         if users_json is not None:
             data = json.loads(users_json)
         else:
@@ -81,19 +103,22 @@ class LocalBackend:
                 data = json.load(f)
         if not isinstance(data, list):
             raise ValueError("users file must be a JSON array of user objects")
-        users: dict[str, dict] = {}
+        users: dict[str, dict[str, Any]] = {}
         for entry in data:
             if not isinstance(entry, dict) or not all(
                 k in entry for k in ("stable_id", "username", "display_name", "password")
             ):
                 raise ValueError(f"malformed user entry: {entry!r}")
-            users[entry["username"]] = entry
+            groups = entry.get("groups", [])
+            if not isinstance(groups, list):
+                raise ValueError(f"groups must be a list, got {type(groups).__name__}")
+            users[entry["username"].strip().lower()] = entry
         return users
 
     def authenticate(self, identifier: str, password: str) -> Principal | None:
-        user = self._users.get(identifier)
+        user = self._users.get(identifier.strip().lower())
         if user is None:
-            verify_password(password, _DUMMY_HASH)
+            verify_password(password, _get_dummy_hash())
             return None
         if not verify_password(password, user.get("password", "")):
             return None
@@ -103,11 +128,14 @@ class LocalBackend:
             source="local",
             raw_attributes={
                 "username": user["username"],
-                "groups": list(user.get("groups", [])),
+                "groups": [
+                    GroupIdentity(guid="", name=g, dn="")
+                    for g in user.get("groups", [])
+                ],
             },
         )
 
-    def fetch_groups(self, principal: Principal) -> list[str]:
+    def fetch_groups(self, principal: Principal) -> list[GroupIdentity]:
         return list(principal.raw_attributes.get("groups", []))
 
     @staticmethod
@@ -116,7 +144,7 @@ class LocalBackend:
         username: str,
         display_name: str,
         password_plain: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Append a new local user to ``path``, returning the new user record.
 
         Mints a uuid ``stable_id`` and scrypt-hashes the password. Intended for
@@ -212,7 +240,7 @@ class LdapBackend:
         bind_password: str,
         domain: str,
         user_filter: str = "(&(objectClass=user)(sAMAccountName={login}))",
-        group_strategy: str = "direct",
+        group_strategy: Literal["direct", "nested"] = "direct",
         ca_cert_file: str = "",
         connect_timeout: int = 5,
     ) -> None:
@@ -221,6 +249,8 @@ class LdapBackend:
         is_ldaps = any(s.lower().startswith("ldaps://") for s in server_urls)
         if not is_ldaps:
             raise ValueError("LdapBackend requires ldaps:// — plaintext LDAP is not permitted")
+        if group_strategy not in ("direct", "nested"):
+            raise ValueError(f"group_strategy must be 'direct' or 'nested', got {group_strategy!r}")
         if not ca_cert_file:
             logger.warning(
                 "LDAPS without ca_cert_file — validating against system trust "
@@ -262,15 +292,15 @@ class LdapBackend:
 
     # ── connection plumbing ───────────────────────────────────────────
 
-    def _build_tls(self):
+    def _build_tls(self) -> Any:
         import ldap3
 
-        tls_kwargs: dict = {"validate": ssl.CERT_REQUIRED}
+        tls_kwargs: dict[str, Any] = {"validate": ssl.CERT_REQUIRED}
         if self._ca_cert_file:
             tls_kwargs["ca_certs_file"] = self._ca_cert_file
         return ldap3.Tls(**tls_kwargs)
 
-    def _build_server_pool(self):
+    def _build_server_pool(self) -> Any:
         import ldap3
 
         tls = self._build_tls()
@@ -371,13 +401,10 @@ class LdapBackend:
             # user's bind is not held open longer than necessary.
             if self._group_strategy == "nested":
                 groups = self._fetch_nested_groups(svc_conn, user_dn)
+            elif self._group_strategy == "direct":
+                groups = self._fetch_direct_groups(svc_conn, search_filter)
             else:
-                svc_conn.search(
-                    self._base_dn,
-                    search_filter,
-                    attributes=["memberOf"],
-                )
-                groups = _attr_values(svc_conn.entries[0], "memberOf") if svc_conn.entries else []
+                assert_never(self._group_strategy)
 
             return Principal(
                 stable_id=stable_id,
@@ -407,24 +434,83 @@ class LdapBackend:
                 except Exception:
                     pass
 
-    def fetch_groups(self, principal: Principal) -> list[str]:
+    def fetch_groups(self, principal: Principal) -> list[GroupIdentity]:
         """Return group identities cached during ``authenticate``.
 
-        For ``direct`` strategy these are ``memberOf`` DNs; for ``nested`` they
-        are DNs from the ``LDAP_MATCHING_RULE_IN_CHAIN`` recursive search. Both
-        are populated during ``authenticate`` so this is a cache read — no
-        additional directory round-trip. Plan 004 maps these to teams.
+        For ``direct`` strategy these are :class:`GroupIdentity` objects built
+        from a second search on the group DNs returned by ``memberOf``; for
+        ``nested`` they come from the ``LDAP_MATCHING_RULE_IN_CHAIN`` recursive
+        search. Both are populated during ``authenticate`` so this is a cache
+        read — no additional directory round-trip. Plan 004 maps these to teams.
         """
         return list(principal.raw_attributes.get("groups", []))
 
     # ── internal ──────────────────────────────────────────────────────
 
-    def _fetch_nested_groups(self, conn, user_dn: str) -> list[str]:
+    def _fetch_direct_groups(self, conn: Any, search_filter: str) -> list[GroupIdentity]:
+        """Fetch groups via ``memberOf`` then resolve DNs to GUIDs+names.
+
+        AD's ``memberOf`` returns DNs, which break on rename/move. We do a
+        second search on those DNs to fetch ``objectGUID``, ``name``, and
+        ``distinguishedName``, building :class:`GroupIdentity` objects. If a
+        group DN no longer exists, it is included with ``guid=""`` and a name
+        extracted from the DN's CN component.
+        """
+        import ldap3
+
+        conn.search(
+            self._base_dn,
+            search_filter,
+            attributes=["memberOf"],
+        )
+        member_of_dns: list[str] = [
+            str(dn) for dn in (_attr_values(conn.entries[0], "memberOf") if conn.entries else [])
+        ]
+        if not member_of_dns:
+            return []
+
+        dn_filters = "".join(
+            f"(distinguishedName={ldap3.utils.conv.escape_filter_chars(dn)})"
+            for dn in member_of_dns
+        )
+        group_filter = f"(&(objectClass=group)(|{dn_filters}))"
+        conn.search(
+            self._base_dn,
+            group_filter,
+            attributes=["objectGUID", "name", "distinguishedName"],
+        )
+
+        found: dict[str, GroupIdentity] = {}
+        for entry in conn.entries:
+            dn = str(entry.entry_dn)
+            guid = _guid_bytes_to_str(_attr_value(entry, "objectGUID")) or ""
+            name = _attr_value(entry, "name") or _cn_from_dn(dn)
+            if not guid:
+                logger.warning(
+                    "LDAP group %s has no objectGUID — authz may be incomplete", dn
+                )
+            found[dn.lower()] = GroupIdentity(guid=guid, name=str(name), dn=dn)
+
+        result: list[GroupIdentity] = []
+        for dn in member_of_dns:
+            key = dn.lower()
+            if key in found:
+                result.append(found[key])
+            else:
+                logger.warning(
+                    "LDAP group %s not found in resolution search — "
+                    "returning empty guid; authz may be incomplete",
+                    dn,
+                )
+                result.append(GroupIdentity(guid="", name=_cn_from_dn(dn), dn=dn))
+        return result
+
+    def _fetch_nested_groups(self, conn: Any, user_dn: str) -> list[GroupIdentity]:
         """Find all groups (including nested) via ``LDAP_MATCHING_RULE_IN_CHAIN``.
 
         Searches for ``(&(objectClass=group)(member:OID:=<user_dn>))`` which
         recursively resolves nested group membership in a single query. Returns
-        group DNs — Plan 004 will map these (or their GUIDs) to teams.
+        :class:`GroupIdentity` objects with ``objectGUID``, ``name``, and DN.
         """
         import ldap3
 
@@ -433,15 +519,26 @@ class LdapBackend:
         conn.search(
             self._base_dn,
             search_filter,
-            attributes=["distinguishedName"],
+            attributes=["objectGUID", "name", "distinguishedName"],
         )
-        return [str(e.entry_dn) for e in conn.entries]
+
+        result: list[GroupIdentity] = []
+        for entry in conn.entries:
+            dn = str(entry.entry_dn)
+            guid = _guid_bytes_to_str(_attr_value(entry, "objectGUID")) or ""
+            name = _attr_value(entry, "name") or _cn_from_dn(dn)
+            if not guid:
+                logger.warning(
+                    "LDAP group %s has no objectGUID — authz may be incomplete", dn
+                )
+            result.append(GroupIdentity(guid=guid, name=str(name), dn=dn))
+        return result
 
 
 # ── ldap3 attribute access helpers ────────────────────────────────────────
 
 
-def _attr_value(entry, name: str):
+def _attr_value(entry: Any, name: str) -> Any:
     """Safely get a single attribute value from an ldap3 entry, or ``None``."""
     if name in entry.entry_attributes:
         val = entry[name].value
@@ -449,8 +546,25 @@ def _attr_value(entry, name: str):
     return None
 
 
-def _attr_values(entry, name: str) -> list:
+def _attr_values(entry: Any, name: str) -> list[Any]:
     """Safely get a list of attribute values from an ldap3 entry, or ``[]``."""
     if name in entry.entry_attributes:
         return list(entry[name].values)
     return []
+
+
+def _cn_from_dn(dn: str) -> str:
+    """Extract the CN component from a DN, falling back to the full DN."""
+    try:
+        from ldap3.utils.dn import parse_dn
+
+        for attr_type, attr_value, _ in parse_dn(dn):
+            if attr_type.upper() == "CN":
+                return str(attr_value)
+    except ImportError:
+        pass
+    for part in dn.split(","):
+        part = part.strip()
+        if part[:3].upper() == "CN=":
+            return part[3:]
+    return dn

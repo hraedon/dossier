@@ -3,17 +3,19 @@ from __future__ import annotations
 import uuid
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
-from regista import RegistaError
-from starlette.responses import RedirectResponse
+from regista import RegistaError, WorkItem
+from starlette.responses import RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from .actors import Actor
 from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
+from .auth.throttle import LoginThrottler, _normalize_identifier
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
 from . import web
@@ -31,6 +33,15 @@ def _is_form_request(request: Request) -> bool:
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
     return "text/html" in accept
+
+
+class LoginRequired(Exception):
+    """Raised by HTML-route dependencies when no authenticated actor is present.
+
+    FastAPI renders ``HTTPException(302)`` as a JSON body (``{"detail": ...}``),
+    which a browser user sees as raw text. This custom exception is caught by a
+    registered handler that emits a clean ``RedirectResponse`` to ``/login``.
+    """
 
 
 async def _credential_login(
@@ -55,8 +66,8 @@ async def _credential_login(
             return None, form_req
         if not isinstance(payload, dict):
             return None, form_req
-        username = payload.get("username", "")
-        password = payload.get("password", "")
+        username = str(payload.get("username", ""))
+        password = str(payload.get("password", ""))
 
     principal = backend.authenticate(username, password)
     return principal, form_req
@@ -81,6 +92,7 @@ def create_app(
     app.state.settings = settings
     app.state.gateway = gateway
     app.state.backend = backend
+    throttler = LoginThrottler()
 
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -100,7 +112,11 @@ def create_app(
     )
     app.state.templates = templates
 
-    app.add_middleware(session_middleware(settings))
+    app.add_middleware(session_middleware(settings))  # type: ignore[arg-type]
+
+    @app.exception_handler(LoginRequired)
+    async def _login_required_handler(request: Request, exc: LoginRequired) -> RedirectResponse:
+        return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
     def current_actor(request: Request) -> Actor:
         data = request.session.get(_ACTOR_SESSION_KEY)
@@ -117,41 +133,35 @@ def create_app(
     def current_actor_or_redirect(request: Request) -> Actor:
         data = request.session.get(_ACTOR_SESSION_KEY)
         if not isinstance(data, dict):
-            raise HTTPException(
-                status.HTTP_302_FOUND,
-                headers={"Location": "/login"},
-            )
+            raise LoginRequired()
         try:
             return Actor(**data)
         except TypeError:
             request.session.clear()
-            raise HTTPException(
-                status.HTTP_302_FOUND,
-                headers={"Location": "/login"},
-            )
+            raise LoginRequired()
 
-    def actor_context(request: Request, actor: Actor) -> dict:
+    def actor_context(request: Request, actor: Actor) -> dict[str, Any]:
         return {
             "actor": actor,
             "csrf_token": issue_csrf_token(request.session),
         }
 
-    def transitions_for(wi) -> list[tuple[str, str, bool]]:
+    def transitions_for(wi: WorkItem) -> list[tuple[str, str, bool]]:
         version = getattr(wi, "workflow_version", None) or packaged_workflow_version()
         tdefs = gateway.transitions_from(wi.current_state, version)
         return [web.transition_tuple(t) for t in tdefs]
 
     @app.get("/healthz")
-    def healthz() -> dict:
+    def healthz() -> dict[str, bool]:
         return {"ok": True}
 
     @app.get("/csrf")
-    def get_csrf(request: Request) -> dict:
+    def get_csrf(request: Request) -> dict[str, str]:
         token = issue_csrf_token(request.session)
         return {"csrf_token": token}
 
     @app.get("/login")
-    def login_form(request: Request):
+    def login_form(request: Request) -> Response:
         csrf = issue_csrf_token(request.session)
         return templates.TemplateResponse(
             request,
@@ -159,13 +169,59 @@ def create_app(
             {"csrf_token": csrf, "error": None},
         )
 
-    @app.post("/login")
+    @app.post("/login", response_model=None)
     async def login(
         request: Request,
         _: None = Depends(verify_csrf),
-    ):
+    ) -> Response | dict[str, str]:
+        form_req = _is_form_request(request)
+        if form_req:
+            username = str((await request.form()).get("username", ""))
+        else:
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = None
+            username = str(payload.get("username", "")) if isinstance(payload, dict) else ""
+
+        throttle_key = _normalize_identifier(username)
+
+        if throttler.is_locked(throttle_key):
+            if form_req:
+                csrf = issue_csrf_token(request.session)
+                return templates.TemplateResponse(
+                    request,
+                    "login.html",
+                    {
+                        "csrf_token": csrf,
+                        "error": "too many failed attempts; try again later",
+                    },
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many failed attempts; try again later",
+            )
+
         principal, form_req = await _credential_login(request, backend)
         if principal is None:
+            if throttler.is_locked(throttle_key):
+                if form_req:
+                    csrf = issue_csrf_token(request.session)
+                    return templates.TemplateResponse(
+                        request,
+                        "login.html",
+                        {
+                            "csrf_token": csrf,
+                            "error": "too many failed attempts; try again later",
+                        },
+                        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    )
+                raise HTTPException(
+                    status.HTTP_429_TOO_MANY_REQUESTS,
+                    "too many failed attempts; try again later",
+                )
+            throttler.record_failure(throttle_key)
             if form_req:
                 csrf = issue_csrf_token(request.session)
                 return templates.TemplateResponse(
@@ -176,6 +232,7 @@ def create_app(
                 )
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
+        throttler.record_success(throttle_key)
         actor = principal_to_actor(principal)
         request.session.clear()
         new_csrf = issue_csrf_token(request.session)
@@ -189,15 +246,15 @@ def create_app(
             "csrf_token": new_csrf,
         }
 
-    @app.post("/logout")
-    async def logout(request: Request, _: None = Depends(verify_csrf)):
+    @app.post("/logout", response_model=None)
+    async def logout(request: Request, _: None = Depends(verify_csrf)) -> Response | dict[str, bool]:
         request.session.clear()
         if _is_form_request(request) or _wants_html(request):
             return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
         return {"ok": True}
 
     @app.get("/me")
-    def me(actor: Actor = Depends(current_actor)) -> dict:
+    def me(actor: Actor = Depends(current_actor)) -> dict[str, Any]:
         return asdict(actor)
 
     @app.get("/")
@@ -206,7 +263,7 @@ def create_app(
         states: list[str] | None = Query(default=None, alias="status"),
         assignee: str | None = Query(default=None),
         actor: Actor = Depends(current_actor_or_redirect),
-    ):
+    ) -> Response:
         page = gateway.list_issues(current_states=states, assignee=assignee)
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
@@ -224,7 +281,7 @@ def create_app(
     def issue_new_form(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
-    ):
+    ) -> Response:
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
             request,
@@ -237,7 +294,7 @@ def create_app(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
-    ):
+    ) -> Response:
         form = await request.form()
         work_item_type = str(form.get("type", "bug"))
         title = str(form.get("title", "")).strip()
@@ -254,7 +311,7 @@ def create_app(
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
-        custom_fields: dict = {
+        custom_fields: dict[str, Any] = {
             "title": title,
             "description": description,
             "assignee": assignee,
@@ -276,13 +333,13 @@ def create_app(
         work_item_id: uuid.UUID,
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
-    ):
+    ) -> Response:
         wi = gateway.get_issue(work_item_id)
         if wi is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
         events = gateway.history(work_item_id)
         transitions = transitions_for(wi)
-        integrity = gateway.integrity()
+        integrity = gateway.integrity(work_item_id=work_item_id)
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
             request,
@@ -303,15 +360,17 @@ def create_app(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
-    ):
+    ) -> Response:
         form = await request.form()
         transition_name = str(form.get("transition_name", ""))
         review_note = str(form.get("review_note", "")).strip()
         same_lineage_ack = form.get("same_lineage_acknowledged") == "on"
 
-        payload: dict = {"review_note": review_note}
-        if same_lineage_ack:
-            payload["same_lineage_acknowledged"] = True
+        payload: dict[str, Any] = {}
+        if transition_name in web._REVIEW_VERDICTS:
+            payload["review_note"] = review_note
+            if same_lineage_ack:
+                payload["same_lineage_acknowledged"] = True
 
         try:
             gateway.transition(
@@ -326,7 +385,7 @@ def create_app(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
             events = gateway.history(work_item_id)
             transitions = transitions_for(wi)
-            integrity = gateway.integrity()
+            integrity = gateway.integrity(work_item_id=work_item_id)
             ctx = actor_context(request, actor)
             return templates.TemplateResponse(
                 request,
@@ -353,7 +412,7 @@ def create_app(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
-    ):
+    ) -> Response:
         form = await request.form()
         body = str(form.get("body", "")).strip()
         if body:

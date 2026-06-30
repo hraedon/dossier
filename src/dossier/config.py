@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal, cast
 
 _TRUE = {"1", "true", "yes"}
 _FALSE = {"0", "false", "no"}
@@ -17,7 +18,7 @@ class Settings:
     secure_cookies: bool
     require_ssl: bool
     users_path: str
-    auth_backend: str
+    auth_backend: Literal["local", "ldap"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +34,7 @@ class LdapConfig:
     bind_dn: str
     bind_password: str
     user_filter: str
-    group_strategy: str
+    group_strategy: Literal["direct", "nested"]
     ca_cert_file: str
     connect_timeout: int
     domain: str
@@ -64,6 +65,10 @@ def load_settings(strict: bool = True) -> Settings:
     require_ssl_raw = os.environ.get("DOSSIER_REQUIRE_SSL", "false")
     users_path = os.environ.get("DOSSIER_USERS_PATH", "")
     auth_backend = os.environ.get("DOSSIER_AUTH_BACKEND", "local")
+    if auth_backend not in ("local", "ldap"):
+        raise ValueError(
+            f"DOSSIER_AUTH_BACKEND must be 'local' or 'ldap', got {auth_backend!r}"
+        )
 
     if strict:
         _require("DOSSIER_DATABASE_URL", database_url)
@@ -93,7 +98,7 @@ def load_settings(strict: bool = True) -> Settings:
         secure_cookies=secure_cookies,
         require_ssl=require_ssl,
         users_path=users_path,
-        auth_backend=auth_backend,
+        auth_backend=cast(Literal["local", "ldap"], auth_backend),
     )
 
 
@@ -141,6 +146,11 @@ def load_ldap_config(strict: bool = True) -> LdapConfig:
             raise RuntimeError(
                 "DOSSIER_LDAP_SERVER must use ldaps:// — plaintext LDAP is not permitted"
             )
+        if not ca_cert_file:
+            raise RuntimeError(
+                "DOSSIER_LDAP_CA_CERT_FILE is required in strict mode — "
+                "cannot fall back to system trust store"
+            )
 
     return LdapConfig(
         server_urls=server_urls,
@@ -148,7 +158,7 @@ def load_ldap_config(strict: bool = True) -> LdapConfig:
         bind_dn=bind_dn,
         bind_password=bind_password,
         user_filter=user_filter,
-        group_strategy=group_strategy,
+        group_strategy=cast(Literal["direct", "nested"], group_strategy),
         ca_cert_file=ca_cert_file,
         connect_timeout=connect_timeout,
         domain=domain,

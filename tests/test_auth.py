@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from dossier.actors import Actor
-from dossier.auth.backends import LocalBackend, Principal
+from dossier.auth.backends import GroupIdentity, LocalBackend, Principal
 from dossier.auth.passwords import hash_password, verify_password
 from dossier.auth.resolver import principal_to_actor
 
@@ -69,7 +69,9 @@ def test_local_backend_authenticate_good_credentials(tmp_path):
     assert principal.display_name == "Alice"
     assert principal.source == "local"
     assert principal.raw_attributes["username"] == "alice"
-    assert principal.raw_attributes["groups"] == ["team-a"]
+    assert principal.raw_attributes["groups"] == [
+        GroupIdentity(guid="", name="team-a", dn="")
+    ]
 
 
 def test_local_backend_authenticate_bad_password(tmp_path):
@@ -111,7 +113,10 @@ def test_local_backend_fetch_groups(tmp_path):
     backend = LocalBackend(path)
     principal = backend.authenticate("bob", "p")
     assert principal is not None
-    assert backend.fetch_groups(principal) == ["g1", "g2"]
+    assert backend.fetch_groups(principal) == [
+        GroupIdentity(guid="", name="g1", dn=""),
+        GroupIdentity(guid="", name="g2", dn=""),
+    ]
 
 
 def test_local_backend_from_json_string():

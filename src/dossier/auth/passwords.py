@@ -7,11 +7,27 @@ import hmac
 import os
 
 _SCHEME = "scrypt"
-_N = 16384
 _R = 8
 _P = 1
 _DKLEN = 32
 _SALT_BYTES = 16
+
+
+def _get_n() -> int:
+    raw = os.environ.get("DOSSIER_PASSWORD_SCRYPT_N", "131072")
+    try:
+        n = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"DOSSIER_PASSWORD_SCRYPT_N must be an integer, got {raw!r}"
+        ) from exc
+    if n < 2:
+        raise RuntimeError(f"DOSSIER_PASSWORD_SCRYPT_N must be >= 2, got {n}")
+    if n & (n - 1) != 0:
+        raise RuntimeError(
+            f"DOSSIER_PASSWORD_SCRYPT_N must be a power of 2, got {n}"
+        )
+    return n
 
 
 def hash_password(plain: str) -> str:
@@ -23,15 +39,16 @@ def hash_password(plain: str) -> str:
     if not plain:
         raise ValueError("password must not be empty")
     salt = os.urandom(_SALT_BYTES)
+    n = _get_n()
     digest = hashlib.scrypt(
         plain.encode("utf-8"),
         salt=salt,
-        n=_N,
+        n=n,
         r=_R,
         p=_P,
         dklen=_DKLEN,
     )
-    return f"{_SCHEME}${_N}${_b64(salt)}${_b64(digest)}"
+    return f"{_SCHEME}${n}${_b64(salt)}${_b64(digest)}"
 
 
 def verify_password(plain: str, stored: str) -> bool:

@@ -5,9 +5,10 @@ import json
 import os
 import secrets
 from pathlib import Path
+from typing import Any
 
 
-def generate_keyset(path: Path, *, key_id: str | None = None) -> dict:
+def generate_keyset(path: Path, *, key_id: str | None = None) -> dict[str, Any]:
     if key_id is None:
         key_id = f"dossier-{secrets.token_hex(4)}"
 

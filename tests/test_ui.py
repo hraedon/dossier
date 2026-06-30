@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from conftest import extract_csrf as _extract_csrf, login as _login
 
 
@@ -173,3 +175,91 @@ def test_transition_self_review_error_renders(client):
     )
     assert resp.status_code == 400
     assert "self-review" in resp.text.lower()
+
+
+def test_unauthenticated_redirect_body_is_not_json(client):
+    resp = client.get("/", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["location"] == "/login"
+    assert "application/json" not in resp.headers.get("content-type", "")
+    body = resp.text.strip()
+    assert not body.startswith("{")
+    assert "detail" not in body
+
+
+def test_review_note_visibility_toggles_on_transition_select(client):
+    _login(client)
+    new_page = client.get("/issues/new")
+    csrf = _extract_csrf(new_page.text)
+    resp = client.post(
+        "/issues",
+        data={"type": "bug", "title": "Review note test", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    issue_url = resp.headers["location"]
+
+    from helpers import ALICE
+    from dossier.gateway import RegistaGateway
+    import uuid
+
+    gw: RegistaGateway = client.app.state.gateway
+    wi_id = uuid.UUID(issue_url.split("/")[-1])
+    gw.transition(actor=ALICE, work_item_id=wi_id, transition_name="start")
+    gw.transition(actor=ALICE, work_item_id=wi_id, transition_name="submit_for_review")
+
+    detail = client.get(issue_url)
+    assert detail.status_code == 200
+
+    noted = re.findall(r'data-needs-note="true"', detail.text)
+    assert len(noted) == 2
+    assert 'value="adversarial_pass"' in detail.text
+    assert 'value="request_changes"' in detail.text
+
+    amend_opt = re.search(r'<option value="amend"[^>]*>', detail.text)
+    assert amend_opt is not None
+    assert "data-needs-note" not in amend_opt.group(0)
+
+    assert 'id="transition-select"' in detail.text
+    assert 'id="review-note-input"' in detail.text
+    note_input = re.search(r'<input[^>]*id="review-note-input"[^>]*>', detail.text)
+    assert note_input is not None
+    assert 'style="display:none"' in note_input.group(0)
+
+
+def test_integrity_check_is_per_work_item(client):
+    _login(client)
+    new_page = client.get("/issues/new")
+    csrf = _extract_csrf(new_page.text)
+
+    a = client.post(
+        "/issues",
+        data={"type": "bug", "title": "Issue A", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    b = client.post(
+        "/issues",
+        data={"type": "bug", "title": "Issue B", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    url_a = a.headers["location"]
+    url_b = b.headers["location"]
+
+    import uuid
+
+    from dossier.gateway import RegistaGateway
+
+    gw: RegistaGateway = client.app.state.gateway
+    id_a = uuid.UUID(url_a.split("/")[-1])
+    id_b = uuid.UUID(url_b.split("/")[-1])
+
+    gw._reg._work_items[id_a]["current_state"] = "done"
+
+    rpt_a = gw.integrity(work_item_id=id_a)
+    rpt_b = gw.integrity(work_item_id=id_b)
+    assert rpt_a.replayed_drift == 1
+    assert rpt_b.replayed_drift == 0
+
+    detail_b = client.get(url_b)
+    assert detail_b.status_code == 200
+    assert "chain verified" in detail_b.text
+    assert "CHAIN BROKEN" not in detail_b.text

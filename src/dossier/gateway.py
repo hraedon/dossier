@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
@@ -8,6 +9,9 @@ import regista
 from regista import Event, Regista, ReplayReport, WorkItem
 
 from .actors import Actor
+
+if TYPE_CHECKING:
+    from .config import Settings
 
 # Plan 010 (WI-3): dossier registers the single canonical workflow shipped from
 # regista — the same one agent-notes registers — so human and agent work share
@@ -17,7 +21,7 @@ WORKFLOW_NAME = "canonical"
 
 
 def packaged_workflow_yaml() -> str:
-    return regista.canonical_workflow_yaml()
+    return str(regista.canonical_workflow_yaml())
 
 
 def packaged_workflow_version() -> int:
@@ -28,9 +32,9 @@ def packaged_workflow_version() -> int:
     return int(yaml.safe_load(packaged_workflow_yaml())["version"])
 
 
-def _metadata(actor: Actor) -> dict:
+def _metadata(actor: Actor) -> dict[str, Any]:
     role = "system" if actor.actor_kind == "system" else "human"
-    meta: dict = {"display_name": actor.display_name, "role": role}
+    meta: dict[str, Any] = {"display_name": actor.display_name, "role": role}
     if actor.model_lineage:
         meta["model_lineage"] = actor.model_lineage
     return meta
@@ -52,7 +56,7 @@ class RegistaGateway:
         # auto-available by name — dossier registers no local copies (Plan 010).
 
     @classmethod
-    def from_settings(cls, settings) -> RegistaGateway:
+    def from_settings(cls, settings: Settings) -> RegistaGateway:
         reg = Regista(
             settings.database_url,
             settings.project,
@@ -72,7 +76,7 @@ class RegistaGateway:
         *,
         actor: Actor,
         work_item_type: str,
-        custom_fields: dict | None = None,
+        custom_fields: dict[str, Any] | None = None,
     ) -> tuple[WorkItem, Event]:
         """Create a work item. ``on_behalf_of`` is intentionally not threaded:
         regista's ``create_work_item`` does not accept it (a regista-side
@@ -82,13 +86,16 @@ class RegistaGateway:
         ``custom_fields`` must include ``title`` (required by the workflow v2)
         and typically includes ``description``, ``assignee``, and ``priority``.
         """
-        return self._reg.create_work_item(
-            workflow_name=WORKFLOW_NAME,
-            work_item_type=work_item_type,
-            actor_id=actor.actor_id,
-            actor_kind=actor.actor_kind,
-            actor_metadata=_metadata(actor),
-            custom_fields=custom_fields,
+        return cast(
+            tuple[WorkItem, Event],
+            self._reg.create_work_item(
+                workflow_name=WORKFLOW_NAME,
+                work_item_type=work_item_type,
+                actor_id=actor.actor_id,
+                actor_kind=actor.actor_kind,
+                actor_metadata=_metadata(actor),
+                custom_fields=custom_fields,
+            ),
         )
 
     def transition(
@@ -97,18 +104,21 @@ class RegistaGateway:
         actor: Actor,
         work_item_id: uuid.UUID,
         transition_name: str,
-        payload: dict | None = None,
-        custom_fields: dict | None = None,
+        payload: dict[str, Any] | None = None,
+        custom_fields: dict[str, Any] | None = None,
     ) -> Event:
-        return self._reg.transition(
-            work_item_id,
-            transition_name,
-            actor.actor_id,
-            actor_kind=actor.actor_kind,
-            actor_metadata=_metadata(actor),
-            payload=payload,
-            custom_fields=custom_fields,
-            on_behalf_of=actor.on_behalf_of,
+        return cast(
+            Event,
+            self._reg.transition(
+                work_item_id,
+                transition_name,
+                actor.actor_id,
+                actor_kind=actor.actor_kind,
+                actor_metadata=_metadata(actor),
+                payload=payload,
+                custom_fields=custom_fields,
+                on_behalf_of=actor.on_behalf_of,
+            ),
         )
 
     def comment(
@@ -118,18 +128,21 @@ class RegistaGateway:
         work_item_id: uuid.UUID,
         body: str,
     ) -> Event:
-        return self._reg.append_event(
-            work_item_id,
-            actor.actor_id,
-            actor_kind=actor.actor_kind,
-            actor_metadata=_metadata(actor),
-            transition="comment",
-            payload={"body": body},
-            on_behalf_of=actor.on_behalf_of,
+        return cast(
+            Event,
+            self._reg.append_event(
+                work_item_id,
+                actor.actor_id,
+                actor_kind=actor.actor_kind,
+                actor_metadata=_metadata(actor),
+                transition="comment",
+                payload={"body": body},
+                on_behalf_of=actor.on_behalf_of,
+            ),
         )
 
     def get_issue(self, work_item_id: uuid.UUID) -> WorkItem | None:
-        return self._reg.get_work_item(work_item_id)
+        return cast(WorkItem | None, self._reg.get_work_item(work_item_id))
 
     def list_issues(
         self,
@@ -137,7 +150,7 @@ class RegistaGateway:
         current_states: list[str] | None = None,
         assignee: str | None = None,
         page_size: int = 100,
-    ):
+    ) -> Any:
         field_filters = {"assignee": assignee} if assignee else None
         return self._reg.query_work_items(
             workflow_name=WORKFLOW_NAME,
@@ -147,12 +160,12 @@ class RegistaGateway:
         )
 
     def history(self, work_item_id: uuid.UUID) -> list[Event]:
-        return self._reg.read_events(work_item_id=work_item_id, limit=10_000)
+        return cast(list[Event], self._reg.read_events(work_item_id=work_item_id, limit=10_000))
 
-    def integrity(self) -> ReplayReport:
-        return self._reg.replay()
+    def integrity(self, work_item_id: uuid.UUID | None = None) -> ReplayReport:
+        return cast(ReplayReport, self._reg.replay(work_item_id=work_item_id))
 
-    def transitions_from(self, state: str, workflow_version: int):
+    def transitions_from(self, state: str, workflow_version: int) -> list[Any]:
         """Return the ``TransitionDef``s whose ``from_state == state`` for the
         registered dossier workflow at ``workflow_version``. The workflow YAML is
         the single source of truth for the state machine; this avoids dossier

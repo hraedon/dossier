@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("DOSSIER_PASSWORD_SCRYPT_N", "16")
+
 import json
 import re
 from pathlib import Path

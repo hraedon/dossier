@@ -29,18 +29,34 @@
   <form method="post" action="/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="ds-transition-row">
-      <select class="ds-select" name="transition_name">
+      <select class="ds-select" name="transition_name" id="transition-select">
         {% for name, label, needs_note in transitions %}
-        <option value="{{ name }}">{{ label }}</option>
+        <option value="{{ name }}" {% if needs_note %}data-needs-note="true"{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
-      <input class="ds-input" type="text" name="review_note" placeholder="review note (required for review verdicts)">
+      <input class="ds-input" type="text" name="review_note" id="review-note-input" placeholder="review note (required for review verdicts)" style="display:none">
+      <noscript><style>#review-note-input{display:block !important}</style></noscript>
       {% if issue.current_state == "in_review" %}
       <label class="ds-check"><input type="checkbox" name="same_lineage_acknowledged"> same-lineage ack</label>
       {% endif %}
       <button type="submit" class="ds-btn ds-btn--primary">apply</button>
     </div>
   </form>
+  <script>
+    (function () {
+      var sel = document.getElementById("transition-select");
+      var note = document.getElementById("review-note-input");
+      if (!sel || !note) return;
+      function sync() {
+        var opt = sel.options[sel.selectedIndex];
+        var needs = opt && opt.getAttribute("data-needs-note") === "true";
+        note.style.display = needs ? "" : "none";
+        if (!needs) note.value = "";
+      }
+      sel.addEventListener("change", sync);
+      sync();
+    })();
+  </script>
 </div>
 {% endif %}
 

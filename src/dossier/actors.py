@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +24,7 @@ class Actor:
     actor_id: str
     actor_kind: str
     display_name: str
-    on_behalf_of: dict | None = None
+    on_behalf_of: dict[str, Any] | None = None
     model_lineage: str | None = None
 
 

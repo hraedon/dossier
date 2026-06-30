@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any
+
+from regista import Event, WorkItem
+
 from .actors import Actor
 
 _TRANSITION_LABELS: dict[str, str] = {
@@ -37,7 +42,7 @@ _BUTTON_LABELS: dict[str, str] = {
 _REVIEW_VERDICTS = frozenset({"adversarial_pass", "request_changes", "accept", "reject"})
 
 
-def transition_tuple(tdef) -> tuple[str, str, bool]:
+def transition_tuple(tdef: Any) -> tuple[str, str, bool]:
     """Return ``(name, button_label, needs_note)`` for a ``TransitionDef``.
 
     ``needs_note`` is True for the review-verdict transitions
@@ -54,14 +59,14 @@ def transition_label(transition: str) -> str:
     return _TRANSITION_LABELS.get(transition, transition)
 
 
-def actor_display(event) -> str:
+def actor_display(event: Event) -> str:
     meta = getattr(event, "actor_metadata", None)
     if isinstance(meta, dict) and meta.get("display_name"):
         return str(meta["display_name"])
     return str(getattr(event, "actor_id", "unknown"))
 
 
-def on_behalf_display(event) -> str | None:
+def on_behalf_display(event: Event) -> str | None:
     delegation = getattr(event, "on_behalf_of", None)
     if not isinstance(delegation, dict):
         return None
@@ -72,7 +77,7 @@ def on_behalf_display(event) -> str | None:
     return str(pid) if pid else None
 
 
-def event_verdict(event) -> str | None:
+def event_verdict(event: Event) -> str | None:
     payload = getattr(event, "payload", None)
     if not isinstance(payload, dict):
         return None
@@ -88,7 +93,7 @@ def event_verdict(event) -> str | None:
     return None
 
 
-def is_same_lineage_acknowledged(event) -> bool:
+def is_same_lineage_acknowledged(event: Event) -> bool:
     """True iff this review-verdict event carried an explicit
     ``same_lineage_acknowledged`` flag — surfaced in the verified-history view so
     a same-lineage adversarial review is never mistaken for an independent one
@@ -97,7 +102,7 @@ def is_same_lineage_acknowledged(event) -> bool:
     return isinstance(payload, dict) and payload.get("same_lineage_acknowledged") is True
 
 
-def format_timestamp(ts) -> str:
+def format_timestamp(ts: datetime | None) -> str:
     if ts is None:
         return ""
     try:
@@ -118,14 +123,14 @@ def status_pill_class(state: str) -> str:
     }.get(state, "ds-pill--muted")
 
 
-def issue_title(issue) -> str:
+def issue_title(issue: WorkItem) -> str:
     cf = getattr(issue, "custom_fields", None)
     if isinstance(cf, dict):
         return str(cf.get("title", "untitled"))
     return "untitled"
 
 
-def issue_field(issue, name: str, default: str = "") -> str:
+def issue_field(issue: WorkItem, name: str, default: str = "") -> str:
     cf = getattr(issue, "custom_fields", None)
     if isinstance(cf, dict):
         val = cf.get(name)
@@ -133,7 +138,7 @@ def issue_field(issue, name: str, default: str = "") -> str:
     return default
 
 
-def last_event_time(issue) -> str:
+def last_event_time(issue: WorkItem) -> str:
     ts = getattr(issue, "last_event_at", None)
     return format_timestamp(ts)
 

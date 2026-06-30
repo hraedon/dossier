@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from dossier.auth.backends import LdapBackend, Principal, _guid_bytes_to_str
+from dossier.auth.backends import GroupIdentity, LdapBackend, Principal, _guid_bytes_to_str
 from dossier.config import LdapConfig, load_ldap_config
 
 
@@ -88,6 +88,34 @@ _TEST_GROUPS = [
     "CN=team-a,OU=Groups,DC=test,DC=example",
     "CN=team-b,OU=Groups,DC=test,DC=example",
 ]
+_TEST_GROUP_GUIDS = [
+    uuid.UUID("11111111-1111-1111-1111-111111111111"),
+    uuid.UUID("22222222-2222-2222-2222-222222222222"),
+]
+
+
+def _make_group_entries(
+    groups: list[str] | None = None,
+    guids: list[uuid.UUID] | None = None,
+) -> list[_MockEntry]:
+    if groups is None:
+        groups = _TEST_GROUPS
+    if guids is None:
+        guids = _TEST_GROUP_GUIDS
+    entries: list[_MockEntry] = []
+    for dn, guid in zip(groups, guids):
+        name = dn.split(",")[0].split("=", 1)[1]
+        entries.append(
+            _MockEntry(
+                dn,
+                {
+                    "objectGUID": guid.bytes_le,
+                    "name": name,
+                    "distinguishedName": dn,
+                },
+            )
+        )
+    return entries
 
 
 def _make_backend(**overrides) -> LdapBackend:
@@ -207,7 +235,10 @@ def test_guid_bytes_to_str_invalid_bytes():
 def test_authenticate_success_direct_groups(mock_conn, _tls, _srv, _pool):
     backend = _make_backend()
     user_entry = _make_user_entry()
-    svc_conn = _MockConnection(search_responses=[[user_entry]])
+    group_entries = _make_group_entries()
+    svc_conn = _MockConnection(
+        search_responses=[[user_entry], [user_entry], group_entries]
+    )
     user_conn = _MockConnection(bind_result=True)
     _setup_conn_mock(mock_conn, svc_conn, user_conn)
 
@@ -219,7 +250,15 @@ def test_authenticate_success_direct_groups(mock_conn, _tls, _srv, _pool):
     assert principal.display_name == "Test User"
     assert principal.raw_attributes["username"] == "tuser"
     assert principal.raw_attributes["dn"] == _TEST_DN
-    assert principal.raw_attributes["groups"] == _TEST_GROUPS
+    groups = principal.raw_attributes["groups"]
+    assert len(groups) == 2
+    assert all(isinstance(g, GroupIdentity) for g in groups)
+    assert groups[0].guid == str(_TEST_GROUP_GUIDS[0])
+    assert groups[0].name == "team-a"
+    assert groups[0].dn == _TEST_GROUPS[0]
+    assert groups[1].guid == str(_TEST_GROUP_GUIDS[1])
+    assert groups[1].name == "team-b"
+    assert groups[1].dn == _TEST_GROUPS[1]
 
 
 @patch("ldap3.ServerPool")
@@ -229,11 +268,17 @@ def test_authenticate_success_direct_groups(mock_conn, _tls, _srv, _pool):
 def test_authenticate_success_nested_groups(mock_conn, _tls, _srv, _pool):
     backend = _make_backend(group_strategy="nested")
     user_entry = _make_user_entry(groups=[])
-    group_entries = [
-        _MockEntry("CN=team-a,OU=Groups,DC=test,DC=example", {}),
-        _MockEntry("CN=team-b,OU=Groups,DC=test,DC=example", {}),
-        _MockEntry("CN=nested-team,OU=Groups,DC=test,DC=example", {}),
+    nested_group_dns = [
+        "CN=team-a,OU=Groups,DC=test,DC=example",
+        "CN=team-b,OU=Groups,DC=test,DC=example",
+        "CN=nested-team,OU=Groups,DC=test,DC=example",
     ]
+    nested_group_guids = [
+        _TEST_GROUP_GUIDS[0],
+        _TEST_GROUP_GUIDS[1],
+        uuid.UUID("33333333-3333-3333-3333-333333333333"),
+    ]
+    group_entries = _make_group_entries(nested_group_dns, nested_group_guids)
     svc_conn = _MockConnection(search_responses=[[user_entry], group_entries])
     user_conn = _MockConnection(bind_result=True)
     _setup_conn_mock(mock_conn, svc_conn, user_conn)
@@ -241,11 +286,18 @@ def test_authenticate_success_nested_groups(mock_conn, _tls, _srv, _pool):
     principal = backend.authenticate("tuser", "password123")
 
     assert principal is not None
-    assert principal.raw_attributes["groups"] == [
-        "CN=team-a,OU=Groups,DC=test,DC=example",
-        "CN=team-b,OU=Groups,DC=test,DC=example",
-        "CN=nested-team,OU=Groups,DC=test,DC=example",
-    ]
+    groups = principal.raw_attributes["groups"]
+    assert len(groups) == 3
+    assert all(isinstance(g, GroupIdentity) for g in groups)
+    assert groups[0].name == "team-a"
+    assert groups[0].dn == nested_group_dns[0]
+    assert groups[0].guid == str(nested_group_guids[0])
+    assert groups[1].name == "team-b"
+    assert groups[1].dn == nested_group_dns[1]
+    assert groups[1].guid == str(nested_group_guids[1])
+    assert groups[2].name == "nested-team"
+    assert groups[2].dn == nested_group_dns[2]
+    assert groups[2].guid == str(nested_group_guids[2])
     assert len(svc_conn.search_calls) == 2
     assert "1.2.840.113556.1.4.1941" in svc_conn.search_calls[1][1]
 
@@ -273,6 +325,105 @@ def test_authenticate_uses_display_name_fallback(mock_conn, _tls, _srv, _pool):
     principal = backend.authenticate("tuser", "pw")
     assert principal is not None
     assert principal.display_name == "Fallback Name"
+
+
+# ── direct group resolution: edge cases ──────────────────────────────────
+
+
+@patch("ldap3.ServerPool")
+@patch("ldap3.Server")
+@patch("ldap3.Tls")
+@patch("ldap3.Connection")
+def test_direct_group_missing_object_guid(mock_conn, _tls, _srv, _pool, caplog):
+    import logging
+
+    backend = _make_backend()
+    group_dn = _TEST_GROUPS[0]
+    user_entry = _make_user_entry(groups=[group_dn])
+    group_entry = _MockEntry(
+        group_dn,
+        {
+            "name": "team-a",
+            "distinguishedName": group_dn,
+        },
+    )
+    svc_conn = _MockConnection(
+        search_responses=[[user_entry], [user_entry], [group_entry]]
+    )
+    user_conn = _MockConnection(bind_result=True)
+    _setup_conn_mock(mock_conn, svc_conn, user_conn)
+
+    with caplog.at_level(logging.WARNING, logger="dossier.auth.ldap"):
+        principal = backend.authenticate("tuser", "password123")
+
+    assert principal is not None
+    groups = principal.raw_attributes["groups"]
+    assert len(groups) == 1
+    assert groups[0].guid == ""
+    assert groups[0].name == "team-a"
+    assert groups[0].dn == group_dn
+    assert group_dn in caplog.text
+
+
+@patch("ldap3.ServerPool")
+@patch("ldap3.Server")
+@patch("ldap3.Tls")
+@patch("ldap3.Connection")
+def test_direct_group_missing_name_falls_back_to_cn(mock_conn, _tls, _srv, _pool):
+    backend = _make_backend()
+    group_dn = _TEST_GROUPS[0]
+    user_entry = _make_user_entry(groups=[group_dn])
+    group_entry = _MockEntry(
+        group_dn,
+        {
+            "objectGUID": _TEST_GROUP_GUIDS[0].bytes_le,
+            "distinguishedName": group_dn,
+        },
+    )
+    svc_conn = _MockConnection(
+        search_responses=[[user_entry], [user_entry], [group_entry]]
+    )
+    user_conn = _MockConnection(bind_result=True)
+    _setup_conn_mock(mock_conn, svc_conn, user_conn)
+
+    principal = backend.authenticate("tuser", "password123")
+
+    assert principal is not None
+    groups = principal.raw_attributes["groups"]
+    assert len(groups) == 1
+    assert groups[0].guid == str(_TEST_GROUP_GUIDS[0])
+    assert groups[0].name == "team-a"
+    assert groups[0].dn == group_dn
+
+
+@patch("ldap3.ServerPool")
+@patch("ldap3.Server")
+@patch("ldap3.Tls")
+@patch("ldap3.Connection")
+def test_direct_group_resolution_empty_search(mock_conn, _tls, _srv, _pool, caplog):
+    import logging
+
+    backend = _make_backend()
+    user_entry = _make_user_entry()
+    svc_conn = _MockConnection(
+        search_responses=[[user_entry], [user_entry], []]
+    )
+    user_conn = _MockConnection(bind_result=True)
+    _setup_conn_mock(mock_conn, svc_conn, user_conn)
+
+    with caplog.at_level(logging.WARNING, logger="dossier.auth.ldap"):
+        principal = backend.authenticate("tuser", "password123")
+
+    assert principal is not None
+    groups = principal.raw_attributes["groups"]
+    assert len(groups) == 2
+    assert all(g.guid == "" for g in groups)
+    assert groups[0].name == "team-a"
+    assert groups[0].dn == _TEST_GROUPS[0]
+    assert groups[1].name == "team-b"
+    assert groups[1].dn == _TEST_GROUPS[1]
+    assert _TEST_GROUPS[0] in caplog.text
+    assert _TEST_GROUPS[1] in caplog.text
 
 
 # ── authenticate: failure cases ──────────────────────────────────────────
@@ -340,7 +491,10 @@ def test_authenticate_passes_user_dn_and_password_to_user_bind(mock_conn, _tls, 
     """The user connection must receive the found DN and the supplied password."""
     backend = _make_backend()
     user_entry = _make_user_entry()
-    svc_conn = _MockConnection(search_responses=[[user_entry]])
+    group_entries = _make_group_entries()
+    svc_conn = _MockConnection(
+        search_responses=[[user_entry], [user_entry], group_entries]
+    )
     user_conn = _MockConnection(bind_result=True)
     _setup_conn_mock(mock_conn, svc_conn, user_conn)
 
@@ -411,15 +565,23 @@ def test_authenticate_bind_exception_returns_none(mock_conn, _tls, _srv, _pool):
 # ── fetch_groups ─────────────────────────────────────────────────────────
 
 
+def _make_test_group_identities() -> list[GroupIdentity]:
+    return [
+        GroupIdentity(guid=str(_TEST_GROUP_GUIDS[0]), name="team-a", dn=_TEST_GROUPS[0]),
+        GroupIdentity(guid=str(_TEST_GROUP_GUIDS[1]), name="team-b", dn=_TEST_GROUPS[1]),
+    ]
+
+
 def test_fetch_groups_returns_cached_groups():
+    test_groups = _make_test_group_identities()
     principal = Principal(
         stable_id=str(_TEST_GUID),
         display_name="Test User",
         source="ldap:test.example",
-        raw_attributes={"username": "tuser", "groups": _TEST_GROUPS},
+        raw_attributes={"username": "tuser", "groups": test_groups},
     )
     backend = _make_backend()
-    assert backend.fetch_groups(principal) == _TEST_GROUPS
+    assert backend.fetch_groups(principal) == test_groups
 
 
 def test_fetch_groups_empty_when_no_groups():
@@ -434,16 +596,17 @@ def test_fetch_groups_empty_when_no_groups():
 
 
 def test_fetch_groups_returns_copy():
+    test_groups = _make_test_group_identities()
     principal = Principal(
         stable_id=str(_TEST_GUID),
         display_name="Test User",
         source="ldap:test.example",
-        raw_attributes={"username": "tuser", "groups": _TEST_GROUPS},
+        raw_attributes={"username": "tuser", "groups": test_groups},
     )
     backend = _make_backend()
     groups = backend.fetch_groups(principal)
-    groups.append("injected")
-    assert backend.fetch_groups(principal) == _TEST_GROUPS
+    groups.append(GroupIdentity(guid="", name="injected", dn=""))
+    assert backend.fetch_groups(principal) == test_groups
 
 
 # ── from_config / config loading ─────────────────────────────────────────
@@ -503,11 +666,22 @@ def test_load_ldap_config_defaults(monkeypatch):
     monkeypatch.delenv("DOSSIER_LDAP_CONNECT_TIMEOUT", raising=False)
     monkeypatch.delenv("DOSSIER_LDAP_USER_FILTER", raising=False)
 
-    config = load_ldap_config(strict=True)
-    assert config.group_strategy == "direct"
+    config = load_ldap_config(strict=False)
     assert config.ca_cert_file == ""
+    assert config.group_strategy == "direct"
     assert config.connect_timeout == 5
-    assert "{login}" in config.user_filter
+
+
+def test_load_ldap_config_strict_requires_ca_cert(monkeypatch):
+    monkeypatch.setenv("DOSSIER_LDAP_SERVER", "ldaps://dc.example.com:636")
+    monkeypatch.setenv("DOSSIER_LDAP_BASE_DN", "DC=example,DC=com")
+    monkeypatch.setenv("DOSSIER_LDAP_BIND_DN", "CN=svc,DC=example,DC=com")
+    monkeypatch.setenv("DOSSIER_LDAP_BIND_PASSWORD", "secret")
+    monkeypatch.setenv("DOSSIER_LDAP_DOMAIN", "example.com")
+    monkeypatch.delenv("DOSSIER_LDAP_CA_CERT_FILE", raising=False)
+
+    with pytest.raises(RuntimeError, match="DOSSIER_LDAP_CA_CERT_FILE"):
+        load_ldap_config(strict=True)
 
 
 def test_load_ldap_config_rejects_bad_group_strategy(monkeypatch):
@@ -573,7 +747,10 @@ def test_multi_dc_creates_server_pool(mock_conn, _tls, mock_server, mock_pool):
         server_urls=["ldaps://dc1.test.example:636", "ldaps://dc2.test.example:636"],
     )
     user_entry = _make_user_entry()
-    svc_conn = _MockConnection(search_responses=[[user_entry]])
+    group_entries = _make_group_entries()
+    svc_conn = _MockConnection(
+        search_responses=[[user_entry], [user_entry], group_entries]
+    )
     user_conn = _MockConnection(bind_result=True)
     _setup_conn_mock(mock_conn, svc_conn, user_conn)
 

@@ -134,3 +134,83 @@ def test_spoof_prevention_header_cannot_set_actor(client):
     assert body["actor_id"] == "11111111-1111-1111-1111-111111111111"
     assert body["actor_kind"] == "human"
     assert body["on_behalf_of"] is None
+
+
+def test_login_throttle_after_max_failures(client):
+    csrf = client.get("/csrf").json()["csrf_token"]
+    for _ in range(5):
+        resp = client.post(
+            "/login",
+            json={"username": "alice", "password": "wrong"},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert resp.status_code == 401
+    resp = client.post(
+        "/login",
+        json={"username": "alice", "password": "wrong"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 429
+
+
+def test_login_throttle_clears_on_success(client):
+    csrf = client.get("/csrf").json()["csrf_token"]
+    for _ in range(3):
+        client.post(
+            "/login",
+            json={"username": "alice", "password": "wrong"},
+            headers={"X-CSRF-Token": csrf},
+        )
+    resp = client.post(
+        "/login",
+        json={"username": "alice", "password": "s3cret"},
+        headers={"X-CSRF-Token": csrf},
+    )
+    assert resp.status_code == 200
+    new_csrf = resp.json()["csrf_token"]
+    resp = client.post(
+        "/login",
+        json={"username": "alice", "password": "wrong"},
+        headers={"X-CSRF-Token": new_csrf},
+    )
+    assert resp.status_code == 401
+
+
+def test_login_throttle_form_returns_html(client):
+    csrf = client.get("/csrf").json()["csrf_token"]
+    for _ in range(5):
+        resp = client.post(
+            "/login",
+            data={"username": "alice", "password": "wrong", "csrf_token": csrf},
+        )
+        assert resp.status_code == 401
+    resp = client.post(
+        "/login",
+        data={"username": "alice", "password": "wrong", "csrf_token": csrf},
+    )
+    assert resp.status_code == 429
+    assert "text/html" in resp.headers.get("content-type", "")
+
+
+def test_all_state_changing_routes_have_csrf_dependency(app):
+    from fastapi.routing import APIRoute
+
+    from dossier.auth.sessions import verify_csrf
+
+    def _has_csrf(dependant) -> bool:
+        for dep in dependant.dependencies:
+            if dep.call is verify_csrf:
+                return True
+            if _has_csrf(dep):
+                return True
+        return False
+
+    state_changing = {"POST", "PUT", "PATCH", "DELETE"}
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        if not route.methods:
+            continue
+        if not (route.methods & state_changing):
+            continue
+        assert _has_csrf(route.dependant), f"route {route.path} lacks verify_csrf"
