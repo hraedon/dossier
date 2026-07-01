@@ -33,6 +33,7 @@
   <table class="ds-table">
     <thead>
       <tr>
+        <th>key</th>
         <th>title</th>
         <th>type</th>
         <th>status</th>
@@ -44,6 +45,7 @@
     <tbody>
       {% for wi in issues %}
       <tr>
+        <td class="mono"><a href="/issues/{{ wi.work_item_id }}">{{ display_key(wi) }}</a></td>
         <td><a href="/issues/{{ wi.work_item_id }}">{{ issue_title(wi) }}</a></td>
         <td class="mono">{{ wi.work_item_type }}</td>
         <td><span class="ds-pill {{ status_pill_class(wi.current_state) }}"><span class="ds-pill__dot"></span>{{ wi.current_state }}</span></td>

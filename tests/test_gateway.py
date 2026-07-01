@@ -87,3 +87,68 @@ def test_actor_metadata_records_display_name(gateway, make_issue):
     events = gateway.history(wi.work_item_id)
     assert events[0].actor_metadata["display_name"] == "Alice"
     assert events[0].actor_metadata["role"] == "human"
+
+
+def test_display_key_minted_on_creation(gateway, make_issue):
+    wi = make_issue(actor=ALICE, title="Display key test")
+    cf = getattr(wi, "custom_fields", None)
+    assert isinstance(cf, dict)
+    assert cf.get("display_key") == "DOSSIER_TEST-1"
+
+
+def test_display_key_increments(gateway, make_issue):
+    wi1 = make_issue(actor=ALICE, title="First")
+    wi2 = make_issue(actor=ALICE, title="Second")
+    wi3 = make_issue(actor=ALICE, title="Third")
+    assert getattr(wi1, "custom_fields", {}).get("display_key") == "DOSSIER_TEST-1"
+    assert getattr(wi2, "custom_fields", {}).get("display_key") == "DOSSIER_TEST-2"
+    assert getattr(wi3, "custom_fields", {}).get("display_key") == "DOSSIER_TEST-3"
+
+
+def test_display_key_not_overwritten_if_provided(gateway):
+    from helpers import ALICE
+
+    wi, _ = gateway.create_issue(
+        actor=ALICE,
+        work_item_type="bug",
+        custom_fields={"title": "Pre-set key", "display_key": "CUSTOM-99"},
+    )
+    assert getattr(wi, "custom_fields", {}).get("display_key") == "CUSTOM-99"
+
+
+def test_display_key_sanitizes_project_name(tmp_path):
+    import base64
+    import json
+    import secrets
+
+    from helpers import ALICE
+    from regista.testing import InMemoryRegista
+
+    from dossier.gateway import RegistaGateway
+
+    key_file = tmp_path / "keys.json"
+    key_file.write_text(json.dumps({
+        "keys": [{"key_id": "k", "secret": base64.b64encode(secrets.token_bytes(32)).decode(), "status": "active", "scheme": "hmac-sha256"}]
+    }))
+    reg = InMemoryRegista(project="agent-notes project!", hmac_key_path=str(key_file))
+    gw = RegistaGateway(reg, project_name="agent-notes project!")
+    gw.register_workflow()
+    wi, _ = gw.create_issue(actor=ALICE, work_item_type="bug", custom_fields={"title": "Sanitize test"})
+    assert getattr(wi, "custom_fields", {}).get("display_key") == "AGENT_NOTES_PROJECT-1"
+    gw.close()
+
+
+def test_v2_work_item_transitions_correctly(gateway, make_issue):
+    """Verify that work items created under the current (v2) workflow can
+    transition through the canonical lifecycle. True v1 backward-compat is
+    covered by regista's own tests (the workflow registry stores versions as
+    composite keys; v1 items resolve to v1 transitions)."""
+    from helpers import BOB
+
+    wi = make_issue(actor=ALICE, title="V2 transition test")
+    version = getattr(wi, "workflow_version", None)
+    assert version is not None
+    tdefs = gateway.transitions_from("open", version)
+    assert any(t.name == "start" for t in tdefs)
+    gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
+    assert gateway.get_issue(wi.work_item_id) is not None

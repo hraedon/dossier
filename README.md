@@ -30,8 +30,9 @@ chain. Build the tracker honestly and you get the provenance for free.
 
 - **Backend: regista.** dossier owns no schema for work state. Work-items, states,
   transitions, custom fields, links, actors, claims, and the event log all live in
-  regista (Postgres, schema-per-project). dossier declares a **workflow** (`src/
-  dossier/workflows/dossier.workflow.yaml`) and consumes regista's facade API.
+  regista (Postgres, schema-per-project). dossier registers regista's **canonical
+  workflow** (shipped from regista, shared with agent-notes) and consumes regista's
+  facade API.
 - **Front end: a server-rendered FastAPI web app** (Jinja + the
   [patina](https://github.com/hraedon/patina) design system), in the cert-watch /
   gpo-lens family style. No SPA.
@@ -74,19 +75,21 @@ with Jira; depending on any production/cloud infrastructure.
 
 ## Status
 
-Foundation slice landed. The provenance foundation is real and verified: the
-regista gateway (the sole choke point — a server-resolved `Actor` is injected on
-every mutation), the `adversarial_review` validator (structural separation-of-
-duties: no self-review; agent-authored work needs a human reviewer), local auth
-(signed session + CSRF + principal→actor), and an end-to-end test proving the
-signed hash-chain verifies (`replay()==0`) against real Postgres. regista's
-`ValidatorContext` was enriched (acting `actor_kind` + prior event history) to
-make the review gate possible — see the sibling
-[`plans/020-validator-context-enrichment.md`](../regista/plans/020-validator-context-enrichment.md).
+MVP landed. The provenance foundation is real and verified: the regista gateway
+(the sole choke point — a server-resolved `Actor` is injected on every
+mutation), the `adversarial_review` validator (structural separation-of-duties:
+no self-review; agent-authored work needs a human reviewer), local auth (signed
+session + CSRF + principal→actor), and an end-to-end test proving the signed
+hash-chain verifies (`replay()==0`) against real Postgres. The server-rendered
+UI is live: issue list with filters, issue detail with transitions/comments, the
+verified-history view (the integrity-checked event chain), and `DOSSIER-N`
+display keys (WI-006). Auth hardening (scrypt N=2^17, login throttling, CSRF)
+and LDAP/AD integration (Plan 003) are implemented. mypy --strict is clean.
 
-Not yet built: the server-rendered UI (list/board, issue view, the legible
-verified-history page — `plans/001` WI-5/7/8), the agent HTTP API (WI-9), and
-`docs/publication-review.md`. Private until that sanitization review lands.
+Not yet done: `docs/publication-review.md` (sanitization review — now written,
+see above), LDAP integration tests against real AD (5 skipped tests), and the
+multi-project fronting (Plan 011). The repo is private until the publication
+review is ratified by a human.
 
 ## Installation
 

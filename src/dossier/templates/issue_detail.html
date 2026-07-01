@@ -3,6 +3,7 @@
 {% block content %}
 <div class="ds-pagehead">
   <div>
+    <div class="ds-pagehead__key mono">{{ display_key(issue) }}</div>
     <h1 class="ds-pagehead__title">{{ issue_title(issue) }}</h1>
     <div class="ds-pagehead__meta">
       <span class="ds-pill {{ status_pill_class(issue.current_state) }}"><span class="ds-pill__dot"></span>{{ issue.current_state }}</span>

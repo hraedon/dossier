@@ -94,7 +94,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         settings.hmac_key_path,
         require_ssl=settings.require_ssl,
     )
-    gw = RegistaGateway(reg)
+    gw = RegistaGateway(reg, project_name=settings.project)
     gw.register_workflow()
 
     backend: CredentialBackend

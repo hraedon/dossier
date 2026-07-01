@@ -47,7 +47,7 @@ def gateway(tmp_path):
     key_path = tmp_path / "keys.json"
     generate_keyset(key_path)
     reg = InMemoryRegista(project="dossier_test", hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg)
+    gw = RegistaGateway(reg, project_name="dossier_test")
     gw.register_workflow()
     yield gw
     gw.close()

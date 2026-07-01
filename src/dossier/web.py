@@ -138,6 +138,22 @@ def issue_field(issue: WorkItem, name: str, default: str = "") -> str:
     return default
 
 
+def display_key(issue: WorkItem) -> str:
+    """Return the human-friendly ``<PREFIX>-<N>`` key (e.g. ``DOSSIER-3``).
+
+    Falls back to a truncated work-item UUID if no ``display_key`` custom field
+    is present (e.g. items created before WI-006, or breadcrumb-type items
+    from agent-notes that predate the field).
+    """
+    key = issue_field(issue, "display_key", "")
+    if key:
+        return key
+    wid = getattr(issue, "work_item_id", None)
+    if wid is not None:
+        return str(wid)[:8]
+    return "—"
+
+
 def last_event_time(issue: WorkItem) -> str:
     ts = getattr(issue, "last_event_at", None)
     return format_timestamp(ts)

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import re
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
 import regista
-from regista import Event, Regista, ReplayReport, WorkItem
+from regista import Event, QueryPage, Regista, ReplayReport, WorkItem
 
 from .actors import Actor
 
@@ -48,10 +49,23 @@ class RegistaGateway:
     ``actor_kind`` from a request body: the actor is trust-rooted in auth and
     threaded through here, which is provenance guarantee G1. Reads are also
     centralised here so dossier has one regista surface.
+
+    ``project_name`` is used to mint human-friendly ``<PREFIX>-<N>`` display keys
+    (WI-006). The prefix is the project name uppercased and sanitized to
+    ``[A-Z0-9_]`` (e.g. ``dossier`` → ``DOSSIER``, ``agent-notes`` →
+    ``AGENT_NOTES``).
+    The sequence number is derived from a paginated count of existing work items
+    (a read) — dossier owns no counter table. The minted key is stored as a
+    ``display_key`` custom field in the regista create event, so the write goes
+    through regista, not a side-channel. Two concurrent creates could mint the
+    same number; this is acceptable for MVP (single-user, low concurrency) and
+    documented here. A regista-side sequence or advisory lock would close the
+    race for production.
     """
 
-    def __init__(self, regista: Regista) -> None:
+    def __init__(self, regista: Regista, project_name: str = "dossier") -> None:
         self._reg = regista
+        self._project_name = project_name
         # adversarial_review / human_gate are regista built-ins (Plan 023),
         # auto-available by name — dossier registers no local copies (Plan 010).
 
@@ -63,7 +77,7 @@ class RegistaGateway:
             settings.hmac_key_path,
             require_ssl=settings.require_ssl,
         )
-        return cls(reg)
+        return cls(reg, project_name=settings.project)
 
     def register_workflow(self, yaml_text: str | None = None) -> None:
         self._reg.register_workflow(yaml_text or packaged_workflow_yaml())
@@ -85,7 +99,13 @@ class RegistaGateway:
 
         ``custom_fields`` must include ``title`` (required by the workflow v2)
         and typically includes ``description``, ``assignee``, and ``priority``.
+        A ``display_key`` (e.g. ``DOSSIER-3``) is auto-minted if not already
+        present — see :class:`RegistaGateway` docstring for the ownership
+        decision (WI-006).
         """
+        cf = dict(custom_fields) if custom_fields else {}
+        if "display_key" not in cf:
+            cf["display_key"] = self._mint_display_key()
         return cast(
             tuple[WorkItem, Event],
             self._reg.create_work_item(
@@ -94,7 +114,7 @@ class RegistaGateway:
                 actor_id=actor.actor_id,
                 actor_kind=actor.actor_kind,
                 actor_metadata=_metadata(actor),
-                custom_fields=custom_fields,
+                custom_fields=cf,
             ),
         )
 
@@ -173,3 +193,36 @@ class RegistaGateway:
         """
         wf = self._reg.get_workflow(WORKFLOW_NAME, workflow_version)
         return [t for t in wf.transitions if t.from_state == state]
+
+    def _count_work_items(self) -> int:
+        """Count all work items in this project via paginated reads.
+
+        Used to derive the next display-key sequence number. This is a read —
+        dossier owns no counter table (WI-006 sequence-ownership decision).
+        """
+        count = 0
+        cursor: uuid.UUID | None = None
+        while True:
+            page: QueryPage[WorkItem] = self._reg.query_work_items(
+                workflow_name=WORKFLOW_NAME,
+                cursor=cursor,
+                page_size=1000,
+            )
+            count += len(page.items)
+            if not page.has_more:
+                break
+            cursor = page.cursor
+        return count
+
+    def _mint_display_key(self) -> str:
+        """Mint a ``<PREFIX>-<N>`` display key for a new work item.
+
+        ``N`` is ``count + 1``. The prefix is the project name uppercased and
+        sanitized to ``[A-Z0-9_]`` (spaces and hyphens become underscores;
+        other characters are stripped). See :class:`RegistaGateway` docstring
+        for the race-condition caveat.
+        """
+        n = self._count_work_items() + 1
+        raw = self._project_name.upper().replace("-", "_").replace(" ", "_")
+        prefix = re.sub(r"[^A-Z0-9_]", "", raw) or "PROJECT"
+        return f"{prefix}-{n}"

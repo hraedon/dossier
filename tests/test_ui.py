@@ -263,3 +263,30 @@ def test_integrity_check_is_per_work_item(client):
     assert detail_b.status_code == 200
     assert "chain verified" in detail_b.text
     assert "CHAIN BROKEN" not in detail_b.text
+
+
+def test_display_key_appears_in_list(client):
+    _login(client)
+    new_page = client.get("/issues/new")
+    csrf = _extract_csrf(new_page.text)
+    client.post(
+        "/issues",
+        data={"type": "bug", "title": "DK List test", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    index = client.get("/")
+    assert "DOSSIER_TEST-1" in index.text
+
+
+def test_display_key_appears_in_detail(client):
+    _login(client)
+    new_page = client.get("/issues/new")
+    csrf = _extract_csrf(new_page.text)
+    resp = client.post(
+        "/issues",
+        data={"type": "bug", "title": "DK Detail test", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    issue_url = resp.headers["location"]
+    detail = client.get(issue_url)
+    assert "DOSSIER_TEST-1" in detail.text

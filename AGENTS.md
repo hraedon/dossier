@@ -38,9 +38,8 @@ regista's.
 
 ```
 src/dossier/                 the FastAPI app (app factory, routes, templates, auth)
-src/dossier/workflows/       the regista workflow YAML (the declared state machine)
 docs/provenance-model.md     design spine: work model + provenance guarantees (the contract)
-docs/publication-review.md   sanitization review; gates any push (to be written)
+docs/publication-review.md   sanitization review; gates any push
 plans/                       numbered plans, status line at top
 ```
 
@@ -54,15 +53,17 @@ only, never for a real multi-user instance.
 
 ## Workflow
 
-The canonical lifecycle is declared in `src/dossier/workflows/dossier.workflow.yaml`
-(currently **v4**). States: `open / in_progress / blocked / deferred / in_review /
-in_human_review / done`. `done` is reachable **only** through the two-stage review
-(`in_review → in_human_review → done`), except the pre-work triage close
-(`close_from_open`). `deferred` (Plan 008) is a non-terminal idle state distinct
-from `blocked` — it denotes a deliberate choice to wait with no dependency, carries
-no review gate, and cannot reach `done` directly. Adding or removing a state is a
-contract change: bump the workflow `version`, note it in the YAML changelog
-comment, and announce it here.
+The canonical lifecycle is declared in regista's `canonical.workflow.yaml`
+(shipped from regista, registered verbatim by dossier — Plan 010). Currently
+**v2** (v2 added the optional `display_key` custom field; v1 had no custom
+fields on `bug`/`task`). States: `open / in_progress / blocked / deferred /
+in_review / in_human_review / done`. `done` is reachable **only** through the
+two-stage review (`in_review → in_human_review → done`), except the pre-work
+triage close (`close_from_open`). `deferred` (Plan 008) is a non-terminal idle
+state distinct from `blocked` — it denotes a deliberate choice to wait with no
+dependency, carries no review gate, and cannot reach `done` directly. Adding or
+removing a state is a contract change: bump the workflow `version`, note it in
+the YAML changelog comment, and announce it here.
 
 ## UI
 

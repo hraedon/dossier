@@ -223,6 +223,7 @@ a:hover { text-decoration: underline; }
 /* page header */
 .ds-pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
 .ds-pagehead__title { font-size: var(--fs-xl); font-weight: 600; margin: 0; color: var(--text); }
+.ds-pagehead__key { font-size: var(--fs-xs); color: var(--accent); margin-bottom: 2px; letter-spacing: 0.03em; }
 .ds-pagehead__meta { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
 
 /* table */

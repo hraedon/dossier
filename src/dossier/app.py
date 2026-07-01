@@ -107,6 +107,7 @@ def create_app(
         status_pill_class=web.status_pill_class,
         issue_title=web.issue_title,
         issue_field=web.issue_field,
+        display_key=web.display_key,
         last_event_time=web.last_event_time,
         kind_badge=web.kind_badge,
     )
