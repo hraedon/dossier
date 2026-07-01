@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ issue_title(issue) }} — dossier{% endblock %}
+{% block title %}{{ issue_title(issue) }} — {{ project_slug }} — dossier{% endblock %}
 {% block content %}
 <div class="ds-pagehead">
   <div>
@@ -12,7 +12,7 @@
       <span class="ds-chip mono">priority: {{ issue_field(issue, 'priority', 'normal') }}</span>
     </div>
   </div>
-  <a href="/" class="ds-btn ds-btn--ghost">back</a>
+  <a href="/p/{{ project_slug }}" class="ds-btn ds-btn--ghost">back</a>
 </div>
 
 {% if issue_field(issue, 'description', '') %}
@@ -27,7 +27,7 @@
 
 {% if transitions %}
 <div class="ds-panel ds-panel--pad">
-  <form method="post" action="/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
+  <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="ds-transition-row">
       <select class="ds-select" name="transition_name" id="transition-select">
@@ -62,7 +62,7 @@
 {% endif %}
 
 <div class="ds-panel ds-panel--pad">
-  <form method="post" action="/issues/{{ issue.work_item_id }}/comments" class="ds-form">
+  <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/comments" class="ds-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="ds-field">
       <label class="ds-label" for="comment-body">comment</label>

@@ -137,10 +137,10 @@ def test_transitions_from_in_progress_includes_defer(gateway, make_issue):
 
 def test_deferred_renders_on_board(client, gateway):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Deferred item", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -150,17 +150,17 @@ def test_deferred_renders_on_board(client, gateway):
     wi_id = uuid.UUID(issue_url.split("/")[-1])
     gateway.transition(actor=ALICE, work_item_id=wi_id, transition_name="defer")
 
-    index = client.get("/?status=deferred")
+    index = client.get("/p/dossier-test?status=deferred")
     assert "Deferred item" in index.text
     assert "deferred" in index.text
 
 
 def test_deferred_detail_page_shows_resume_and_start(client, gateway):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Deferred detail", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -177,10 +177,10 @@ def test_deferred_detail_page_shows_resume_and_start(client, gateway):
 
 def test_deferred_history_renders_defer_and_resume(client, gateway):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Deferred history", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -198,7 +198,7 @@ def test_deferred_history_renders_defer_and_resume(client, gateway):
 
 def test_deferred_status_filter_option_present(client):
     _login(client)
-    index = client.get("/")
+    index = client.get("/p/dossier-test")
     assert 'value="deferred"' in index.text
     assert ">deferred<" in index.text
 

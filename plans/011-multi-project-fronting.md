@@ -1,6 +1,6 @@
 # Plan 011 — Multi-project fronting (dossier as the human SoT across all projects)
 
-**Status:** Proposed 2026-06-29. Not started — for team execution.
+**Status:** WI-1..6 implemented 2026-07-01 (GLM-5.2). WI-7 (deploy) is infra.
 **Author:** Opus 4.8
 **Strategic role:** The converged store is one regista project (schema) **per
 software-project** (see [[reference-production-regista-store]] / dossier Plan 010,

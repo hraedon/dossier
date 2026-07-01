@@ -12,7 +12,7 @@ def test_unauthenticated_get_root_redirects_to_login(client):
 
 
 def test_unauthenticated_get_issues_new_redirects_to_login(client):
-    resp = client.get("/issues/new", follow_redirects=False)
+    resp = client.get("/p/dossier-test/issues/new", follow_redirects=False)
     assert resp.status_code == 302
     assert resp.headers["location"] == "/login"
 
@@ -39,16 +39,16 @@ def test_login_form_bad_credentials_renders_error(client):
 def test_full_ui_flow(client):
     _login(client)
 
-    index = client.get("/")
+    index = client.get("/p/dossier-test")
     assert "Alice" in index.text
     assert "new issue" in index.text.lower()
 
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     assert new_page.status_code == 200
     csrf = _extract_csrf(new_page.text)
 
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={
             "type": "bug",
             "title": "Smoke test bug",
@@ -83,10 +83,10 @@ def test_full_ui_flow(client):
 
 def test_create_issue_without_title_re_renders_form(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={
             "type": "bug",
             "title": "",
@@ -100,21 +100,21 @@ def test_create_issue_without_title_re_renders_form(client):
 
 def test_empty_issues_state(client):
     _login(client)
-    resp = client.get("/")
+    resp = client.get("/p/dossier-test")
     assert resp.status_code == 200
     assert "no issues" in resp.text.lower()
 
 
 def test_filter_by_status(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Filter me", "csrf_token": csrf},
         follow_redirects=False,
     )
-    resp = client.get("/?status=open")
+    resp = client.get("/p/dossier-test?status=open")
     assert resp.status_code == 200
     assert "Filter me" in resp.text
 
@@ -147,10 +147,10 @@ def test_json_logout_still_works(client):
 
 def test_transition_self_review_error_renders(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Review gate test", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -159,7 +159,7 @@ def test_transition_self_review_error_renders(client):
     from helpers import ALICE
     from dossier.gateway import RegistaGateway
 
-    gw: RegistaGateway = client.app.state.gateway
+    gw: RegistaGateway = client.app.state.registry.get("dossier_test")
     import uuid
 
     wi_id = uuid.UUID(issue_url.split("/")[-1])
@@ -189,10 +189,10 @@ def test_unauthenticated_redirect_body_is_not_json(client):
 
 def test_review_note_visibility_toggles_on_transition_select(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Review note test", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -202,7 +202,7 @@ def test_review_note_visibility_toggles_on_transition_select(client):
     from dossier.gateway import RegistaGateway
     import uuid
 
-    gw: RegistaGateway = client.app.state.gateway
+    gw: RegistaGateway = client.app.state.registry.get("dossier_test")
     wi_id = uuid.UUID(issue_url.split("/")[-1])
     gw.transition(actor=ALICE, work_item_id=wi_id, transition_name="start")
     gw.transition(actor=ALICE, work_item_id=wi_id, transition_name="submit_for_review")
@@ -228,16 +228,16 @@ def test_review_note_visibility_toggles_on_transition_select(client):
 
 def test_integrity_check_is_per_work_item(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
 
     a = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Issue A", "csrf_token": csrf},
         follow_redirects=False,
     )
     b = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Issue B", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -248,7 +248,7 @@ def test_integrity_check_is_per_work_item(client):
 
     from dossier.gateway import RegistaGateway
 
-    gw: RegistaGateway = client.app.state.gateway
+    gw: RegistaGateway = client.app.state.registry.get("dossier_test")
     id_a = uuid.UUID(url_a.split("/")[-1])
     id_b = uuid.UUID(url_b.split("/")[-1])
 
@@ -267,23 +267,23 @@ def test_integrity_check_is_per_work_item(client):
 
 def test_display_key_appears_in_list(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "DK List test", "csrf_token": csrf},
         follow_redirects=False,
     )
-    index = client.get("/")
+    index = client.get("/p/dossier-test")
     assert "DOSSIER_TEST-1" in index.text
 
 
 def test_display_key_appears_in_detail(client):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "DK Detail test", "csrf_token": csrf},
         follow_redirects=False,
     )

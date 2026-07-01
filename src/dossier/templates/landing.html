@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}all projects — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">projects</h1>
+</div>
+
+{% if project_rows %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>project</th>
+        <th class="tnum">open items</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in project_rows %}
+      <tr>
+        <td><a href="/p/{{ p.slug }}">{{ p.name }}</a></td>
+        <td class="mono tnum">{{ p.open_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no projects</div>
+  <div class="ds-empty__sub">configure DOSSIER_PROJECTS to get started</div>
+</div>
+{% endif %}
+{% endblock %}

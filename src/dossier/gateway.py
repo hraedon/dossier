@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 import yaml
 
@@ -10,9 +10,6 @@ import regista
 from regista import Event, QueryPage, Regista, ReplayReport, WorkItem
 
 from .actors import Actor
-
-if TYPE_CHECKING:
-    from .config import Settings
 
 # Plan 010 (WI-3): dossier registers the single canonical workflow shipped from
 # regista — the same one agent-notes registers — so human and agent work share
@@ -66,18 +63,6 @@ class RegistaGateway:
     def __init__(self, regista: Regista, project_name: str = "dossier") -> None:
         self._reg = regista
         self._project_name = project_name
-        # adversarial_review / human_gate are regista built-ins (Plan 023),
-        # auto-available by name — dossier registers no local copies (Plan 010).
-
-    @classmethod
-    def from_settings(cls, settings: Settings) -> RegistaGateway:
-        reg = Regista(
-            settings.database_url,
-            settings.project,
-            settings.hmac_key_path,
-            require_ssl=settings.require_ssl,
-        )
-        return cls(reg, project_name=settings.project)
 
     def register_workflow(self, yaml_text: str | None = None) -> None:
         self._reg.register_workflow(yaml_text or packaged_workflow_yaml())

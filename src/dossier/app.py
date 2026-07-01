@@ -18,11 +18,14 @@ from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
 from .auth.throttle import LoginThrottler, _normalize_identifier
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
+from .multi import GatewayRegistry, project_to_slug, slug_to_project
 from . import web
 
 _ACTOR_SESSION_KEY = "actor"
 _STATIC_DIR = Path(__file__).parent / "static"
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
+
+_OPEN_STATES = ["open", "in_progress", "blocked", "deferred", "in_review", "in_human_review"]
 
 
 def _is_form_request(request: Request) -> bool:
@@ -75,10 +78,10 @@ async def _credential_login(
 
 def create_app(
     settings: Settings,
-    gateway: RegistaGateway,
+    registry: GatewayRegistry,
     backend: CredentialBackend,
 ) -> FastAPI:
-    """Build the FastAPI app with session auth wired to ``gateway`` and ``backend``.
+    """Build the FastAPI app with session auth wired to ``registry`` and ``backend``.
 
     The actor is resolved server-side at login and stored in the signed session
     as a plain dict; ``current_actor`` reconstructs the :class:`Actor` from that
@@ -90,7 +93,7 @@ def create_app(
     """
     app = FastAPI(title="dossier")
     app.state.settings = settings
-    app.state.gateway = gateway
+    app.state.registry = registry
     app.state.backend = backend
     throttler = LoginThrottler()
 
@@ -110,6 +113,7 @@ def create_app(
         display_key=web.display_key,
         last_event_time=web.last_event_time,
         kind_badge=web.kind_badge,
+        project_to_slug=project_to_slug,
     )
     app.state.templates = templates
 
@@ -145,9 +149,20 @@ def create_app(
         return {
             "actor": actor,
             "csrf_token": issue_csrf_token(request.session),
+            "projects": registry.list_projects(),
         }
 
-    def transitions_for(wi: WorkItem) -> list[tuple[str, str, bool]]:
+    def resolve_gateway(project_slug: str) -> RegistaGateway:
+        try:
+            project = slug_to_project(project_slug)
+        except ValueError:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown project {project_slug!r}")
+        try:
+            return registry.get(project)
+        except (KeyError, RegistaError):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown project {project_slug!r}")
+
+    def transitions_for(gateway: RegistaGateway, wi: WorkItem) -> list[tuple[str, str, bool]]:
         version = getattr(wi, "workflow_version", None) or packaged_workflow_version()
         tdefs = gateway.transitions_from(wi.current_state, version)
         return [web.transition_tuple(t) for t in tdefs]
@@ -258,15 +273,51 @@ def create_app(
     def me(actor: Actor = Depends(current_actor)) -> dict[str, Any]:
         return asdict(actor)
 
+    # ---- cross-project landing (Plan 011 WI-3) ----
+
     @app.get("/")
-    def index(
+    def landing(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.landing")
+        project_rows: list[dict[str, Any]] = []
+        for project in registry.list_projects():
+            try:
+                gw = registry.get(project)
+                page = gw.list_issues(current_states=_OPEN_STATES)
+                count = len(page.items)
+            except Exception:
+                logger.warning("landing: project %s unreachable", project, exc_info=True)
+                count = 0
+            project_rows.append({
+                "slug": project_to_slug(project),
+                "name": project,
+                "open_count": count,
+            })
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "landing.html",
+            {**ctx, "project_rows": project_rows},
+        )
+
+    # ---- project-scoped routes (Plan 011 WI-2) ----
+
+    @app.get("/p/{project}")
+    def project_index(
+        project: str,
         request: Request,
         states: list[str] | None = Query(default=None, alias="status"),
         assignee: str | None = Query(default=None),
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
-        page = gateway.list_issues(current_states=states, assignee=assignee)
+        gw = resolve_gateway(project)
+        page = gw.list_issues(current_states=states, assignee=assignee)
         ctx = actor_context(request, actor)
+        ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
             request,
             "index.html",
@@ -275,27 +326,33 @@ def create_app(
                 "issues": list(page.items),
                 "filter_states": states or [],
                 "filter_assignee": assignee or "",
+                "project_slug": project,
             },
         )
 
-    @app.get("/issues/new")
+    @app.get("/p/{project}/issues/new")
     def issue_new_form(
+        project: str,
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
+        resolve_gateway(project)
         ctx = actor_context(request, actor)
+        ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
             request,
             "issue_new.html",
-            {**ctx, "error": None},
+            {**ctx, "project_slug": project, "error": None},
         )
 
-    @app.post("/issues")
+    @app.post("/p/{project}/issues")
     async def create_issue_route(
+        project: str,
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
+        gw = resolve_gateway(project)
         form = await request.form()
         work_item_type = str(form.get("type", "bug"))
         title = str(form.get("title", "")).strip()
@@ -305,10 +362,11 @@ def create_app(
 
         if not title:
             ctx = actor_context(request, actor)
+            ctx["current_project"] = slug_to_project(project)
             return templates.TemplateResponse(
                 request,
                 "issue_new.html",
-                {**ctx, "error": "title is required"},
+                {**ctx, "project_slug": project, "error": "title is required"},
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -319,29 +377,42 @@ def create_app(
             "priority": priority,
         }
 
-        wi, _ = gateway.create_issue(
-            actor=actor,
-            work_item_type=work_item_type,
-            custom_fields=custom_fields,
-        )
+        try:
+            wi, _ = gw.create_issue(
+                actor=actor,
+                work_item_type=work_item_type,
+                custom_fields=custom_fields,
+            )
+        except RegistaError as exc:
+            ctx = actor_context(request, actor)
+            ctx["current_project"] = slug_to_project(project)
+            return templates.TemplateResponse(
+                request,
+                "issue_new.html",
+                {**ctx, "project_slug": project, "error": exc.message},
+                status_code=status.HTTP_400_BAD_REQUEST,
+            )
         return RedirectResponse(
-            url=f"/issues/{wi.work_item_id}",
+            url=f"/p/{project}/issues/{wi.work_item_id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
-    @app.get("/issues/{work_item_id}")
+    @app.get("/p/{project}/issues/{work_item_id}")
     def issue_detail_route(
+        project: str,
         work_item_id: uuid.UUID,
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
-        wi = gateway.get_issue(work_item_id)
+        gw = resolve_gateway(project)
+        wi = gw.get_issue(work_item_id)
         if wi is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
-        events = gateway.history(work_item_id)
-        transitions = transitions_for(wi)
-        integrity = gateway.integrity(work_item_id=work_item_id)
+        events = gw.history(work_item_id)
+        transitions = transitions_for(gw, wi)
+        integrity = gw.integrity(work_item_id=work_item_id)
         ctx = actor_context(request, actor)
+        ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
             request,
             "issue_detail.html",
@@ -351,17 +422,20 @@ def create_app(
                 "events": events,
                 "transitions": transitions,
                 "integrity_drift": integrity.replayed_drift,
+                "project_slug": project,
                 "error": None,
             },
         )
 
-    @app.post("/issues/{work_item_id}/transitions")
+    @app.post("/p/{project}/issues/{work_item_id}/transitions")
     async def transition_route(
+        project: str,
         work_item_id: uuid.UUID,
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
+        gw = resolve_gateway(project)
         form = await request.form()
         transition_name = str(form.get("transition_name", ""))
         review_note = str(form.get("review_note", "")).strip()
@@ -374,20 +448,21 @@ def create_app(
                 payload["same_lineage_acknowledged"] = True
 
         try:
-            gateway.transition(
+            gw.transition(
                 actor=actor,
                 work_item_id=work_item_id,
                 transition_name=transition_name,
                 payload=payload,
             )
         except RegistaError as exc:
-            wi = gateway.get_issue(work_item_id)
+            wi = gw.get_issue(work_item_id)
             if wi is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
-            events = gateway.history(work_item_id)
-            transitions = transitions_for(wi)
-            integrity = gateway.integrity(work_item_id=work_item_id)
+            events = gw.history(work_item_id)
+            transitions = transitions_for(gw, wi)
+            integrity = gw.integrity(work_item_id=work_item_id)
             ctx = actor_context(request, actor)
+            ctx["current_project"] = slug_to_project(project)
             return templates.TemplateResponse(
                 request,
                 "issue_detail.html",
@@ -397,29 +472,32 @@ def create_app(
                     "events": events,
                     "transitions": transitions,
                     "integrity_drift": integrity.replayed_drift,
+                    "project_slug": project,
                     "error": exc.message,
                 },
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
         return RedirectResponse(
-            url=f"/issues/{work_item_id}",
+            url=f"/p/{project}/issues/{work_item_id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
-    @app.post("/issues/{work_item_id}/comments")
+    @app.post("/p/{project}/issues/{work_item_id}/comments")
     async def comment_route(
+        project: str,
         work_item_id: uuid.UUID,
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
+        gw = resolve_gateway(project)
         form = await request.form()
         body = str(form.get("body", "")).strip()
         if body:
-            gateway.comment(actor=actor, work_item_id=work_item_id, body=body)
+            gw.comment(actor=actor, work_item_id=work_item_id, body=body)
         return RedirectResponse(
-            url=f"/issues/{work_item_id}",
+            url=f"/p/{project}/issues/{work_item_id}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 

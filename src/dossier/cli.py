@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -81,21 +82,23 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     settings = load_settings(strict=True)
 
-    from regista import Regista
     from uvicorn import run as uvicorn_run
 
     from .app import create_app
     from .auth.backends import CredentialBackend
-    from .gateway import RegistaGateway
+    from .multi import GatewayRegistry, slug_to_project
 
-    reg = Regista(
-        settings.database_url,
-        settings.project,
-        settings.hmac_key_path,
-        require_ssl=settings.require_ssl,
-    )
-    gw = RegistaGateway(reg, project_name=settings.project)
-    gw.register_workflow()
+    projects_raw = os.environ.get("DOSSIER_PROJECTS", settings.project)
+    known_projects = [p.strip() for p in projects_raw.split(",") if p.strip()]
+
+    for p in known_projects:
+        try:
+            slug_to_project(p.replace("-", "_") if "-" in p else p)
+        except ValueError as exc:
+            print(f"DOSSIER_PROJECTS contains invalid name {p!r}: {exc}", file=sys.stderr)
+            return 2
+
+    registry = GatewayRegistry(settings=settings, known_projects=known_projects)
 
     backend: CredentialBackend
     if settings.auth_backend == "ldap":
@@ -113,8 +116,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     else:
         assert_never(settings.auth_backend)
 
-    app = create_app(settings, gw, backend)
-    uvicorn_run(app, host=args.host, port=args.port)
+    app = create_app(settings, registry, backend)
+    try:
+        uvicorn_run(app, host=args.host, port=args.port)
+    finally:
+        registry.close_all()
     return 0
 
 

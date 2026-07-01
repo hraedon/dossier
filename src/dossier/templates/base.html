@@ -11,9 +11,18 @@
 <div class="ds-app">
   <header class="ds-topbar">
     <a class="ds-topbar__wordmark" href="/">dossier</a>
+    {% if projects %}
     <nav class="ds-topbar__nav">
-      <a href="/">issues</a>
+      <details class="ds-projswitch">
+        <summary class="ds-projswitch__trigger">{% if current_project %}{{ project_to_slug(current_project) }}{% else %}projects{% endif %}</summary>
+        <div class="ds-projswitch__menu">
+          {% for p in projects %}
+          <a href="/p/{{ project_to_slug(p) }}" class="ds-projswitch__item {% if current_project == p %}is-active{% endif %}">{{ project_to_slug(p) }}</a>
+          {% endfor %}
+        </div>
+      </details>
     </nav>
+    {% endif %}
     <div class="ds-topbar__spacer"></div>
     {% if actor %}
     <span class="ds-topbar__actor">{{ actor.display_name }}</span>

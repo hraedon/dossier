@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% block title %}new issue — dossier{% endblock %}
+{% block title %}new issue — {{ project_slug }} — dossier{% endblock %}
 {% block content %}
 <div class="ds-pagehead">
-  <h1 class="ds-pagehead__title">new issue</h1>
-  <a href="/" class="ds-btn ds-btn--ghost">cancel</a>
+  <h1 class="ds-pagehead__title">new issue — {{ project_slug }}</h1>
+  <a href="/p/{{ project_slug }}" class="ds-btn ds-btn--ghost">cancel</a>
 </div>
 
 {% if error %}
 <div class="ds-callout ds-callout--crit">{{ error }}</div>
 {% endif %}
 
-<form method="post" action="/issues" class="ds-form ds-form--panel">
+<form method="post" action="/p/{{ project_slug }}/issues" class="ds-form ds-form--panel">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div class="ds-field">
     <label class="ds-label" for="type">type</label>
