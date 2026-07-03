@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("DOSSIER_PASSWORD_SCRYPT_N", "16")
+
 import json
 import re
 from pathlib import Path
@@ -13,10 +17,14 @@ from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
 from dossier.gateway import RegistaGateway
 from dossier.keys import generate_keyset
+from dossier.multi import GatewayRegistry
 
 from helpers import ALICE
 
 _CRLF_RE = re.compile(r'name="csrf_token"\s+value="([^"]+)"')
+
+_PROJECT = "dossier_test"
+_PROJECT_SLUG = "dossier-test"
 
 
 def extract_csrf(html: str) -> str:
@@ -42,10 +50,12 @@ def login(client: TestClient, username: str = "alice", password: str = "s3cret")
 def gateway(tmp_path):
     key_path = tmp_path / "keys.json"
     generate_keyset(key_path)
-    reg = InMemoryRegista(project="dossier_test", hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg)
+    reg = InMemoryRegista(project=_PROJECT, hmac_key_path=str(key_path))
+    gw = RegistaGateway(reg, project_name=_PROJECT)
     gw.register_workflow()
+    InMemoryRegista._catalog.clear()
     yield gw
+    InMemoryRegista._catalog.clear()
     gw.close()
 
 
@@ -91,13 +101,13 @@ def _users_file(tmp_path: Path) -> Path:
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
         database_url="",
-        project="dossier_test",
+        project=_PROJECT,
         hmac_key_path="",
         session_secret="test-session-secret-not-for-prod",
         session_max_age_seconds=43200,
         secure_cookies=False,
         require_ssl=False,
-        users_path="",
+        users_path=str(_users_file(tmp_path)),
         auth_backend="local",
     )
 
@@ -106,7 +116,9 @@ def _settings(tmp_path: Path) -> Settings:
 def app(tmp_path, gateway):
     settings = _settings(tmp_path)
     backend = LocalBackend(_users_file(tmp_path))
-    return create_app(settings, gateway, backend)
+    registry = GatewayRegistry(known_projects=[_PROJECT])
+    registry.add(_PROJECT, gateway)
+    return create_app(settings, registry, backend)
 
 
 @pytest.fixture

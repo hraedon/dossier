@@ -15,7 +15,9 @@ DSN = "postgresql://regista_test:regista_test@localhost:5432/regista_test"
 
 
 def _human(stable_id, display_name):
-    return principal_to_actor(Principal(stable_id=stable_id, display_name=display_name, source="local"))
+    return principal_to_actor(
+        Principal(stable_id=stable_id, display_name=display_name, source="local")
+    )
 
 
 @pytest.fixture(scope="module")
@@ -50,7 +52,9 @@ def test_full_review_lifecycle_verified_chain(pg_gateway):
     )
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
     pg_gateway.comment(actor=alice, work_item_id=wi.work_item_id, body="triaged, assigning to bob")
-    pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+    pg_gateway.transition(
+        actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+    )
     pg_gateway.transition(
         actor=carol,
         work_item_id=wi.work_item_id,
@@ -70,7 +74,12 @@ def test_full_review_lifecycle_verified_chain(pg_gateway):
     events = pg_gateway.history(wi.work_item_id)
     transitions = [e.transition for e in events]
     assert transitions == [
-        "created", "start", "comment", "submit_for_review", "adversarial_pass", "accept"
+        "created",
+        "start",
+        "comment",
+        "submit_for_review",
+        "adversarial_pass",
+        "accept",
     ]
 
     by_transition = {e.transition: e for e in events}
@@ -93,11 +102,25 @@ def test_verified_history_is_legible(pg_gateway):
     carol = _human("carol", "Carol")
     dave = _human("dave", "Dave")
 
-    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="task", custom_fields={"title": "e2e task"})
+    wi, _ = pg_gateway.create_issue(
+        actor=alice, work_item_type="task", custom_fields={"title": "e2e task"}
+    )
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
-    pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
-    pg_gateway.transition(actor=carol, work_item_id=wi.work_item_id, transition_name="adversarial_pass", payload={"review_note": "lgtm"})
-    pg_gateway.transition(actor=dave, work_item_id=wi.work_item_id, transition_name="accept", payload={"review_note": "verified"})
+    pg_gateway.transition(
+        actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+    )
+    pg_gateway.transition(
+        actor=carol,
+        work_item_id=wi.work_item_id,
+        transition_name="adversarial_pass",
+        payload={"review_note": "lgtm"},
+    )
+    pg_gateway.transition(
+        actor=dave,
+        work_item_id=wi.work_item_id,
+        transition_name="accept",
+        payload={"review_note": "verified"},
+    )
 
     events = pg_gateway.history(wi.work_item_id)
     rendered = [
@@ -120,11 +143,17 @@ def test_adversarial_gate_enforced_on_postgres(pg_gateway):
     alice = _human("alice", "Alice")
     bob = _human("bob", "Bob")
 
-    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="bug", custom_fields={"title": "gate test"})
+    wi, _ = pg_gateway.create_issue(
+        actor=alice, work_item_type="bug", custom_fields={"title": "gate test"}
+    )
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
-    pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+    pg_gateway.transition(
+        actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+    )
     with pytest.raises(RegistaError):
-        pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="adversarial_pass")
+        pg_gateway.transition(
+            actor=bob, work_item_id=wi.work_item_id, transition_name="adversarial_pass"
+        )
     assert pg_gateway.get_issue(wi.work_item_id).current_state == "in_review"
 
 
@@ -134,18 +163,44 @@ def test_reopen_requires_review_again(pg_gateway):
     carol = _human("carol", "Carol")
     dave = _human("dave", "Dave")
 
-    wi, _ = pg_gateway.create_issue(actor=alice, work_item_type="bug", custom_fields={"title": "reopen test"})
+    wi, _ = pg_gateway.create_issue(
+        actor=alice, work_item_type="bug", custom_fields={"title": "reopen test"}
+    )
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
-    pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
-    pg_gateway.transition(actor=carol, work_item_id=wi.work_item_id, transition_name="adversarial_pass", payload={"review_note": "lgtm"})
-    pg_gateway.transition(actor=dave, work_item_id=wi.work_item_id, transition_name="accept", payload={"review_note": "verified"})
+    pg_gateway.transition(
+        actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+    )
+    pg_gateway.transition(
+        actor=carol,
+        work_item_id=wi.work_item_id,
+        transition_name="adversarial_pass",
+        payload={"review_note": "lgtm"},
+    )
+    pg_gateway.transition(
+        actor=dave,
+        work_item_id=wi.work_item_id,
+        transition_name="accept",
+        payload={"review_note": "verified"},
+    )
     assert pg_gateway.get_issue(wi.work_item_id).current_state == "done"
 
     pg_gateway.transition(actor=alice, work_item_id=wi.work_item_id, transition_name="reopen")
     assert pg_gateway.get_issue(wi.work_item_id).current_state == "open"
     pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="start")
-    pg_gateway.transition(actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review")
-    pg_gateway.transition(actor=carol, work_item_id=wi.work_item_id, transition_name="adversarial_pass", payload={"review_note": "lgtm"})
-    pg_gateway.transition(actor=dave, work_item_id=wi.work_item_id, transition_name="accept", payload={"review_note": "verified"})
+    pg_gateway.transition(
+        actor=bob, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+    )
+    pg_gateway.transition(
+        actor=carol,
+        work_item_id=wi.work_item_id,
+        transition_name="adversarial_pass",
+        payload={"review_note": "lgtm"},
+    )
+    pg_gateway.transition(
+        actor=dave,
+        work_item_id=wi.work_item_id,
+        transition_name="accept",
+        payload={"review_note": "verified"},
+    )
     assert pg_gateway.get_issue(wi.work_item_id).current_state == "done"
     assert pg_gateway.integrity().replayed_drift == 0

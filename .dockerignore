@@ -1,0 +1,17 @@
+.git
+.gitignore
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+*.egg-info
+.env
+*.db
+*.sqlite3
+reflections/
+samples/
+secrets/
+.claude/
+.regista/

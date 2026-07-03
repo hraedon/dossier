@@ -1,6 +1,6 @@
 # Plan 011 — Multi-project fronting (dossier as the human SoT across all projects)
 
-**Status:** Proposed 2026-06-29. Not started — for team execution.
+**Status:** WI-1..6 implemented 2026-07-01 (GLM-5.2). WI-7 (deploy) is infra.
 **Author:** Opus 4.8
 **Strategic role:** The converged store is one regista project (schema) **per
 software-project** (see [[reference-production-regista-store]] / dossier Plan 010,
@@ -16,7 +16,7 @@ human face lands on the same migrated data.
 
 ## Context / what's already true
 
-- 16 per-project regista schemas exist on the `regista` DB (postgres-host), each
+- 16 per-project regista schemas exist on the production `regista` DB, each
   with the **canonical** workflow registered and migrated data (865+ items).
 - dossier already registers the canonical workflow and maps human actors to role
   `human` (Plan 010). Its `RegistaGateway` is bound to ONE `Regista`/schema at

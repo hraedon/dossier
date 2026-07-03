@@ -1,3 +1,10 @@
+# Local-dev compose (Plan 013 WI-2.1).
+#
+# The production deployable is the container image (Dockerfile + ghcr).
+# This compose file is for local development: it brings up Postgres and
+# dossier together for iteration. For production, use the published image
+# against an external Postgres with suite.env mounted.
+
 services:
   postgres:
     image: postgres:15
@@ -16,6 +23,33 @@ services:
       timeout: 3s
       retries: 30
       start_period: 2s
+    networks:
+      - dossier-dev
+
+  dossier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dossier-app-dev
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      REGISTA_DSN: postgresql://dossier:dossier@postgres:5432/dossier
+      DOSSIER_PROJECT: dossier
+      REGISTA_KEY_PATH: /run/secrets/dossier-keys.json
+      DOSSIER_SESSION_SECRET: dev-only-not-for-production-use-at-least-32-chars
+      DOSSIER_SECURE_COOKIES: "false"
+      DOSSIER_AUTH_BACKEND: local
+      DOSSIER_USERS_PATH: /run/secrets/users.json
+    volumes:
+      - ./keys.json:/run/secrets/dossier-keys.json:ro
+      - ./users.json:/run/secrets/users.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
       - dossier-dev
 

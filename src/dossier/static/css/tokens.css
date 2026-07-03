@@ -223,6 +223,7 @@ a:hover { text-decoration: underline; }
 /* page header */
 .ds-pagehead { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); }
 .ds-pagehead__title { font-size: var(--fs-xl); font-weight: 600; margin: 0; color: var(--text); }
+.ds-pagehead__key { font-size: var(--fs-xs); color: var(--accent); margin-bottom: 2px; letter-spacing: 0.03em; }
 .ds-pagehead__meta { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
 
 /* table */
@@ -396,3 +397,31 @@ a:hover { text-decoration: underline; }
 }
 .ds-chain__verdict--ok { border-left-color: var(--ok); background: var(--ok-soft); color: var(--text); }
 .ds-chain__verdict--warn { border-left-color: var(--warn); background: var(--warn-soft); color: var(--text); }
+
+/* checkbox */
+.ds-check { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; }
+
+/* project switcher (Plan 011) */
+.ds-projswitch { position: relative; }
+.ds-projswitch__trigger {
+  cursor: pointer; padding: 5px 10px; border-radius: var(--radius-sm);
+  font-size: var(--fs-sm); color: var(--text-2); font-family: var(--font-mono);
+  list-style: none; display: inline-flex; align-items: center; gap: 4px;
+  user-select: none;
+}
+.ds-projswitch__trigger::-webkit-details-marker { display: none; }
+.ds-projswitch__trigger::after { content: "▾"; font-size: 10px; opacity: 0.6; }
+.ds-projswitch__trigger:hover { background: var(--panel-2); color: var(--text); }
+.ds-projswitch__menu {
+  position: absolute; top: 100%; left: 0; min-width: 160px;
+  background: var(--panel); border: 1px solid var(--border-2);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 4px; z-index: 200; display: flex; flex-direction: column; gap: 1px;
+}
+.ds-projswitch__item {
+  padding: 6px 10px; border-radius: var(--radius-sm);
+  font-size: var(--fs-sm); font-family: var(--font-mono); color: var(--text-2);
+  text-decoration: none;
+}
+.ds-projswitch__item:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
+.ds-projswitch__item.is-active { color: var(--accent); font-weight: 500; }

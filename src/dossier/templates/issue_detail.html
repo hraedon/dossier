@@ -1,22 +1,54 @@
 {% extends "base.html" %}
-{% block title %}{{ issue_title(issue) }} — dossier{% endblock %}
+{% block title %}{{ issue_title(issue) }} — {{ project_slug }} — dossier{% endblock %}
 {% block content %}
 <div class="ds-pagehead">
   <div>
+    <div class="ds-pagehead__key mono">{{ display_key(issue) }}</div>
     <h1 class="ds-pagehead__title">{{ issue_title(issue) }}</h1>
     <div class="ds-pagehead__meta">
       <span class="ds-pill {{ status_pill_class(issue.current_state) }}"><span class="ds-pill__dot"></span>{{ issue.current_state }}</span>
+      {% if assurance_level is defined and assurance_level %}
+      {% include "_assurance.html" %}
+      {% endif %}
       <span class="ds-chip">{{ issue.work_item_type }}</span>
       <span class="ds-chip mono">assignee: {{ issue_field(issue, 'assignee', '—') }}</span>
       <span class="ds-chip mono">priority: {{ issue_field(issue, 'priority', 'normal') }}</span>
     </div>
   </div>
-  <a href="/" class="ds-btn ds-btn--ghost">back</a>
+  <a href="/p/{{ project_slug }}" class="ds-btn ds-btn--ghost">back</a>
 </div>
+
+{% if events %}
+{% set last_event = events[-1] %}
+{% set ns = namespace(creator_id=none) %}
+{% for e in events %}{% if e.transition == 'created' and not ns.creator_id %}{% set ns.creator_id = e.actor_id %}{% endif %}{% endfor %}
+{% if ns.creator_id and ns.creator_id != actor.actor_id %}
+<div class="ds-pagehead__meta">
+  <span class="ds-chip mono">last: {{ actor_display(last_event) }} {{ transition_label(last_event.transition) }} on {{ format_timestamp(last_event.timestamp) }}</span>
+</div>
+{% endif %}
+{% endif %}
 
 {% if issue_field(issue, 'description', '') %}
 <div class="ds-panel ds-panel--pad">
   <div class="ds-prose">{{ issue_field(issue, 'description', '') }}</div>
+</div>
+{% endif %}
+
+{% if links %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">linked items</div>
+  <ul class="ds-link-list">
+    {% for link in links %}
+    <li>
+      <a href="{{ link_target_url(link, project_slug) }}" class="ds-link-item {% if is_cross_project_link(link) %}ds-link-item--cross{% endif %}">
+        <span class="ds-link-item__type mono">{{ link.link_type }}</span>
+        <span class="ds-link-item__target mono">{{ link_target_label(link) }}</span>
+        {% if is_cross_project_link(link) %}<span class="ds-chip ds-chip--cross">cross-project</span>{% endif %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
 </div>
 {% endif %}
 
@@ -26,26 +58,42 @@
 
 {% if transitions %}
 <div class="ds-panel ds-panel--pad">
-  <form method="post" action="/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
+  <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="ds-transition-row">
-      <select class="ds-select" name="transition_name">
+      <select class="ds-select" name="transition_name" id="transition-select">
         {% for name, label, needs_note in transitions %}
-        <option value="{{ name }}">{{ label }}</option>
+        <option value="{{ name }}" {% if needs_note %}data-needs-note="true"{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
-      <input class="ds-input" type="text" name="review_note" placeholder="review note (required for review verdicts)">
+      <input class="ds-input" type="text" name="review_note" id="review-note-input" placeholder="review note (required for review verdicts)" style="display:none">
+      <noscript><style>#review-note-input{display:block !important}</style></noscript>
       {% if issue.current_state == "in_review" %}
       <label class="ds-check"><input type="checkbox" name="same_lineage_acknowledged"> same-lineage ack</label>
       {% endif %}
       <button type="submit" class="ds-btn ds-btn--primary">apply</button>
     </div>
   </form>
+  <script>
+    (function () {
+      var sel = document.getElementById("transition-select");
+      var note = document.getElementById("review-note-input");
+      if (!sel || !note) return;
+      function sync() {
+        var opt = sel.options[sel.selectedIndex];
+        var needs = opt && opt.getAttribute("data-needs-note") === "true";
+        note.style.display = needs ? "" : "none";
+        if (!needs) note.value = "";
+      }
+      sel.addEventListener("change", sync);
+      sync();
+    })();
+  </script>
 </div>
 {% endif %}
 
 <div class="ds-panel ds-panel--pad">
-  <form method="post" action="/issues/{{ issue.work_item_id }}/comments" class="ds-form">
+  <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/comments" class="ds-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="ds-field">
       <label class="ds-label" for="comment-body">comment</label>

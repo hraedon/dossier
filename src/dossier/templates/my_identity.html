@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}my signing identity — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">my signing identity</h1>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose">This is your cryptographic signing identity. Every action you take in dossier is signed with this key, making it tamper-evident and attributable to you.</div>
+</div>
+
+{% if principal_key %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">key status</div>
+  <div class="ds-table-wrap">
+    <table class="ds-table">
+      <tbody>
+        <tr>
+          <th>fingerprint</th>
+          <td class="mono">{{ principal_key.fingerprint[:32] }}…</td>
+        </tr>
+        <tr>
+          <th>status</th>
+          <td>
+            {% if principal_key.status == "active" %}
+            <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>active</span>
+            {% elif principal_key.status == "rotation-due" %}
+            <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>rotation-due</span>
+            {% elif principal_key.status == "revoked" %}
+            <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>revoked</span>
+            {% else %}
+            <span class="ds-pill ds-pill--muted"><span class="ds-pill__dot"></span>{{ principal_key.status }}</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <th>created</th>
+          <td class="mono">{{ principal_key.valid_from or principal_key.registered_at or '—' }}</td>
+        </tr>
+        {% if principal_key.valid_to %}
+        <tr>
+          <th>{{ 'rotation due' if principal_key.status == 'rotation-due' else 'expires' }}</th>
+          <td class="mono">{{ principal_key.valid_to }}</td>
+        </tr>
+        {% endif %}
+        <tr>
+          <th>key id</th>
+          <td class="mono">{{ principal_key.key_id }}</td>
+        </tr>
+        <tr>
+          <th>scheme</th>
+          <td class="mono">{{ principal_key.scheme }}</td>
+        </tr>
+        {% if principal_key.revoked_at %}
+        <tr>
+          <th>revoked</th>
+          <td class="mono">{{ principal_key.revoked_at }}</td>
+        </tr>
+        {% if principal_key.revoked_reason %}
+        <tr>
+          <th>reason</th>
+          <td>{{ principal_key.revoked_reason }}</td>
+        </tr>
+        {% endif %}
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% if principal_key.status in ("active", "rotation-due") %}
+<div class="ds-panel ds-panel--pad">
+  {% if rotation_allowed %}
+  <form method="post" action="/me/key/rotate" class="ds-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="ds-btn ds-btn--primary">rotate my key</button>
+  </form>
+  {% else %}
+  <div class="ds-callout">Rotation is rate-limited. Try again later.</div>
+  {% endif %}
+  <div class="ds-prose muted">Rotation is rate-limited to prevent accidental churn.</div>
+</div>
+{% endif %}
+
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose muted">You will never see or handle the private key. Rotation is handled by the backend.</div>
+</div>
+{% else %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-callout">You are not enrolled for signing. Contact an admin to enroll.</div>
+</div>
+{% endif %}
+{% endblock %}

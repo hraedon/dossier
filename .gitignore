@@ -9,6 +9,9 @@ secrets/
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+keys.json
+users.json
+deploy/winsw/dossier-env.cmd
 
 # Python
 __pycache__/

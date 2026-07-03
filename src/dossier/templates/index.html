@@ -1,12 +1,28 @@
 {% extends "base.html" %}
-{% block title %}issues — dossier{% endblock %}
+{% block title %}issues — {{ project_slug }} — dossier{% endblock %}
 {% block content %}
 <div class="ds-pagehead">
-  <h1 class="ds-pagehead__title">issues</h1>
-  <a href="/issues/new" class="ds-btn ds-btn--primary">new issue</a>
+  <div>
+    <h1 class="ds-pagehead__title">{{ project_slug }} — issues</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">owner: {{ owner_display(catalog_entry) }}</span>
+    </div>
+  </div>
+  <a href="/p/{{ project_slug }}/issues/new" class="ds-btn ds-btn--primary">new issue</a>
 </div>
 
-<form method="get" action="/" class="ds-filters">
+<div class="ds-panel ds-panel--pad">
+  <form method="post" action="/p/{{ project_slug }}/owner" class="ds-form ds-form--inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-field ds-field--inline">
+      <label class="ds-label" for="owner-input">set owner</label>
+      <input class="ds-input ds-input--sm" type="text" id="owner-input" name="owner_actor_id" placeholder="actor_id" value="{{ owner_display(catalog_entry) if owner_display(catalog_entry) != 'unassigned' else '' }}">
+    </div>
+    <button type="submit" class="ds-btn ds-btn--ghost">update</button>
+  </form>
+</div>
+
+<form method="get" action="/p/{{ project_slug }}" class="ds-filters">
   <div class="ds-field ds-field--inline">
     <label class="ds-label" for="f-assignee">assignee</label>
     <input class="ds-input ds-input--sm" type="text" id="f-assignee" name="assignee" value="{{ filter_assignee }}">
@@ -33,6 +49,7 @@
   <table class="ds-table">
     <thead>
       <tr>
+        <th>key</th>
         <th>title</th>
         <th>type</th>
         <th>status</th>
@@ -44,7 +61,8 @@
     <tbody>
       {% for wi in issues %}
       <tr>
-        <td><a href="/issues/{{ wi.work_item_id }}">{{ issue_title(wi) }}</a></td>
+        <td class="mono"><a href="/p/{{ project_slug }}/issues/{{ wi.work_item_id }}">{{ display_key(wi) }}</a></td>
+        <td><a href="/p/{{ project_slug }}/issues/{{ wi.work_item_id }}">{{ issue_title(wi) }}</a></td>
         <td class="mono">{{ wi.work_item_type }}</td>
         <td><span class="ds-pill {{ status_pill_class(wi.current_state) }}"><span class="ds-pill__dot"></span>{{ wi.current_state }}</span></td>
         <td>{{ issue_field(wi, 'assignee', '—') }}</td>

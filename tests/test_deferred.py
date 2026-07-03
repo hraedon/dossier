@@ -59,9 +59,7 @@ def test_deferred_to_done_via_full_gate(gateway, make_issue):
     gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="defer")
     gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="resume")
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
-    gateway.transition(
-        actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review"
-    )
+    gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     gateway.transition(
         actor=CAROL,
         work_item_id=wi.work_item_id,
@@ -139,10 +137,10 @@ def test_transitions_from_in_progress_includes_defer(gateway, make_issue):
 
 def test_deferred_renders_on_board(client, gateway):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Deferred item", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -152,17 +150,17 @@ def test_deferred_renders_on_board(client, gateway):
     wi_id = uuid.UUID(issue_url.split("/")[-1])
     gateway.transition(actor=ALICE, work_item_id=wi_id, transition_name="defer")
 
-    index = client.get("/?status=deferred")
+    index = client.get("/p/dossier-test?status=deferred")
     assert "Deferred item" in index.text
     assert "deferred" in index.text
 
 
 def test_deferred_detail_page_shows_resume_and_start(client, gateway):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Deferred detail", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -179,10 +177,10 @@ def test_deferred_detail_page_shows_resume_and_start(client, gateway):
 
 def test_deferred_history_renders_defer_and_resume(client, gateway):
     _login(client)
-    new_page = client.get("/issues/new")
+    new_page = client.get("/p/dossier-test/issues/new")
     csrf = _extract_csrf(new_page.text)
     resp = client.post(
-        "/issues",
+        "/p/dossier-test/issues",
         data={"type": "bug", "title": "Deferred history", "csrf_token": csrf},
         follow_redirects=False,
     )
@@ -200,7 +198,7 @@ def test_deferred_history_renders_defer_and_resume(client, gateway):
 
 def test_deferred_status_filter_option_present(client):
     _login(client)
-    index = client.get("/")
+    index = client.get("/p/dossier-test")
     assert 'value="deferred"' in index.text
     assert ">deferred<" in index.text
 
@@ -239,18 +237,26 @@ def test_invalid_deferred_transition_rejected(gateway, make_issue, transition_na
         gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="defer")
     elif setup_state == "in_review":
         gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
-        gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+        gateway.transition(
+            actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+        )
     elif setup_state == "in_human_review":
         from helpers import AGENT_GLM, AGENT_KIMI
 
         gateway.transition(actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="start")
-        gateway.transition(actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="submit_for_review")
         gateway.transition(
-            actor=AGENT_KIMI, work_item_id=wi.work_item_id,
-            transition_name="adversarial_pass", payload={"review_note": "pass"},
+            actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="submit_for_review"
+        )
+        gateway.transition(
+            actor=AGENT_KIMI,
+            work_item_id=wi.work_item_id,
+            transition_name="adversarial_pass",
+            payload={"review_note": "pass"},
         )
     elif setup_state == "done":
-        gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="close_from_open")
+        gateway.transition(
+            actor=ALICE, work_item_id=wi.work_item_id, transition_name="close_from_open"
+        )
 
     with pytest.raises(RegistaError):
         gateway.transition(
@@ -276,6 +282,8 @@ def test_defer_makes_actor_an_author_for_review(gateway, make_issue):
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="submit_for_review")
     with pytest.raises(RegistaError):
         gateway.transition(
-            actor=ALICE, work_item_id=wi.work_item_id,
-            transition_name="adversarial_pass", payload={"review_note": "pass"},
+            actor=ALICE,
+            work_item_id=wi.work_item_id,
+            transition_name="adversarial_pass",
+            payload={"review_note": "pass"},
         )

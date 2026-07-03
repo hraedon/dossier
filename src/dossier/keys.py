@@ -5,11 +5,12 @@ import json
 import os
 import secrets
 from pathlib import Path
+from typing import Any
 
 
-def generate_keyset(path: Path, *, key_id: str | None = None) -> dict:
+def generate_keyset(path: Path, *, key_id: str | None = None) -> dict[str, Any]:
     if key_id is None:
-        key_id = f"dossier-{secrets.token_hex(4)}"
+        key_id = f"dossier-{secrets.token_hex(16)}"
 
     secret = secrets.token_bytes(32)
     keyset = {
@@ -24,7 +25,7 @@ def generate_keyset(path: Path, *, key_id: str | None = None) -> dict:
     }
 
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     data = json.dumps(keyset, indent=2).encode("utf-8")
 
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
