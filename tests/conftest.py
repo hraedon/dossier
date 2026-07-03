@@ -107,7 +107,7 @@ def _settings(tmp_path: Path) -> Settings:
         session_max_age_seconds=43200,
         secure_cookies=False,
         require_ssl=False,
-        users_path="",
+        users_path=str(_users_file(tmp_path)),
         auth_backend="local",
     )
 

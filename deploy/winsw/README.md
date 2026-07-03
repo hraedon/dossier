@@ -54,7 +54,7 @@ Key variables:
 | `DOSSIER_PROJECT` | regista project/schema name |
 | `REGISTA_KEY_PATH` | Path to HMAC keyset file |
 | `DOSSIER_SESSION_SECRET` | Signed-cookie secret (auto-generated) |
-| `DOSSIER_PASSWORD_SCRYPT_N` | scrypt N parameter — **set to 16384 on Windows** (Plan 016 spike: N=131072 fails with "memory limit exceeded" on Windows Python 3.14) |
+| `DOSSIER_PASSWORD_SCRYPT_N` | scrypt N parameter — **131072** (default; the `_scrypt_maxmem` fix handles Windows) |
 | `DOSSIER_AUTH_BACKEND` | `local` or `ldap` |
 
 ## Service management
@@ -88,7 +88,9 @@ The service auto-starts on boot (`startmode=Automatic` with a 30-second delay).
 
 - **Service won't start:** Check `$InstallDir\logs\dossier.out.log` and
   `dossier.err.log`.
-- **scrypt memory error:** Ensure `DOSSIER_PASSWORD_SCRYPT_N=16384` in
-  `dossier-env.cmd` (the install script sets this automatically).
+- **scrypt memory error:** The `_scrypt_maxmem` fix passes an explicit `maxmem`
+  to `hashlib.scrypt`, resolving the Windows Python 3.14 issue. If you still
+  see errors, ensure `DOSSIER_PASSWORD_SCRYPT_N` is set to a power of 2 and the
+  `_scrypt_maxmem` function in `src/dossier/auth/passwords.py` is up to date.
 - **Can't connect to Postgres:** Verify the DSN and network reachability from
   the service account (SYSTEM by default).

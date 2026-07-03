@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
 from regista import RegistaError, WorkItem
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from .actors import Actor
@@ -173,10 +173,13 @@ def create_app(
         return [web.transition_tuple(t) for t in tdefs]
 
     @app.get("/healthz")
-    def healthz() -> dict[str, Any]:
-        from .health import build_health
+    def healthz() -> Any:
+        from .health import build_health, has_failures
 
-        return build_health(settings, registry)
+        health = build_health(settings, registry)
+        if has_failures(health):
+            return JSONResponse(status_code=503, content=health)
+        return health
 
     @app.get("/csrf")
     def get_csrf(request: Request) -> dict[str, str]:

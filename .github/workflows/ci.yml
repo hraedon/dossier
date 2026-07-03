@@ -86,8 +86,8 @@ jobs:
           set -e
           HITS=$(grep -rnE '(password|secret|key|token|dsn).*=' \
             src/ tests/ --include='*.py' \
-            | grep -v 'test\|example\|placeholder\|changeme\|replace\|dummy\|sample\|TODO\|self\.|args\.' \
-            | grep -v 'secret_ref\|session_secret\|secret_key\|SECRET_KEY\|get_secret\|key_path\|key_id\|key_set\|hmac_key' \
+            | grep -vE '(test_|example|placeholder|changeme|replace|dummy|sample|TODO)' \
+            | grep -vE 'secret_ref|session_secret|secret_key|SECRET_KEY|get_secret|key_path|key_id|key_set|hmac_key|self\.|args\.|def |class ' \
             || true)
           if [ -n "$HITS" ]; then
             echo "Potential secrets found (review each):"
@@ -99,7 +99,7 @@ jobs:
   # Container image build + publish (Plan 013 WI-2.1)
   image:
     runs-on: ubuntu-latest
-    needs: check
+    needs: [check, identifier-gate]
     permissions:
       contents: read
       packages: write

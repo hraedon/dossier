@@ -7,18 +7,19 @@
 #   - Postgres reachable from this host
 #   - regista provision already run for the target project
 #
-# Usage (PowerShell as admin):
-#   .\install.ps1 -InstallDir C:\ProgramData\dossier
+# Usage (PowerShell as admin, from the dossier repo root):
+#   .\deploy\winsw\install.ps1 -InstallDir C:\ProgramData\dossier
 #
 # What this script does:
 #   1. Creates the install directory structure
-#   2. Creates a Python venv and installs dossier + regista
+#   2. Creates a Python venv and installs dossier + regista (pinned)
 #   3. Generates the environment file (dossier-env.cmd) from prompts
-#   4. Installs and starts the Windows Service via WinSW
+#   4. Hardens NTFS ACLs on the env file (SYSTEM only)
+#   5. Installs and starts the Windows Service via WinSW
 
 param(
     [string]$InstallDir = "C:\ProgramData\dossier",
-    [string]$RegistaRef = "",  # pin to a SHA; empty = latest from main
+    [string]$RegistaRef = "3613d95432548e81596183659c08d80d354843d1",
     [switch]$SkipVenv
 )
 
@@ -34,6 +35,9 @@ foreach ($d in $Dirs) {
 }
 
 # --- 2. Python venv + install ---
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = Split-Path -Parent $ScriptDir
+
 if (-not $SkipVenv) {
     Write-Host "Creating Python venv..."
     python -m venv "$InstallDir\venv"
@@ -41,14 +45,11 @@ if (-not $SkipVenv) {
     $Pip = "$InstallDir\venv\Scripts\pip.exe"
     & $Pip install --upgrade pip
 
-    if ($RegistaRef) {
-        & $Pip install "regista @ git+https://github.com/hraedon/regista.git@$RegistaRef"
-    } else {
-        & $Pip install "regista @ git+https://github.com/hraedon/regista.git@main"
-    }
+    Write-Host "Installing regista (pinned to $RegistaRef)..."
+    & $Pip install "regista @ git+https://github.com/hraedon/regista.git@$RegistaRef"
 
-    Write-Host "Installing dossier..."
-    & $Pip install -e ".[auth-ldap]"
+    Write-Host "Installing dossier from $RepoRoot..."
+    & $Pip install ".[auth-ldap]"
 }
 
 # --- 3. Environment file ---
@@ -58,7 +59,11 @@ if (-not (Test-Path $EnvFile)) {
     $Dsn = Read-Host "Enter the Postgres DSN (e.g. postgresql://user:pass@host:5432/db)"
     $Project = Read-Host "Enter the project slug (e.g. dossier)"
     $KeyPath = Read-Host "Enter the path to the HMAC keyset file"
-    $SessionSecret = -join ((48..122) | Get-Random -Count 48 | ForEach-Object {[char]$_})
+
+    # Cryptographically secure session secret (URL-safe, cmd-safe)
+    $SecretBytes = New-Object byte[] 48
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($SecretBytes)
+    $SessionSecret = [Convert]::ToBase64String($SecretBytes)
 
     @"
 @echo off
@@ -69,16 +74,19 @@ set DOSSIER_SESSION_SECRET=$SessionSecret
 set DOSSIER_SECURE_COOKIES=true
 set DOSSIER_AUTH_BACKEND=local
 set DOSSIER_USERS_PATH=$InstallDir\users.json
-set DOSSIER_PASSWORD_SCRYPT_N=16384
+set DOSSIER_PASSWORD_SCRYPT_N=131072
 "@ | Set-Content -Path $EnvFile -Encoding ASCII
 
-    Write-Host "dossier-env.cmd created. Session secret auto-generated."
-    Write-Host "NOTE: scrypt N set to 16384 for Windows compatibility (Plan 016 spike)."
+    Write-Host "dossier-env.cmd created. Session secret generated (cryptographically secure)."
 } else {
     Write-Host "dossier-env.cmd already exists, skipping."
 }
 
-# --- 4. WinSW service ---
+# --- 4. Harden NTFS ACLs on env file ---
+Write-Host "Hardening ACLs on dossier-env.cmd..."
+& icacls $EnvFile /inheritance:r /grant "SYSTEM:F" /grant "Administrators:F" 2>&1 | Out-Null
+
+# --- 5. WinSW service ---
 $ServiceExe = "$InstallDir\dossier-service.exe"
 $ServiceXml = "$InstallDir\dossier-service.xml"
 
@@ -91,8 +99,7 @@ if (-not (Test-Path $ServiceExe)) {
     exit 1
 }
 
-# Copy the XML config if not present
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Copy the XML config from the repo
 if (Test-Path "$ScriptDir\dossier-service.xml") {
     Copy-Item "$ScriptDir\dossier-service.xml" $ServiceXml -Force
 }

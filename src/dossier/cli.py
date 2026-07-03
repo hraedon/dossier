@@ -5,7 +5,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import assert_never
+from typing import Any, assert_never
 
 from . import __version__
 from .keys import generate_keyset
@@ -19,18 +19,28 @@ def _cmd_keys_generate(args: argparse.Namespace) -> int:
 
 
 def _check_provisioned(database_url: str, project: str, require_ssl: bool) -> bool:
-    """Check whether *project* has been provisioned (schema exists)."""
-    try:
-        import psycopg
+    """Check whether *project* has been provisioned (schema exists).
 
-        with psycopg.connect(database_url) as conn:
+    Returns False only when the schema genuinely does not exist.
+    Connection/auth errors are re-raised so the operator sees the real
+    problem rather than a misleading "not provisioned" message.
+    """
+    import psycopg
+
+    try:
+        conn_kwargs: dict[str, Any] = {}
+        if require_ssl:
+            conn_kwargs["sslmode"] = "require"
+        with psycopg.connect(database_url, **conn_kwargs) as conn:
             row = conn.execute(
                 "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
                 [project],
             ).fetchone()
             return row is not None
-    except Exception:
-        return False
+    except psycopg.OperationalError as exc:
+        if "does not exist" in str(exc).lower() and "schema" in str(exc).lower():
+            return False
+        raise
 
 
 def _provision_error(project: str) -> str:
@@ -148,11 +158,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     from .multi import GatewayRegistry, slug_to_project
 
     projects_raw = os.environ.get("DOSSIER_PROJECTS", settings.project)
-    known_projects = [p.strip() for p in projects_raw.split(",") if p.strip()]
+    raw_projects = [p.strip() for p in projects_raw.split(",") if p.strip()]
 
-    for p in known_projects:
+    known_projects: list[str] = []
+    for p in raw_projects:
         try:
-            slug_to_project(p.replace("-", "_") if "-" in p else p)
+            normalized = slug_to_project(p)
+            known_projects.append(normalized)
         except ValueError as exc:
             print(f"DOSSIER_PROJECTS contains invalid name {p!r}: {exc}", file=sys.stderr)
             return 2

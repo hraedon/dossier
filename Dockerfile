@@ -17,14 +17,20 @@ ENV PYTHONUNBUFFERED=1 \
 ARG REGISTA_REF=3613d95432548e81596183659c08d80d354843d1
 ENV REGISTA_REF=${REGISTA_REF}
 
+# System deps: git for pip install from git, libpq5 for psycopg at runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Install regista from the pinned SHA, then dossier
+# Install regista from the pinned SHA, then dossier as a wheel (not editable)
 RUN pip install "regista @ git+https://github.com/hraedon/regista.git@${REGISTA_REF}"
 
 COPY pyproject.toml .
 COPY src/ src/
-RUN pip install -e ".[auth-ldap]"
+RUN pip install ".[auth-ldap]"
 
 # Non-root user for the runtime
 RUN useradd -r -s /usr/sbin/nologin dossier
@@ -33,6 +39,6 @@ USER dossier
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')" || exit 1
+    CMD python -c "import urllib.request, json; r=urllib.request.urlopen('http://127.0.0.1:8000/healthz'); d=json.load(r); exit(1 if any(c['status']=='fail' for c in d.get('checks',[])) else 0)" || exit 1
 
 ENTRYPOINT ["dossier", "serve", "--host", "0.0.0.0", "--port", "8000"]

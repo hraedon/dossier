@@ -4,7 +4,7 @@
 # reads this file to verify the pin matches.
 
 component: dossier
-version: 0.0.1
+version: "0.0.1"
 python: "3.13"
 
 regista:

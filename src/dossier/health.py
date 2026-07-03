@@ -38,7 +38,11 @@ def build_health(
             gw = registry.get(projects[0])
             gw.list_issues(current_states=["open"], page_size=1)
             regista_reachable = True
-            chain_ok = True
+            try:
+                report = gw.integrity()
+                chain_ok = not report.replayed_drift
+            except Exception:
+                chain_ok = False
         else:
             checks.append({
                 "name": "regista",
@@ -66,7 +70,7 @@ def build_health(
             checks.append({
                 "name": "auth_backend",
                 "status": "pass",
-                "detail": f"local ({settings.users_path})",
+                "detail": "local",
             })
         else:
             checks.append({
@@ -91,3 +95,8 @@ def build_health(
         },
         "checks": checks,
     }
+
+
+def has_failures(health: dict[str, Any]) -> bool:
+    """Return True if any check has status 'fail'."""
+    return any(c["status"] == "fail" for c in health.get("checks", []))
