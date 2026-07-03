@@ -16,8 +16,8 @@ so eventual Microsoft Entra (OIDC) adoption is additive, not a refactor** — se
 ## Ground truth at time of writing
 
 - `ldap3` is gated behind the `[auth-ldap]` extra (already in `pyproject.toml`).
-- cert-watch authenticates against `ad.example.com` over LDAPS today (DCs
-  `mvmdc0{1,2,3}` on :636) and has both a samba-container e2e and a real-AD remote
+- cert-watch authenticates against a real AD over LDAPS today (multiple DCs
+  on :636) and has both a samba-container e2e and a real-AD remote
   login script — patterns to adapt.
 - A least-privilege bind account exists for the homelab (`svc-gpolens`, Vault) and is
   sufficient for read/search during dev and integration tests.
@@ -30,8 +30,7 @@ so eventual Microsoft Entra (OIDC) adoption is additive, not a refactor** — se
   churn. Store `sAMAccountName` / `displayName` in `actor_metadata` for legibility.
 - **LDAPS with real certificate validation — pin the AD CA.** No
   `validate=NONE`. The certifi-vs-Windows-store and CA-leaf gotchas from the ADCS
-  work apply (`reference-adcs-certsrv-client-gotchas`): pin the Hraedon Root /
-  issuing CA rather than trusting the ambient bundle.
+  work apply: pin the AD Root / issuing CA rather than trusting the ambient bundle.
 - **Least-privilege bind.** The service account reads/searches only; it never needs
   write. Bind secret comes from env/Vault, never committed.
 
@@ -99,10 +98,10 @@ the LDAP nor the local credential path.
   returning group GUID+name for Plan 004.
 - **WI-4 — LDAPS + CA pinning**, reusing the ADCS root-pin lessons; no disabled
   validation.
-- **WI-5 — Config & secret handling** (env/Vault; `svc-gpolens` bind for homelab dev
+- **WI-5 — Config & secret handling** (env/Vault; service-account bind for homelab dev
   and integration), `.env.example` with placeholders only.
 - **WI-6 — Tests:** mocked-`ldap3` unit tests + a real-AD integration test against
-  `ad.example.com`. **Run them and watch one fail before trusting them** — the
+  the real AD. **Run them and watch one fail before trusting them** — the
   cert-watch broken-on-arrival LDAP test is the cautionary tale.
 
 ### Entra-readiness guardrails (do while touching auth; no OIDC code)

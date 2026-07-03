@@ -1,6 +1,6 @@
 # Plan 016 — Windows Service spike (validate the platform assumption)
 
-**Status:** Complete 2026-07-02 (executed on `windows-test-host`)
+**Status:** Complete 2026-07-02 (executed on a Windows test host)
 **Author:** Code review (adversarial), from the 2026-07-02 suite review
 **Strategic role:** Every suite-cohesion plan assumes the components run
 on Windows as a first-class target (Windows Service packaging for
@@ -24,7 +24,7 @@ v2 packaging revision before implementation.
 
 - Install dossier on a Windows host (or Windows VM) using a service
   wrapper (`nssm` or `pywin32`'s `win32serviceutil`).
-- Point it at a reachable Postgres (the homelab `postgres-host` is
+- Point it at a reachable Postgres (the homelab Postgres host is
   fine if VPN'd, or a local Docker Postgres on Windows).
 - Start the service, confirm the web UI renders, confirm LDAP auth
   works (or degrades gracefully if no LDAP is available in the test).
@@ -116,11 +116,11 @@ finding that matters most.
 
 ---
 
-## Spike Results (2026-07-02, windows-test-host)
+## Spike Results (2026-07-02, Windows test host)
 
-**Host:** `windows-test-host.ad.example.com` (Windows, cert-watch deployment host)
-**Python:** 3.14.5 (system install at `C:\Users\cw-admin\AppData\Local\Python\bin\`)
-**Postgres:** `postgres-host.ad.example.com:5432` (reachable from windows-test-host)
+**Host:** `windows-test-host.example.internal` (Windows, cert-watch deployment host)
+**Python:** 3.14.5 (system install)
+**Postgres:** `postgres-host.example.internal:5432` (reachable from the test host)
 **Venv:** `C:\ProgramData\dossier\venv`
 
 ### S1 — dossier as a Windows Service: PASS (with caveats)
@@ -150,7 +150,7 @@ finding that matters most.
 - `pgvector` Python package (0.4.2) installs and imports on Windows Python
   3.14 (pulls numpy 2.5.0 with Windows wheels).
 - psycopg3 client connects to Postgres and can query metadata.
-- The `vector` extension is **available** on postgres-host but **not
+- The `vector` extension is **available** on the Postgres host but **not
   installed** on the `regista` database (needs superuser `CREATE EXTENSION
   vector`). The `agent_notes` database likely needs the same.
 - **Client side: fully functional.** Server side: one-time DBA task
@@ -168,9 +168,9 @@ finding that matters most.
   gap — the fork-reset logic is irrelevant on Windows (no fork).
 - CLI connects to Postgres and runs commands. `breadcrumb find` returned
   `PROJECT_NOT_REGISTERED` (expected — no project registered on
-  windows-test-host).
+  the test host).
 - Skills installation command works (`install-skills --target claude`).
-  Claude Code not installed on windows-test-host, so full skills install deferred.
+  Claude Code not installed on the test host, so full skills install deferred.
 - Path handling works correctly on Windows.
 
 ### S4 — cairn hooks on Windows: BLOCKED (cairn doesn't exist yet)
@@ -189,10 +189,9 @@ finding that matters most.
   current user account must be configured to allow delegation"). This
   failure occurs for both user-level and machine-level DPAPI, and from
   both Python and PowerShell — it's an account/domain configuration issue
-  on windows-test-host, not a platform issue.
-- The `cw-admin` account's Master Key exists (`%APPDATA%\Microsoft\Protect\`)
-  but the DPAPI call still fails, likely due to Kerberos delegation GPO
-  restrictions on the domain account.
+  on the test host, not a platform issue.
+- The service account's Master Key exists but the DPAPI call still fails,
+  likely due to Kerberos delegation GPO restrictions on the domain account.
 - **Finding for Plan 025 WI-1.2:** the `wincred:` provider can use
   `win32crypt.CryptProtectData` / `CryptUnprotectData` (or `ctypes` to
   avoid the pywin32 dependency). It will work under the SYSTEM account

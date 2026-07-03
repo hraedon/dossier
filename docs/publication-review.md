@@ -19,7 +19,23 @@ This means: no real usernames, no real DNs, no real server hostnames, no real
 AD domain names, no real database connection strings, no real HMAC keys, no
 real user display names, no real project slugs from production schemas.
 
-## Pre-push checklist
+## CI automation
+
+The `identifier-gate` job in `.github/workflows/ci.yml` runs on every push
+and pull request. It performs two scans:
+
+1. **Targeted scan** — blocks known real hostnames/domains (e.g.
+   `mvmpostgres*`, `example.com`, `ad.hraedon`) from appearing in any
+   committed file.
+2. **Broad scan** — catches new LDAP/AD patterns (`DC=`, `CN=`, `ldaps://`)
+   that are not paired with known-safe placeholders (`example.com`,
+   `test.example`, `example.internal`).
+
+The gate must be green before merging to `main`. If it fails, fix the
+identifier before proceeding — do not add exclusions unless the pattern is
+a confirmed false positive.
+
+## Pre-push checklist (manual)
 
 Run every item. If any fails, **stop** and fix before pushing.
 
@@ -124,6 +140,40 @@ Confirm `pyproject.toml` pins are safe to publish:
 3. **Record:** Note the review in the commit message (e.g., "publication
    review passed: no work-domain identifiers, no secrets, .gitignore
    verified").
+
+## First-publication scrub
+
+Before the first `git push` to a public remote, run a history scrub using
+`git filter-repo` to remove any work-domain identifiers that may have been
+introduced and later removed:
+
+```bash
+# Install git-filter-repo
+pip install git-filter-repo
+
+# Create a fresh clone for the scrub (never scrub in-place)
+git clone /path/to/dossier dossier-public
+cd dossier-public
+
+# Scrub known patterns from all history
+git filter-repo --replace-text <(echo '
+postgres-host==>postgres-host
+windows-test-host==>windows-test-host
+ad.example.com==>ad.example.com
+example.com==>example.com
+')
+
+# Verify the scrub
+git log --all -p | grep -E 'mvmpostgres|hraedon\.com|ad\.hraedon' || echo "Clean"
+
+# Then add the remote and push
+git remote add origin git@github.com:hraedon/dossier.git
+git push -u origin main
+```
+
+After the first push, the CI identifier-gate prevents new identifiers from
+entering. The manual checklist above remains the review process for every
+subsequent push.
 
 ## Exceptions
 

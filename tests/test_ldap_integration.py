@@ -4,14 +4,14 @@ These tests connect to a real LDAP/Active Directory server and exercise the
 full search-then-bind flow. They are skipped by default — set
 ``DOSSIER_LDAP_E2E=1`` and provide the ``DOSSIER_LDAP_*`` env vars to run.
 
-Usage with the homelab AD (requires the svc-gpolens credential)::
+Usage with a real AD server (requires the svc-gpolens credential)::
 
     ACB_VAULT_ENV=/home/itadmin/.claude/vault.env \\
     acb exec cred:svc-gpolens -- env DOSSIER_LDAP_E2E=1 \\
     DOSSIER_LDAP_SERVER=ldaps://ad.example.com:636 \\
     DOSSIER_LDAP_BASE_DN=DC=example,DC=com \\
     DOSSIER_LDAP_DOMAIN=example.com \\
-    DOSSIER_LDAP_CA_CERT_FILE=/etc/ssl/certs/example-ca.pem \\
+    DOSSIER_LDAP_CA_CERT_FILE=/etc/ssl/certs/ad-root.pem \\
     DOSSIER_LDAP_TEST_USER=<test-user> \\
     DOSSIER_LDAP_TEST_PASSWORD=<test-password> \\
     python -m pytest tests/test_ldap_integration.py -m ldap_e2e -v

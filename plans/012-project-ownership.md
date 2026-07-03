@@ -23,7 +23,7 @@ it — archive, rename, manage its team mappings).
   discovery flags an open question verbatim: "list schemas from the regista DB (or
   a registry) so new projects appear without redeploy. **Confirm the source of
   truth for which projects exist.**" A project catalog *is* that source of truth.
-- The production store is one `regista` DB on postgres-host with ~16 per-project
+- The production store is one `regista` DB with ~16 per-project
   schemas (`reference-production-regista-store`).
 
 ## The central decision: where ownership lives

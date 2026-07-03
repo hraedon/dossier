@@ -1,0 +1,20 @@
+# SUITE.lock — the known-good version matrix for the dossier container image.
+#
+# Update the regista_ref and Dockerfile ARG together. The CI image-build job
+# reads this file to verify the pin matches.
+
+component: dossier
+version: 0.0.1
+python: "3.13"
+
+regista:
+  ref: 3613d95432548e81596183659c08d80d354843d1
+  source: github.com/hraedon/regista
+  # Pin to a commit SHA, never a branch. The face and the spine version
+  # are a known-good pair recorded here.
+
+container:
+  registry: ghcr.io
+  image: hraedon/dossier
+  # Tag strategy: :latest for the tip, :<dossier-version> for releases,
+  # :<dossier-version>-<regista-short-sha> for reproducible pinning.

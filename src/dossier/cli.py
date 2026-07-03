@@ -18,6 +18,30 @@ def _cmd_keys_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_provisioned(database_url: str, project: str, require_ssl: bool) -> bool:
+    """Check whether *project* has been provisioned (schema exists)."""
+    try:
+        import psycopg
+
+        with psycopg.connect(database_url) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
+                [project],
+            ).fetchone()
+            return row is not None
+    except Exception:
+        return False
+
+
+def _provision_error(project: str) -> str:
+    return (
+        f"Project {project!r} is not provisioned.\n"
+        f"  Run: regista provision --project {project}\n"
+        f"  Then: regista provision-principal --project {project} --principal <id>\n"
+        f"  See: regista provision --help"
+    )
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     from .config import load_settings
     from .gateway import packaged_workflow_yaml
@@ -33,9 +57,13 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"init requires: {', '.join(missing)}", file=sys.stderr)
         return 2
 
+    if not _check_provisioned(settings.database_url, settings.project, settings.require_ssl):
+        print(_provision_error(settings.project), file=sys.stderr)
+        return 1
+
     from regista import Regista
 
-    reg = Regista.create_project(
+    reg = Regista(
         settings.database_url,
         settings.project,
         settings.hmac_key_path,
@@ -46,7 +74,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     finally:
         reg.close()
     print(
-        f"dossier project {settings.project!r} created and workflow registered.",
+        f"dossier project {settings.project!r} workflow registered.",
         file=sys.stdout,
     )
     return 0
@@ -131,6 +159,13 @@ def _cmd_serve(args: argparse.Namespace) -> int:
 
     registry = GatewayRegistry(settings=settings, known_projects=known_projects)
 
+    if not args.skip_provision_check:
+        for p in known_projects:
+            if not _check_provisioned(settings.database_url, p, settings.require_ssl):
+                print(_provision_error(p), file=sys.stderr)
+                registry.close_all()
+                return 1
+
     backend: CredentialBackend
     if settings.auth_backend == "ldap":
         from .auth.backends import LdapBackend
@@ -201,6 +236,11 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser = subparsers.add_parser("serve")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
+    serve_parser.add_argument(
+        "--skip-provision-check",
+        action="store_true",
+        help="Skip the project provision check (for local dev with InMemory backend)",
+    )
     serve_parser.set_defaults(func=_cmd_serve)
 
     doctor_parser = subparsers.add_parser("doctor")

@@ -1,0 +1,32 @@
+<!--
+  dossier Windows Service configuration (Plan 013 WI-4.1)
+  Used with WinSW — the service wrapper validated in Plan 016's spike.
+
+  Place this file alongside WinSW.exe (renamed to dossier-service.exe).
+  The service runs the dossier FastAPI app under uvicorn, reading config
+  from the environment set in dossier-env.cmd.
+
+  No secrets are baked into this file. All sensitive values come from
+  the environment script or the suite secret backend at runtime.
+-->
+<service>
+  <id>dossier</id>
+  <name>dossier</name>
+  <description>Human-facing work-item tracker (provenance instrument) built on regista</description>
+  <executable>%BASE%\venv\Scripts\dossier.exe</executable>
+  <arguments>serve --host 0.0.0.0 --port 8000 --skip-provision-check</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <envfile>%BASE%\dossier-env.cmd</envfile>
+  <startmode>Automatic</startmode>
+  <delayautostart>30</delayautostart>
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+  <onfailure action="restart" delay="10 sec"/>
+  <onfailure action="restart" delay="30 sec"/>
+  <onfailure action="restart" delay="60 sec"/>
+  <stopparentprocessfirst>true</stopparentprocessfirst>
+  <stoptimeout>30 sec</stoptimeout>
+</service>

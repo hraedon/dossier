@@ -27,7 +27,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # regista is a public sibling repo, not on PyPI — install from git.
-          pip install "regista @ git+https://github.com/hraedon/regista.git@main"
+          # Pinned to a SHA (Plan 013 WI-2.1); update SUITE.lock when bumping.
+          REGISTA_REF=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')
+          pip install "regista @ git+https://github.com/hraedon/regista.git@${REGISTA_REF}"
           pip install -e ".[dev]"
 
       - name: Lint
@@ -38,3 +40,87 @@ jobs:
 
       - name: Test
         run: pytest tests/ -v
+
+  # Identifier gate (Plan 013 WI-4.3) — blocks work-domain identifiers
+  identifier-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for work-domain identifiers
+        run: |
+          set -e
+          # Targeted scan: look for known real hostnames/domains that must
+          # never appear in committed files. Generic LDAP/AD syntax (DC=, CN=,
+          # ldaps://) is allowed when paired with example.com or test.example.
+          REAL_PATTERNS='(mvmpostgres|mvmcitest|mvm[a-z]+0[0-9]|hraedon\.com|ad\.hraedon)'
+          HITS=$(grep -rnE "$REAL_PATTERNS" src/ tests/ docs/ plans/ deploy/ reflections/ \
+            --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
+            --include='*.xml' --include='*.ps1' --include='*.cmd' \
+            | grep -v 'publication-review' \
+            || true)
+          if [ -n "$HITS" ]; then
+            echo "Work-domain identifiers found:"
+            echo "$HITS"
+            exit 1
+          fi
+
+          # Broad scan: catch new real identifiers in LDAP/AD patterns.
+          # Excludes known-safe placeholders (example.com, test.example).
+          BROAD_PATTERNS='(DC=[a-z]+,DC=|CN=[^,]+,OU=|ldaps://[a-z])'
+          BROAD_HITS=$(grep -rnE "$BROAD_PATTERNS" src/ tests/ docs/ plans/ deploy/ \
+            --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
+            | grep -v 'example\.com\|example\.internal\|test\.example' \
+            | grep -v 'publication-review' \
+            | grep -v 'startswith.*ldaps\|match.*ldaps\|ldaps://' \
+            || true)
+          if [ -n "$BROAD_HITS" ]; then
+            echo "Potential work-domain identifiers (review):"
+            echo "$BROAD_HITS"
+            exit 1
+          fi
+          echo "No work-domain identifiers detected."
+
+      - name: Scan for secrets
+        run: |
+          set -e
+          HITS=$(grep -rnE '(password|secret|key|token|dsn).*=' \
+            src/ tests/ --include='*.py' \
+            | grep -v 'test\|example\|placeholder\|changeme\|replace\|dummy\|sample\|TODO\|self\.|args\.' \
+            | grep -v 'secret_ref\|session_secret\|secret_key\|SECRET_KEY\|get_secret\|key_path\|key_id\|key_set\|hmac_key' \
+            || true)
+          if [ -n "$HITS" ]; then
+            echo "Potential secrets found (review each):"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No secrets detected."
+
+  # Container image build + publish (Plan 013 WI-2.1)
+  image:
+    runs-on: ubuntu-latest
+    needs: check
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read regista pin from SUITE.lock
+        id: pin
+        run: echo "ref=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            --build-arg REGISTA_REF=${{ steps.pin.outputs.ref }} \
+            -t ghcr.io/hraedon/dossier:latest \
+            -t ghcr.io/hraedon/dossier:$(grep 'version:' SUITE.lock | head -1 | awk '{print $2}')-${{ steps.pin.outputs.ref }} \
+            .
+
+      - name: Push image
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker push ghcr.io/hraedon/dossier:latest
+          docker push ghcr.io/hraedon/dossier:$(grep 'version:' SUITE.lock | head -1 | awk '{print $2}')-${{ steps.pin.outputs.ref }}

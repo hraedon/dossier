@@ -16,7 +16,7 @@ human face lands on the same migrated data.
 
 ## Context / what's already true
 
-- 16 per-project regista schemas exist on the `regista` DB (postgres-host), each
+- 16 per-project regista schemas exist on the production `regista` DB, each
   with the **canonical** workflow registered and migrated data (865+ items).
 - dossier already registers the canonical workflow and maps human actors to role
   `human` (Plan 010). Its `RegistaGateway` is bound to ONE `Regista`/schema at

@@ -30,6 +30,17 @@ def _get_n() -> int:
     return n
 
 
+def _scrypt_maxmem(n: int) -> int:
+    """Calculate the required maxmem for scrypt (Plan 016 spike fix).
+
+    scrypt requires 128 * N * r bytes of memory. Windows Python 3.14's
+    OpenSSL fails with "memory limit exceeded" when maxmem is left at the
+    default (0 = unlimited), so we pass an explicit value with generous
+    headroom to work on all platforms.
+    """
+    return 128 * n * _R * 2
+
+
 def hash_password(plain: str) -> str:
     """Hash a plaintext password with scrypt and a per-password random salt.
 
@@ -47,6 +58,7 @@ def hash_password(plain: str) -> str:
         r=_R,
         p=_P,
         dklen=_DKLEN,
+        maxmem=_scrypt_maxmem(n),
     )
     return f"{_SCHEME}${n}${_b64(salt)}${_b64(digest)}"
 
@@ -78,6 +90,7 @@ def verify_password(plain: str, stored: str) -> bool:
         r=_R,
         p=_P,
         dklen=len(expected),
+        maxmem=_scrypt_maxmem(n),
     )
     return hmac.compare_digest(digest, expected)
 
