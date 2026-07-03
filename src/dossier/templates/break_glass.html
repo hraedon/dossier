@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}break-glass — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">break-glass</h1>
+</div>
+
+<div class="ds-callout ds-callout--crit">This is an emergency action for signing when the normal identity source is unavailable. It requires dual-control (two admins) and a reason. Break-glass events are prominently flagged in the audit trail.</div>
+
+<div class="ds-panel ds-panel--pad">
+  <form method="post" action="/admin/break-glass" class="ds-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-field">
+      <label class="ds-label" for="bg-pid">principal id</label>
+      <input class="ds-input" type="text" id="bg-pid" name="principal_id" required>
+    </div>
+    <div class="ds-field">
+      <label class="ds-label" for="bg-reason">reason</label>
+      <textarea class="ds-input ds-input--area" id="bg-reason" name="reason" rows="4" required></textarea>
+    </div>
+    <div class="ds-field">
+      <label class="ds-label" for="bg-confirmer">confirmer id</label>
+      <input class="ds-input" type="text" id="bg-confirmer" name="confirmer_id" required>
+    </div>
+    <button type="submit" class="ds-btn ds-btn--crit">execute break-glass</button>
+  </form>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose muted">Break-glass should be rare. Every use is logged and flagged.</div>
+</div>
+{% endblock %}

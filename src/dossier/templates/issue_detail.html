@@ -7,6 +7,9 @@
     <h1 class="ds-pagehead__title">{{ issue_title(issue) }}</h1>
     <div class="ds-pagehead__meta">
       <span class="ds-pill {{ status_pill_class(issue.current_state) }}"><span class="ds-pill__dot"></span>{{ issue.current_state }}</span>
+      {% if assurance_level is defined and assurance_level %}
+      {% include "_assurance.html" %}
+      {% endif %}
       <span class="ds-chip">{{ issue.work_item_type }}</span>
       <span class="ds-chip mono">assignee: {{ issue_field(issue, 'assignee', '—') }}</span>
       <span class="ds-chip mono">priority: {{ issue_field(issue, 'priority', 'normal') }}</span>
@@ -14,6 +17,17 @@
   </div>
   <a href="/p/{{ project_slug }}" class="ds-btn ds-btn--ghost">back</a>
 </div>
+
+{% if events %}
+{% set last_event = events[-1] %}
+{% set ns = namespace(creator_id=none) %}
+{% for e in events %}{% if e.transition == 'created' and not ns.creator_id %}{% set ns.creator_id = e.actor_id %}{% endif %}{% endfor %}
+{% if ns.creator_id and ns.creator_id != actor.actor_id %}
+<div class="ds-pagehead__meta">
+  <span class="ds-chip mono">last: {{ actor_display(last_event) }} {{ transition_label(last_event.transition) }} on {{ format_timestamp(last_event.timestamp) }}</span>
+</div>
+{% endif %}
+{% endif %}
 
 {% if issue_field(issue, 'description', '') %}
 <div class="ds-panel ds-panel--pad">

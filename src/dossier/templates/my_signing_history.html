@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}my signing history — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">my signing history</h1>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose">Events signed by your identity across all projects you can read.</div>
+</div>
+
+{% if signed_events %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>timestamp</th>
+        <th>project</th>
+        <th>item</th>
+        <th>transition</th>
+        <th>verified</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ev in signed_events %}
+      <tr>
+        <td class="mono tnum">{{ ev.timestamp }}</td>
+        <td><a href="/p/{{ ev.project_slug }}">{{ ev.project_slug }}</a></td>
+        <td class="mono"><a href="{{ ev.issue_url }}">{{ ev.display_key }}</a></td>
+        <td class="mono">{{ ev.transition }}</td>
+        <td>
+          {% if ev.verified %}
+          <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>verified</span>
+          {% else %}
+          <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>unverified</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no signed events found</div>
+  <div class="ds-empty__sub">signed events will appear here</div>
+</div>
+{% endif %}
+{% endblock %}

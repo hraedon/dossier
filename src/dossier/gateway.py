@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from typing import Any, cast
@@ -10,6 +11,8 @@ import regista
 from regista import Event, QueryPage, Regista, ReplayReport, WorkItem
 
 from .actors import Actor
+
+logger = logging.getLogger("dossier.gateway")
 
 # Plan 010 (WI-3): dossier registers the single canonical workflow shipped from
 # regista — the same one agent-notes registers — so human and agent work share
@@ -199,8 +202,141 @@ class RegistaGateway:
             )
         return None
 
+    def list_catalog_projects(self) -> list[str]:
+        """Return project schema names from the shared catalog (Plan 014 WI-1.1)."""
+        reg = self._reg
+        if hasattr(reg, "list_projects"):
+            try:
+                entries = reg.list_projects()
+                return [e.schema_name for e in entries]
+            except Exception:
+                return []
+        return []
+
     def integrity(self, work_item_id: uuid.UUID | None = None) -> ReplayReport:
         return cast(ReplayReport, self._reg.replay(work_item_id=work_item_id))
+
+    def verify_event(self, event: Event) -> dict[str, Any]:
+        """Return verification info for a single event's signature.
+
+        Uses regista's ``verify_event_signature`` to check the cryptographic
+        binding. Returns a dict with::
+
+            {
+                "verified": bool,
+                "principal_id": str | None,   # from the key's principal binding
+                "fingerprint": str | None,     # public-key fingerprint
+                "scheme": str | None,          # e.g. "ed25519", "hmac-sha256"
+            }
+
+        An unverified or unregistered-signer event is returned with
+        ``verified=False`` — the UI must never silently render it as trusted
+        (Plan 014 WI-1.3 AC).
+        """
+        info: dict[str, Any] = {
+            "verified": False,
+            "principal_id": None,
+            "fingerprint": None,
+            "scheme": None,
+        }
+        try:
+            verified = self._reg.verify_event_signature(event)
+            info["verified"] = bool(verified)
+        except Exception:
+            logger.debug("verify_event: signature verification failed", exc_info=True)
+            info["verified"] = False
+
+        key_id = getattr(event, "key_id", None)
+        if key_id:
+            info["key_id"] = str(key_id)
+            try:
+                public_keys = self._reg.export_public_keys()
+                for pk in public_keys:
+                    if pk.get("key_id") == key_id:
+                        info["principal_id"] = pk.get("principal_id")
+                        info["fingerprint"] = pk.get("fingerprint")
+                        info["scheme"] = pk.get("scheme")
+                        break
+            except Exception:
+                logger.debug("verify_event: public key lookup failed", exc_info=True)
+                pass
+        return info
+
+    def list_principals(self, principal_id: str | None = None) -> list[dict[str, Any]]:
+        """List principal keys from the regista registry (Plan 015).
+
+        When the backend supports ``PrincipalKeyOps`` (real Regista), this
+        delegates to ``reg.principals.list()``. When it doesn't
+        (InMemoryRegista), checks for an injected test-double store
+        (``_principal_store``), then falls back to an empty list.
+        """
+        store = getattr(self, "_principal_store", None)
+        if store is not None:
+            return cast(list[dict[str, Any]], store.list(principal_id))
+        reg = self._reg
+        if hasattr(reg, "principals"):
+            try:
+                ops = reg.principals
+                return cast(list[dict[str, Any]], ops.list(principal_id))
+            except Exception:
+                return []
+        return []
+
+    def get_principal_key(self, principal_id: str) -> dict[str, Any] | None:
+        """Get the active key for a principal, or None if not registered."""
+        store = getattr(self, "_principal_store", None)
+        if store is not None:
+            try:
+                return cast(dict[str, Any], store.get_active(principal_id))
+            except Exception:
+                return None
+        reg = self._reg
+        if hasattr(reg, "principals"):
+            try:
+                ops = reg.principals
+                return cast(dict[str, Any], ops.get_active(principal_id))
+            except Exception:
+                return None
+        return None
+
+    def register_principal(
+        self, principal_id: str, public_key: bytes, *, registered_by: str = "system"
+    ) -> dict[str, Any] | None:
+        """Register a new principal key (Plan 015 WI-2.1)."""
+        store = getattr(self, "_principal_store", None)
+        if store is not None:
+            return cast(dict[str, Any], store.register(principal_id, public_key, registered_by=registered_by))
+        reg = self._reg
+        if hasattr(reg, "principals"):
+            ops = reg.principals
+            return cast(dict[str, Any], ops.register(principal_id, public_key, registered_by=registered_by))
+        return None
+
+    def rotate_principal(
+        self, principal_id: str, new_public_key: bytes, *, registered_by: str = "system"
+    ) -> dict[str, Any] | None:
+        """Rotate a principal's key (Plan 015 WI-1.2)."""
+        store = getattr(self, "_principal_store", None)
+        if store is not None:
+            return cast(dict[str, Any], store.rotate(principal_id, new_public_key, registered_by=registered_by))
+        reg = self._reg
+        if hasattr(reg, "principals"):
+            ops = reg.principals
+            return cast(dict[str, Any], ops.rotate(principal_id, new_public_key, registered_by=registered_by))
+        return None
+
+    def revoke_principal(
+        self, principal_id: str, key_id: str, *, reason: str = "unspecified"
+    ) -> dict[str, Any] | None:
+        """Revoke a principal's key (Plan 015 WI-2.2)."""
+        store = getattr(self, "_principal_store", None)
+        if store is not None:
+            return cast(dict[str, Any], store.revoke(principal_id, key_id, reason=reason))
+        reg = self._reg
+        if hasattr(reg, "principals"):
+            ops = reg.principals
+            return cast(dict[str, Any], ops.revoke(principal_id, key_id, reason=reason))
+        return None
 
     def transitions_from(self, state: str, workflow_version: int) -> list[Any]:
         """Return the ``TransitionDef``s whose ``from_state == state`` for the

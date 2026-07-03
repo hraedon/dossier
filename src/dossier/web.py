@@ -210,3 +210,16 @@ def project_display_name(entry: Any, fallback: str) -> str:
 
 def kind_badge(actor: Actor) -> str:
     return str(actor.actor_kind)
+
+
+def state_description(state: str) -> str:
+    """Plain-language description of a work-item state for non-authors (WI-2.2)."""
+    return {
+        "open": "not yet started",
+        "in_progress": "work is underway",
+        "blocked": "waiting on a dependency",
+        "deferred": "deliberately set aside",
+        "in_review": "awaiting review",
+        "in_human_review": "awaiting human review",
+        "done": "completed",
+    }.get(state, state)

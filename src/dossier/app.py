@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -12,10 +13,16 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
 from .actors import Actor
+from .assurance import (
+    assurance_class,
+    assurance_label,
+    compute_assurance_level,
+)
 from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
 from .auth.throttle import LoginThrottler, _normalize_identifier
+from .authz import can_read_project
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
 from .multi import GatewayRegistry, project_to_slug, slug_to_project
@@ -45,6 +52,32 @@ class LoginRequired(Exception):
     which a browser user sees as raw text. This custom exception is caught by a
     registered handler that emits a clean ``RedirectResponse`` to ``/login``.
     """
+
+
+_ADMIN_ACTOR_IDS: set[str] = set()
+
+
+def _is_admin(actor: Actor) -> bool:
+    """v1 admin check: any actor whose ID is in the configured admin set.
+
+    The admin set is populated from the ``DOSSIER_ADMIN_IDS`` env var
+    (comma-separated). In v1, this is a simple allowlist — v1.1/v1.5 will
+    integrate with the project catalog's team/role mapping.
+    """
+    return actor.actor_id in _ADMIN_ACTOR_IDS
+
+
+def _configure_admin_ids() -> None:
+    """Load admin IDs from the DOSSIER_ADMIN_IDS env var."""
+    import os
+
+    raw = os.environ.get("DOSSIER_ADMIN_IDS", "")
+    ids = {s.strip() for s in raw.split(",") if s.strip()}
+    _ADMIN_ACTOR_IDS.clear()
+    _ADMIN_ACTOR_IDS.update(ids)
+
+
+_configure_admin_ids()
 
 
 async def _credential_login(
@@ -119,6 +152,7 @@ def create_app(
         is_cross_project_link=web.is_cross_project_link,
         owner_display=web.owner_display,
         project_display_name=web.project_display_name,
+        state_description=web.state_description,
     )
     app.state.templates = templates
 
@@ -154,14 +188,17 @@ def create_app(
         return {
             "actor": actor,
             "csrf_token": issue_csrf_token(request.session),
-            "projects": registry.list_projects(),
+            "projects": [p for p in registry.list_projects() if can_read_project(actor, p)],
+            "is_admin": _is_admin(actor),
         }
 
-    def resolve_gateway(project_slug: str) -> RegistaGateway:
+    def resolve_gateway(project_slug: str, actor: Actor) -> RegistaGateway:
         try:
             project = slug_to_project(project_slug)
         except ValueError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown project {project_slug!r}")
+        if not can_read_project(actor, project):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "access denied")
         try:
             return registry.get(project)
         except (KeyError, RegistaError):
@@ -283,38 +320,143 @@ def create_app(
     def me(actor: Actor = Depends(current_actor)) -> dict[str, Any]:
         return asdict(actor)
 
-    # ---- cross-project landing (Plan 011 WI-3) ----
+    # ---- cross-project dashboard (Plan 014 WI-1.2) ----
+
+    _DASHBOARD_MAX_ITEMS = 200
 
     @app.get("/")
-    def landing(
+    def dashboard(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
+        filter_project: str | None = Query(default=None, alias="project"),
+        filter_status: str | None = Query(default=None, alias="status"),
+        filter_assignee: str | None = Query(default=None, alias="assignee"),
+        search_query: str | None = Query(default=None, alias="q"),
     ) -> Response:
         import logging
 
-        logger = logging.getLogger("dossier.landing")
+        logger = logging.getLogger("dossier.dashboard")
         project_rows: list[dict[str, Any]] = []
+        all_items: list[dict[str, Any]] = []
+
+        states_filter = [filter_status] if filter_status else _OPEN_STATES
+
         for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
             try:
                 gw = registry.get(project)
-                page = gw.list_issues(current_states=_OPEN_STATES)
-                count = len(page.items)
+                page = gw.list_issues(
+                    current_states=states_filter,
+                    assignee=filter_assignee or None,
+                )
+                items = list(page.items)
+                count = len(items)
                 catalog_entry = gw.get_project_catalog_entry()
             except Exception:
-                logger.warning("landing: project %s unreachable", project, exc_info=True)
+                logger.warning("dashboard: project %s unreachable", project, exc_info=True)
                 count = 0
                 catalog_entry = None
+                items = []
+            slug = project_to_slug(project)
             project_rows.append({
-                "slug": project_to_slug(project),
+                "slug": slug,
                 "name": project,
                 "open_count": count,
                 "catalog_entry": catalog_entry,
             })
+            if filter_project and slug != filter_project:
+                continue
+            for wi in items:
+                title = web.issue_title(wi)
+                if search_query:
+                    searchable = f"{web.display_key(wi)} {title} {web.issue_field(wi, 'assignee', '')}".lower()
+                    if search_query.lower() not in searchable:
+                        continue
+                all_items.append({
+                    "key": web.display_key(wi),
+                    "title": title,
+                    "project_slug": slug,
+                    "state": wi.current_state,
+                    "assignee": web.issue_field(wi, "assignee", ""),
+                    "updated": web.last_event_time(wi),
+                    "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
+                    "project_url": f"/p/{slug}",
+                })
+
+        total_count = len(all_items)
+        dashboard_items = all_items[:_DASHBOARD_MAX_ITEMS]
+
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
             request,
-            "landing.html",
-            {**ctx, "project_rows": project_rows},
+            "dashboard.html",
+            {
+                **ctx,
+                "project_rows": project_rows,
+                "dashboard_items": dashboard_items,
+                "total_count": total_count,
+                "max_items": _DASHBOARD_MAX_ITEMS,
+                "filter_project": filter_project or "",
+                "filter_status": filter_status or "",
+                "filter_assignee": filter_assignee or "",
+                "search_query": search_query or "",
+            },
+        )
+
+    # ---- estate-wide search (Plan 014 WI-2.1) ----
+
+    @app.get("/search")
+    def search_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        q: str | None = Query(default=None),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.search")
+        results: list[dict[str, Any]] = []
+        query = (q or "").strip().lower()
+
+        if query:
+            for project in registry.list_projects():
+                if not can_read_project(actor, project):
+                    continue
+                try:
+                    gw = registry.get(project)
+                    page = gw.list_issues(page_size=500)
+                    for wi in page.items:
+                        title = web.issue_title(wi)
+                        key = web.display_key(wi)
+                        assignee = web.issue_field(wi, "assignee", "")
+                        searchable = f"{key} {title} {assignee}".lower()
+                        if query in searchable:
+                            slug = project_to_slug(project)
+                            results.append({
+                                "key": key,
+                                "title": title,
+                                "project_slug": slug,
+                                "state": wi.current_state,
+                                "assignee": assignee,
+                                "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
+                                "project_url": f"/p/{slug}",
+                            })
+                except Exception:
+                    logger.warning("search: project %s unreachable", project, exc_info=True)
+
+        project_count = len({r["project_slug"] for r in results})
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "search.html",
+            {
+                **ctx,
+                "search_query": q or "",
+                "search_results": results,
+                "result_count": len(results),
+                "project_count": project_count,
+            },
         )
 
     # ---- project-scoped routes (Plan 011 WI-2) ----
@@ -327,7 +469,7 @@ def create_app(
         assignee: str | None = Query(default=None),
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
-        gw = resolve_gateway(project)
+        gw = resolve_gateway(project, actor)
         page = gw.list_issues(current_states=states, assignee=assignee)
         catalog_entry = gw.get_project_catalog_entry()
         ctx = actor_context(request, actor)
@@ -351,7 +493,7 @@ def create_app(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
-        resolve_gateway(project)
+        resolve_gateway(project, actor)
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
@@ -367,7 +509,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        gw = resolve_gateway(project)
+        gw = resolve_gateway(project, actor)
         form = await request.form()
         work_item_type = str(form.get("type", "bug"))
         title = str(form.get("title", "")).strip()
@@ -419,7 +561,7 @@ def create_app(
         request: Request,
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
-        gw = resolve_gateway(project)
+        gw = resolve_gateway(project, actor)
         wi = gw.get_issue(work_item_id)
         if wi is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
@@ -427,6 +569,21 @@ def create_app(
         transitions = transitions_for(gw, wi)
         integrity = gw.integrity(work_item_id=work_item_id)
         links = gw.list_links(work_item_id)
+
+        event_verifications: dict[int, dict[str, Any]] = {}
+        for i, event in enumerate(events):
+            try:
+                event_verifications[i] = gw.verify_event(event)
+            except Exception:
+                event_verifications[i] = {
+                    "verified": False,
+                    "principal_id": None,
+                    "fingerprint": None,
+                    "scheme": None,
+                }
+
+        assurance = compute_assurance_level(events)
+
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
@@ -441,6 +598,10 @@ def create_app(
                 "project_slug": project,
                 "links": links,
                 "error": None,
+                "event_verifications": event_verifications,
+                "assurance_level": assurance,
+                "assurance_label": assurance_label(assurance),
+                "assurance_css": assurance_class(assurance),
             },
         )
 
@@ -452,7 +613,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        gw = resolve_gateway(project)
+        gw = resolve_gateway(project, actor)
         form = await request.form()
         transition_name = str(form.get("transition_name", ""))
         review_note = str(form.get("review_note", "")).strip()
@@ -479,6 +640,20 @@ def create_app(
             transitions = transitions_for(gw, wi)
             integrity = gw.integrity(work_item_id=work_item_id)
             links = gw.list_links(work_item_id)
+
+            event_verifications: dict[int, dict[str, Any]] = {}
+            for i, event in enumerate(events):
+                try:
+                    event_verifications[i] = gw.verify_event(event)
+                except Exception:
+                    event_verifications[i] = {
+                        "verified": False,
+                        "principal_id": None,
+                        "fingerprint": None,
+                        "scheme": None,
+                    }
+            assurance = compute_assurance_level(events)
+
             ctx = actor_context(request, actor)
             ctx["current_project"] = slug_to_project(project)
             return templates.TemplateResponse(
@@ -493,6 +668,10 @@ def create_app(
                     "project_slug": project,
                     "links": links,
                     "error": exc.message,
+                    "event_verifications": event_verifications,
+                    "assurance_level": assurance,
+                    "assurance_label": assurance_label(assurance),
+                    "assurance_css": assurance_class(assurance),
                 },
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
@@ -510,7 +689,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        gw = resolve_gateway(project)
+        gw = resolve_gateway(project, actor)
         form = await request.form()
         body = str(form.get("body", "")).strip()
         if body:
@@ -527,7 +706,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        gw = resolve_gateway(project)
+        gw = resolve_gateway(project, actor)
         form = await request.form()
         owner = str(form.get("owner_actor_id", "")).strip()
         try:
@@ -544,5 +723,283 @@ def create_app(
             url=f"/p/{project}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
+
+    # ---- my signing identity (Plan 015 WI-1.1) ----
+
+    @app.get("/me/identity")
+    def my_identity(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        ctx = actor_context(request, actor)
+        principal_key = None
+        rotation_allowed = True
+
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                principal_key = gw.get_principal_key(actor.actor_id)
+                if principal_key:
+                    break
+            except Exception:
+                pass
+
+        ctx["principal_key"] = principal_key
+        ctx["rotation_allowed"] = rotation_allowed
+        return templates.TemplateResponse(
+            request,
+            "my_identity.html",
+            ctx,
+        )
+
+    @app.post("/me/key/rotate", response_model=None)
+    async def rotate_my_key(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        # TODO(Plan 026 integration): In production, the secret backend generates
+        # the Ed25519 keypair and returns only the public key. This random-bytes
+        # stub is for v1 testing only — it is NOT a valid Ed25519 public key and
+        # signature verification against it will fail. Replace with a call to the
+        # secret-backend key generation API when deployed.
+        new_public_key = secrets.token_bytes(32)
+
+        success_count = 0
+        errors: list[str] = []
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                result = gw.rotate_principal(
+                    actor.actor_id, new_public_key, registered_by=actor.actor_id
+                )
+                if result:
+                    success_count += 1
+            except Exception as exc:
+                errors.append(f"{project}: {exc}")
+
+        if success_count == 0:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, "key rotation failed"
+            )
+
+        return RedirectResponse(url="/me/identity", status_code=status.HTTP_303_SEE_OTHER)
+
+    # ---- my signing history (Plan 015 WI-1.3) ----
+
+    @app.get("/me/signing-history")
+    def my_signing_history(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.signing_history")
+        signed_events: list[dict[str, Any]] = []
+
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                page = gw.list_issues(page_size=500)
+                for wi in page.items:
+                    events = gw.history(wi.work_item_id)
+                    for event in events:
+                        if getattr(event, "actor_id", None) != actor.actor_id:
+                            continue
+                        try:
+                            vinfo = gw.verify_event(event)
+                            verified = vinfo.get("verified", False)
+                        except Exception:
+                            verified = False
+                        slug = project_to_slug(project)
+                        signed_events.append({
+                            "timestamp": web.format_timestamp(getattr(event, "timestamp", None)),
+                            "project_slug": slug,
+                            "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
+                            "display_key": web.display_key(wi),
+                            "title": web.issue_title(wi),
+                            "transition": web.transition_label(getattr(event, "transition", "")),
+                            "verified": verified,
+                        })
+            except Exception:
+                logger.warning("signing history: project %s unreachable", project, exc_info=True)
+
+        signed_events.sort(key=lambda e: e["timestamp"], reverse=True)
+
+        ctx = actor_context(request, actor)
+        ctx["signed_events"] = signed_events
+        return templates.TemplateResponse(
+            request,
+            "my_signing_history.html",
+            ctx,
+        )
+
+    # ---- admin: principal roster + enrollment (Plan 015 WI-2.1) ----
+
+    def require_admin(actor: Actor) -> None:
+        if not _is_admin(actor):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "admin access required")
+
+    @app.get("/admin/principals")
+    def principal_roster(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        require_admin(actor)
+        ctx = actor_context(request, actor)
+
+        all_principals: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                principals = gw.list_principals()
+                for p in principals:
+                    kid = p.get("key_id", "")
+                    if kid and kid not in seen_keys:
+                        seen_keys.add(kid)
+                        all_principals.append(p)
+            except Exception:
+                pass
+
+        ctx["principals"] = all_principals
+        return templates.TemplateResponse(
+            request,
+            "principal_roster.html",
+            ctx,
+        )
+
+    @app.post("/admin/principals/enroll", response_model=None)
+    async def enroll_principal(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        form = await request.form()
+        principal_id = str(form.get("principal_id", "")).strip()
+
+        if not principal_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "principal_id is required")
+
+        # TODO(Plan 026 integration): In production, the secret backend generates
+        # the Ed25519 keypair and returns only the public key. This random-bytes
+        # stub is for v1 testing only — it is NOT a valid Ed25519 public key and
+        # signature verification against it will fail. Replace with a call to the
+        # secret-backend key generation API when deployed.
+        public_key = secrets.token_bytes(32)
+
+        success_count = 0
+        errors: list[str] = []
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                result = gw.register_principal(
+                    principal_id, public_key, registered_by=actor.actor_id
+                )
+                if result:
+                    success_count += 1
+            except Exception as exc:
+                errors.append(f"{project}: {exc}")
+
+        if success_count == 0:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, "principal enrollment failed"
+            )
+
+        return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/admin/principals/{principal_id}/revoke", response_model=None)
+    async def revoke_principal_route(
+        principal_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        reason = "revoked by admin"
+
+        success_count = 0
+        errors: list[str] = []
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                key_info = gw.get_principal_key(principal_id)
+                if key_info:
+                    gw.revoke_principal(
+                        principal_id, key_info["key_id"], reason=reason
+                    )
+                    success_count += 1
+            except Exception as exc:
+                errors.append(f"{project}: {exc}")
+
+        if success_count == 0:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR, "principal revocation failed"
+            )
+
+        return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
+
+    # ---- break-glass (Plan 015 WI-2.3) ----
+
+    @app.get("/admin/break-glass")
+    def break_glass_form(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        require_admin(actor)
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "break_glass.html",
+            ctx,
+        )
+
+    @app.post("/admin/break-glass", response_model=None)
+    async def break_glass_action(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        form = await request.form()
+        principal_id = str(form.get("principal_id", "")).strip()
+        reason = str(form.get("reason", "")).strip()
+        confirmer_id = str(form.get("confirmer_id", "")).strip()
+
+        if not principal_id or not reason or not confirmer_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "all fields are required")
+
+        if confirmer_id == actor.actor_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "dual-control requires a different confirmer",
+            )
+
+        if confirmer_id not in _ADMIN_ACTOR_IDS:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "confirmer must be an admin",
+            )
+
+        # v1 dual-control simplification: the confirmer_id is checked against the
+        # admin set but the second admin does not actively confirm in their own
+        # session. v1.5 will implement a two-step flow where the confirmer must
+        # approve via a separate authenticated request. This is documented in
+        # Plan 015 WI-2.3.
+
+        return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
 
     return app

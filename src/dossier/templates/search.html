@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}search — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">search</h1>
+    {% if search_query %}
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ result_count }} result{{ 's' if result_count != 1 else '' }} across {{ project_count }} project{{ 's' if project_count != 1 else '' }}</span>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<form method="get" action="/search" class="ds-filters">
+  <div class="ds-field ds-field--inline">
+    <label class="ds-label" for="s-query">query</label>
+    <input class="ds-input ds-input--sm" type="text" id="s-query" name="q" value="{{ search_query }}">
+  </div>
+  <button type="submit" class="ds-btn ds-btn--ghost">search</button>
+</form>
+
+{% if search_results %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>key</th>
+        <th>title</th>
+        <th>project</th>
+        <th>state</th>
+        <th>assignee</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in search_results %}
+      <tr>
+        <td class="mono"><a href="{{ item.issue_url }}">{{ item.key }}</a></td>
+        <td><a href="{{ item.issue_url }}">{{ item.title }}</a></td>
+        <td class="mono"><a href="{{ item.project_url }}">{{ item.project_slug }}</a></td>
+        <td><span class="ds-pill {{ status_pill_class(item.state) }}"><span class="ds-pill__dot"></span>{{ item.state }}</span></td>
+        <td>{{ item.assignee or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% elif search_query %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no results</div>
+  <div class="ds-empty__sub">try a different query</div>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">search the estate</div>
+  <div class="ds-empty__sub">enter a query above to search across all projects</div>
+</div>
+{% endif %}
+{% endblock %}

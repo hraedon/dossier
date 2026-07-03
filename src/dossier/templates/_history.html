@@ -1,6 +1,11 @@
 <section class="ds-history">
   <div class="ds-history__head">
     <h2 class="ds-history__title">verified history</h2>
+    {% if assurance_level is defined and assurance_level %}
+    <span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance level">
+      <span class="ds-pill__dot"></span>{{ assurance_label }}
+    </span>
+    {% endif %}
     {% if integrity_drift == 0 %}
     <span class="ds-integrity-badge ds-integrity-badge--ok">
       <span class="ds-pill__dot"></span>chain verified
@@ -16,6 +21,8 @@
   <div class="ds-chain">
     <div class="ds-chain__spine"></div>
     {% for event in events %}
+    {% set ev = event_verifications|default({}) %}
+    {% set vinfo = ev[loop.index0] if loop.index0 in ev else none %}
     <div class="ds-chain__event">
       <div class="ds-chain__rule"></div>
       <div class="ds-chain__row">
@@ -28,6 +35,14 @@
         {% set ob = on_behalf_display(event) %}
         {% if ob %}
         <span class="ds-chain__delegation">on behalf of {{ ob }}</span>
+        {% endif %}
+        {% if vinfo and vinfo.verified %}
+        <span class="ds-chain__verified"><span class="ds-pill__dot"></span>signed{% if vinfo.fingerprint %} {{ vinfo.fingerprint[:16] }}{% endif %}</span>
+        {% if vinfo.principal_id and vinfo.principal_id != event.actor_id %}
+        <span class="ds-chain__delegation">signer: {{ vinfo.principal_id }}</span>
+        {% endif %}
+        {% elif vinfo %}
+        <span class="ds-chain__unverified"><span class="ds-pill__dot"></span>unverified</span>
         {% endif %}
       </div>
       {% set verdict = event_verdict(event) %}

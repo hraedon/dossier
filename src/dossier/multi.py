@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import TYPE_CHECKING
 
@@ -7,6 +8,8 @@ from .gateway import RegistaGateway
 
 if TYPE_CHECKING:
     from .config import Settings
+
+logger = logging.getLogger("dossier.multi")
 
 
 def slug_to_project(slug: str) -> str:
@@ -85,8 +88,40 @@ class GatewayRegistry:
             return gw
 
     def list_projects(self) -> list[str]:
-        """Return known project names sorted alphabetically."""
-        return sorted(self._known_projects)
+        """Return known project names sorted alphabetically.
+
+        In v1, projects are statically configured via the known set
+        (DOSSIER_PROJECTS env var). Plan 014 WI-1.1 calls for dynamic
+        discovery so new projects appear without a redeploy — when the
+        regista backend supports ``list_projects``, we merge its catalog
+        with the static set so both configured and catalog-discovered
+        projects are visible.
+        """
+        if not self._settings or not self._gateways:
+            return sorted(self._known_projects)
+        discovered = self._discover_from_catalog()
+        merged = self._known_projects | discovered
+        return sorted(merged)
+
+    def _discover_from_catalog(self) -> set[str]:
+        """Query the project catalog from any connected gateway.
+
+        regista's ``InMemoryRegista.list_projects`` (a classmethod) reads
+        the shared in-memory catalog; the real ``Regista.list_projects``
+        reads the ``public.projects`` table. Both return
+        ``ProjectCatalogEntry`` objects with ``schema_name``.
+
+        This is a best-effort merge — catalog entries for projects not in
+        the static known set are included so they appear in the dashboard.
+        A gateway for a discovered project is built lazily on first access.
+        """
+        discovered: set[str] = set()
+        for gw in list(self._gateways.values()):
+            try:
+                discovered.update(set(gw.list_catalog_projects()))
+            except Exception:
+                logger.debug("catalog discovery from a gateway failed", exc_info=True)
+        return discovered
 
     def close_all(self) -> None:
         for gw in self._gateways.values():

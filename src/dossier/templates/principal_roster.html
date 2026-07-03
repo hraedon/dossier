@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}principal roster — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">principal roster</h1>
+</div>
+
+<div class="ds-callout">Admin only — manages signing principals and key enrollment.</div>
+
+<div class="ds-panel ds-panel--pad">
+  <form method="post" action="/admin/principals/enroll" class="ds-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-field-row">
+      <div class="ds-field">
+        <label class="ds-label" for="enroll-pid">principal id</label>
+        <input class="ds-input" type="text" id="enroll-pid" name="principal_id" required>
+      </div>
+      <div class="ds-field">
+        <label class="ds-label" for="enroll-scheme">scheme</label>
+        <select class="ds-select" id="enroll-scheme" name="scheme">
+          <option value="ed25519" selected>ed25519</option>
+        </select>
+      </div>
+    </div>
+    <button type="submit" class="ds-btn ds-btn--primary">enroll</button>
+  </form>
+</div>
+
+{% if principals %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>principal id</th>
+        <th>key id</th>
+        <th>scheme</th>
+        <th>status</th>
+        <th>fingerprint</th>
+        <th>registered by</th>
+        <th>registered at</th>
+        <th>revoked at</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in principals %}
+      <tr>
+        <td class="mono">{{ p.principal_id }}</td>
+        <td class="mono">{{ p.key_id }}</td>
+        <td class="mono">{{ p.scheme }}</td>
+        <td>
+          {% if p.status == "active" %}
+          <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>active</span>
+          {% elif p.status == "rotation-due" %}
+          <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>rotation-due</span>
+          {% elif p.status == "revoked" %}
+          <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>revoked</span>
+          {% else %}
+          <span class="ds-pill ds-pill--muted"><span class="ds-pill__dot"></span>{{ p.status }}</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ p.fingerprint[:32] }}…</td>
+        <td class="mono">{{ p.registered_by or '—' }}</td>
+        <td class="mono tnum">{{ p.registered_at or '—' }}</td>
+        <td class="mono tnum">{{ p.revoked_at or '—' }}</td>
+        <td>
+          {% if p.status == "active" %}
+          <form method="post" action="/admin/principals/{{ p.principal_id }}/revoke">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="ds-btn ds-btn--ghost">revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no principals</div>
+  <div class="ds-empty__sub">enroll a principal to get started</div>
+</div>
+{% endif %}
+{% endblock %}
