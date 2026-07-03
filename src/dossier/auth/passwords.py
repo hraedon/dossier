@@ -4,6 +4,7 @@ import base64
 import binascii
 import hashlib
 import hmac
+import logging
 import os
 
 _SCHEME = "scrypt"
@@ -11,6 +12,10 @@ _R = 8
 _P = 1
 _DKLEN = 32
 _SALT_BYTES = 16
+_OWASP_MIN_N = 131072
+_MAX_VERIFY_N = 1 << 20
+
+_logger = logging.getLogger("dossier.auth.passwords")
 
 
 def _get_n() -> int:
@@ -26,6 +31,12 @@ def _get_n() -> int:
     if n & (n - 1) != 0:
         raise RuntimeError(
             f"DOSSIER_PASSWORD_SCRYPT_N must be a power of 2, got {n}"
+        )
+    if n < _OWASP_MIN_N:
+        _logger.warning(
+            "DOSSIER_PASSWORD_SCRYPT_N=%d is below OWASP minimum %d — "
+            "acceptable for tests but unsafe for production",
+            n, _OWASP_MIN_N,
         )
     return n
 
@@ -82,6 +93,8 @@ def verify_password(plain: str, stored: str) -> bool:
     except (ValueError, binascii.Error):
         return False
     if n <= 0:
+        return False
+    if n > _MAX_VERIFY_N:
         return False
     digest = hashlib.scrypt(
         plain.encode("utf-8"),

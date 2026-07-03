@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import ssl
 import uuid
 from dataclasses import dataclass, field
@@ -150,6 +151,8 @@ class LocalBackend:
         Mints a uuid ``stable_id`` and scrypt-hashes the password. Intended for
         a future ``dossier users add`` CLI command; not wired into the CLI here.
         """
+        import tempfile
+
         path = Path(path)
         if path.exists():
             with path.open("r", encoding="utf-8") as f:
@@ -167,8 +170,19 @@ class LocalBackend:
         }
         users.append(new_user)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(users, f, indent=2)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(path.parent), suffix=".tmp", prefix=".users_"
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(users, f, indent=2)
+            os.replace(tmp_path, path)
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         return new_user
 
 
@@ -555,16 +569,9 @@ def _attr_values(entry: Any, name: str) -> list[Any]:
 
 def _cn_from_dn(dn: str) -> str:
     """Extract the CN component from a DN, falling back to the full DN."""
-    try:
-        from ldap3.utils.dn import parse_dn
+    from ldap3.utils.dn import parse_dn
 
-        for attr_type, attr_value, _ in parse_dn(dn):
-            if attr_type.upper() == "CN":
-                return str(attr_value)
-    except ImportError:
-        pass
-    for part in dn.split(","):
-        part = part.strip()
-        if part[:3].upper() == "CN=":
-            return part[3:]
+    for attr_type, attr_value, _ in parse_dn(dn):
+        if attr_type.upper() == "CN":
+            return str(attr_value)
     return dn

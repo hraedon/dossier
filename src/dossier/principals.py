@@ -154,8 +154,11 @@ class InMemoryPrincipalKeyStore:
         return [e.to_dict() for e in sorted(result, key=lambda e: e.registered_at, reverse=True)]
 
     def get_active(self, principal_id: str) -> dict[str, Any]:
+        now = datetime.now(UTC)
         for entry in reversed(self._entries):
             if entry.principal_id == principal_id and entry.status == "active":
+                if entry.valid_to is not None and entry.valid_to <= now:
+                    continue
                 return entry.to_dict()
         raise KeyError(f"No active key for principal {principal_id!r}")
 

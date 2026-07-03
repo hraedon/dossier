@@ -63,6 +63,9 @@ class LoginThrottler:
             rec = _AttemptRecord(failures=1, first_failure=now, locked_until=0.0)
             self._records[identifier] = rec
             return
+        if rec.locked_until > now:
+            rec.locked_until = now + self._lockout_seconds
+            return
         if now - rec.first_failure > self._lockout_seconds:
             rec.failures = 1
             rec.first_failure = now
@@ -92,9 +95,12 @@ class LoginThrottler:
             del self._records[key]
 
     def _evict_oldest(self) -> None:
+        now = time.monotonic()
         oldest_key: str | None = None
         oldest_first: float | None = None
         for key, rec in self._records.items():
+            if rec.locked_until > now:
+                continue
             if oldest_first is None or rec.first_failure < oldest_first:
                 oldest_first = rec.first_failure
                 oldest_key = key

@@ -706,6 +706,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
+        require_admin(actor)
         gw = resolve_gateway(project, actor)
         form = await request.form()
         owner = str(form.get("owner_actor_id", "")).strip()

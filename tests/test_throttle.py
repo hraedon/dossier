@@ -85,3 +85,28 @@ def test_cleanup_removes_expired_records():
     throttler.cleanup()
     assert "alice" not in throttler._records
     assert "bob" not in throttler._records
+
+
+def test_lockout_extends_on_repeated_failure():
+    throttler = LoginThrottler(max_failures=3, lockout_seconds=0.3)
+    for _ in range(3):
+        throttler.record_failure("alice")
+    assert throttler.is_locked("alice")
+    remaining1 = throttler.lockout_remaining("alice")
+    time.sleep(0.1)
+    throttler.record_failure("alice")
+    remaining2 = throttler.lockout_remaining("alice")
+    assert remaining2 > remaining1 - 0.1
+
+
+def test_evict_oldest_skips_locked():
+    throttler = LoginThrottler(max_failures=2, lockout_seconds=300)
+    throttler._MAX_RECORDS = 5
+    for i in range(4):
+        throttler.record_failure(f"user{i}")
+    for _ in range(2):
+        throttler.record_failure("locked_user")
+    assert throttler.is_locked("locked_user")
+    throttler.record_failure("user5")
+    assert "locked_user" in throttler._records
+    assert throttler.is_locked("locked_user")

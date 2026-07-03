@@ -257,9 +257,11 @@ class RegistaGateway:
                         info["fingerprint"] = pk.get("fingerprint")
                         info["scheme"] = pk.get("scheme")
                         break
+                else:
+                    info["verified"] = False
             except Exception:
                 logger.debug("verify_event: public key lookup failed", exc_info=True)
-                pass
+                info["verified"] = False
         return info
 
     def list_principals(self, principal_id: str | None = None) -> list[dict[str, Any]]:

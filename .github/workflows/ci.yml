@@ -70,7 +70,7 @@ jobs:
           BROAD_PATTERNS='(DC=[a-z]+,DC=|CN=[^,]+,OU=|ldaps://[a-z])'
           BROAD_HITS=$(grep -rnE "$BROAD_PATTERNS" src/ tests/ docs/ plans/ deploy/ \
             --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
-            | grep -v 'example\.com\|example\.internal\|test\.example' \
+            | grep -v 'example\.com\|example\.internal\|test\.example\|DC=test\|DC=example' \
             | grep -v 'publication-review' \
             | grep -v 'startswith.*ldaps\|match.*ldaps\|ldaps://' \
             || true)

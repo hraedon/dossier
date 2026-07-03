@@ -9,7 +9,22 @@ Covers:
 
 from __future__ import annotations
 
+import pytest
+
 from conftest import extract_csrf as _extract_csrf, login as _login
+
+_ALICE_ID = "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.fixture
+def admin_env(monkeypatch):
+    monkeypatch.setenv("DOSSIER_ADMIN_IDS", _ALICE_ID)
+    from dossier.app import _configure_admin_ids
+
+    _configure_admin_ids()
+    yield
+    monkeypatch.delenv("DOSSIER_ADMIN_IDS", raising=False)
+    _configure_admin_ids()
 
 
 def test_landing_shows_unassigned_owner(client):
@@ -48,7 +63,7 @@ def test_project_index_shows_unassigned(client):
     assert "unassigned" in resp.text
 
 
-def test_set_owner_post_updates_catalog(client, gateway):
+def test_set_owner_post_updates_catalog(client, gateway, admin_env):
     """POST to /p/{project}/owner updates the project's owner."""
     _login(client)
     page = client.get("/p/dossier-test")
@@ -66,7 +81,7 @@ def test_set_owner_post_updates_catalog(client, gateway):
     assert entry.owner_actor_id == "carol-id"
 
 
-def test_set_owner_clear_with_empty_string(client, gateway):
+def test_set_owner_clear_with_empty_string(client, gateway, admin_env):
     """Posting an empty owner_actor_id clears the owner."""
     _login(client)
     gateway.register_project_metadata(owner_actor_id="alice", created_by="admin")
@@ -108,7 +123,20 @@ def test_set_owner_requires_auth(client):
     assert resp.headers["location"] == "/login"
 
 
-def test_owner_persists_across_requests(client, gateway):
+def test_set_owner_requires_admin(client):
+    """POST by a non-admin user is rejected with 403."""
+    _login(client)
+    page = client.get("/p/dossier-test")
+    csrf = _extract_csrf(page.text)
+    resp = client.post(
+        "/p/dossier-test/owner",
+        data={"owner_actor_id": "evil", "csrf_token": csrf},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+
+
+def test_owner_persists_across_requests(client, gateway, admin_env):
     """Owner set via POST is visible on subsequent landing page loads."""
     _login(client)
     page = client.get("/p/dossier-test")
