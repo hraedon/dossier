@@ -114,6 +114,11 @@ def create_app(
         last_event_time=web.last_event_time,
         kind_badge=web.kind_badge,
         project_to_slug=project_to_slug,
+        link_target_url=web.link_target_url,
+        link_target_label=web.link_target_label,
+        is_cross_project_link=web.is_cross_project_link,
+        owner_display=web.owner_display,
+        project_display_name=web.project_display_name,
     )
     app.state.templates = templates
 
@@ -168,8 +173,10 @@ def create_app(
         return [web.transition_tuple(t) for t in tdefs]
 
     @app.get("/healthz")
-    def healthz() -> dict[str, bool]:
-        return {"ok": True}
+    def healthz() -> dict[str, Any]:
+        from .health import build_health
+
+        return build_health(settings, registry)
 
     @app.get("/csrf")
     def get_csrf(request: Request) -> dict[str, str]:
@@ -289,13 +296,16 @@ def create_app(
                 gw = registry.get(project)
                 page = gw.list_issues(current_states=_OPEN_STATES)
                 count = len(page.items)
+                catalog_entry = gw.get_project_catalog_entry()
             except Exception:
                 logger.warning("landing: project %s unreachable", project, exc_info=True)
                 count = 0
+                catalog_entry = None
             project_rows.append({
                 "slug": project_to_slug(project),
                 "name": project,
                 "open_count": count,
+                "catalog_entry": catalog_entry,
             })
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
@@ -316,6 +326,7 @@ def create_app(
     ) -> Response:
         gw = resolve_gateway(project)
         page = gw.list_issues(current_states=states, assignee=assignee)
+        catalog_entry = gw.get_project_catalog_entry()
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
@@ -327,6 +338,7 @@ def create_app(
                 "filter_states": states or [],
                 "filter_assignee": assignee or "",
                 "project_slug": project,
+                "catalog_entry": catalog_entry,
             },
         )
 
@@ -411,6 +423,7 @@ def create_app(
         events = gw.history(work_item_id)
         transitions = transitions_for(gw, wi)
         integrity = gw.integrity(work_item_id=work_item_id)
+        links = gw.list_links(work_item_id)
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
         return templates.TemplateResponse(
@@ -423,6 +436,7 @@ def create_app(
                 "transitions": transitions,
                 "integrity_drift": integrity.replayed_drift,
                 "project_slug": project,
+                "links": links,
                 "error": None,
             },
         )
@@ -461,6 +475,7 @@ def create_app(
             events = gw.history(work_item_id)
             transitions = transitions_for(gw, wi)
             integrity = gw.integrity(work_item_id=work_item_id)
+            links = gw.list_links(work_item_id)
             ctx = actor_context(request, actor)
             ctx["current_project"] = slug_to_project(project)
             return templates.TemplateResponse(
@@ -473,6 +488,7 @@ def create_app(
                     "transitions": transitions,
                     "integrity_drift": integrity.replayed_drift,
                     "project_slug": project,
+                    "links": links,
                     "error": exc.message,
                 },
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -498,6 +514,31 @@ def create_app(
             gw.comment(actor=actor, work_item_id=work_item_id, body=body)
         return RedirectResponse(
             url=f"/p/{project}/issues/{work_item_id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+
+    @app.post("/p/{project}/owner")
+    async def set_owner_route(
+        project: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        gw = resolve_gateway(project)
+        form = await request.form()
+        owner = str(form.get("owner_actor_id", "")).strip()
+        try:
+            gw.set_project_owner(
+                owner_actor_id=owner or None,
+                updated_by=actor.actor_id,
+            )
+        except RegistaError:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "failed to update project owner",
+            )
+        return RedirectResponse(
+            url=f"/p/{project}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 

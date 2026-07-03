@@ -1,11 +1,37 @@
 from __future__ import annotations
 
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Literal, cast
 
 _TRUE = {"1", "true", "yes"}
 _FALSE = {"0", "false", "no"}
+
+
+def _resolve_env(
+    canonical: str,
+    legacy: str,
+    *,
+    default: str = "",
+) -> str:
+    """Prefer the canonical suite var, fall back to the legacy dossier var.
+
+    Emits a DeprecationWarning when only the legacy var is set so operators
+    know to migrate. When both are set, the canonical wins silently.
+    """
+    canonical_val = os.environ.get(canonical, "")
+    if canonical_val.strip():
+        return canonical_val
+    legacy_val = os.environ.get(legacy, "")
+    if legacy_val.strip():
+        warnings.warn(
+            f"{legacy} is deprecated; use {canonical} (the suite-wide name).",
+            DeprecationWarning,
+            stacklevel=3,
+        )
+        return legacy_val
+    return default
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +82,9 @@ def _require(name: str, value: str) -> str:
 
 
 def load_settings(strict: bool = True) -> Settings:
-    database_url = os.environ.get("DOSSIER_DATABASE_URL", "")
+    database_url = _resolve_env("REGISTA_DSN", "DOSSIER_DATABASE_URL")
     project = os.environ.get("DOSSIER_PROJECT", "dossier")
-    hmac_key_path = os.environ.get("DOSSIER_HMAC_KEY_PATH", "")
+    hmac_key_path = _resolve_env("REGISTA_KEY_PATH", "DOSSIER_HMAC_KEY_PATH")
     session_secret = os.environ.get("DOSSIER_SESSION_SECRET", "")
     session_max_age_raw = os.environ.get("DOSSIER_SESSION_MAX_AGE_SECONDS", "43200")
     secure_cookies_raw = os.environ.get("DOSSIER_SECURE_COOKIES", "true")
@@ -71,8 +97,8 @@ def load_settings(strict: bool = True) -> Settings:
         )
 
     if strict:
-        _require("DOSSIER_DATABASE_URL", database_url)
-        _require("DOSSIER_HMAC_KEY_PATH", hmac_key_path)
+        _require("REGISTA_DSN (or DOSSIER_DATABASE_URL)", database_url)
+        _require("REGISTA_KEY_PATH (or DOSSIER_HMAC_KEY_PATH)", hmac_key_path)
         _require("DOSSIER_SESSION_SECRET", session_secret)
         if len(session_secret) < 32:
             raise RuntimeError(

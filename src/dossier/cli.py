@@ -24,9 +24,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
     settings = load_settings(strict=False)
     required = {
-        "DOSSIER_DATABASE_URL": settings.database_url,
+        "REGISTA_DSN (or DOSSIER_DATABASE_URL)": settings.database_url,
         "DOSSIER_PROJECT": settings.project,
-        "DOSSIER_HMAC_KEY_PATH": settings.hmac_key_path,
+        "REGISTA_KEY_PATH (or DOSSIER_HMAC_KEY_PATH)": settings.hmac_key_path,
     }
     missing = [name for name, value in required.items() if not value]
     if missing:
@@ -75,6 +75,37 @@ def _cmd_users_add(args: argparse.Namespace) -> int:
     record = LocalBackend.add_user(path, args.username, args.display_name, password)
     print(f"Added user {args.username!r} ({record['stable_id']}) -> {path}")
     return 0
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    import json
+
+    from .config import load_settings
+    from .health import build_health
+    from .multi import GatewayRegistry
+
+    settings = load_settings(strict=False)
+
+    known_projects: list[str]
+    projects_raw = args.projects or os.environ.get("DOSSIER_PROJECTS", settings.project)
+    known_projects = [p.strip() for p in projects_raw.split(",") if p.strip()]
+
+    registry = GatewayRegistry(settings=settings, known_projects=known_projects)
+    health = build_health(settings, registry)
+    registry.close_all()
+
+    if args.json:
+        print(json.dumps(health, indent=2))
+    else:
+        print(f"dossier {health['version']} — component health")
+        regista = health["regista"]
+        print(f"  regista: reachable={regista['reachable']} project={regista['project']} chain_ok={regista['chain_ok']}")
+        for check in health["checks"]:
+            detail = f" — {check['detail']}" if check.get("detail") else ""
+            print(f"  {check['name']}: {check['status']}{detail}")
+
+    failed = [c for c in health["checks"] if c["status"] == "fail"]
+    return 1 if failed else 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
@@ -171,6 +202,11 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8000)
     serve_parser.set_defaults(func=_cmd_serve)
+
+    doctor_parser = subparsers.add_parser("doctor")
+    doctor_parser.add_argument("--json", action="store_true", help="Output JSON in the suite health shape")
+    doctor_parser.add_argument("--projects", default=None, help="Comma-separated project list (default: from env)")
+    doctor_parser.set_defaults(func=_cmd_doctor)
 
     parsed = parser.parse_args(argv)
     func: Callable[[argparse.Namespace], int] | None = getattr(parsed, "func", None)

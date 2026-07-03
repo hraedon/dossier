@@ -167,6 +167,38 @@ class RegistaGateway:
     def history(self, work_item_id: uuid.UUID) -> list[Event]:
         return cast(list[Event], self._reg.read_events(work_item_id=work_item_id, limit=10_000))
 
+    def list_links(self, work_item_id: uuid.UUID) -> list[Any]:
+        """Return all live (non-removed) links from *work_item_id*.
+
+        Used by Plan 011 WI-4 (cross-project reference rendering) to show
+        outbound value-references as navigable links in the issue detail view.
+        """
+        if hasattr(self._reg, "list_links"):
+            return cast(list[Any], self._reg.list_links(work_item_id))
+        return []
+
+    def get_project_catalog_entry(self) -> Any | None:
+        """Return this project's catalog row (owner, display_name), or None."""
+        if hasattr(self._reg, "get_project_catalog_entry"):
+            return self._reg.get_project_catalog_entry()
+        return None
+
+    def set_project_owner(self, owner_actor_id: str | None, *, updated_by: str | None = None) -> Any:
+        """Set or clear the owner for this project (Plan 012 WI-4)."""
+        if hasattr(self._reg, "set_project_owner"):
+            return self._reg.set_project_owner(owner_actor_id, updated_by=updated_by)
+        return None
+
+    def register_project_metadata(
+        self, *, display_name: str | None = None, owner_actor_id: str | None = None, created_by: str | None = None
+    ) -> Any | None:
+        """Insert or update this project's catalog row (Plan 012 WI-4)."""
+        if hasattr(self._reg, "register_project_metadata"):
+            return self._reg.register_project_metadata(
+                display_name=display_name, owner_actor_id=owner_actor_id, created_by=created_by
+            )
+        return None
+
     def integrity(self, work_item_id: uuid.UUID | None = None) -> ReplayReport:
         return cast(ReplayReport, self._reg.replay(work_item_id=work_item_id))
 

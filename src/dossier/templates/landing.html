@@ -11,6 +11,7 @@
     <thead>
       <tr>
         <th>project</th>
+        <th>owner</th>
         <th class="tnum">open items</th>
       </tr>
     </thead>
@@ -18,6 +19,7 @@
       {% for p in project_rows %}
       <tr>
         <td><a href="/p/{{ p.slug }}">{{ p.name }}</a></td>
+        <td class="mono">{{ owner_display(p.catalog_entry) }}</td>
         <td class="mono tnum">{{ p.open_count }}</td>
       </tr>
       {% endfor %}

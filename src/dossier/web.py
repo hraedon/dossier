@@ -159,5 +159,54 @@ def last_event_time(issue: WorkItem) -> str:
     return format_timestamp(ts)
 
 
+def link_target_url(link: Any, current_project_slug: str) -> str:
+    """Build a navigable URL for a link's target work item.
+
+    Intra-project links stay within the current project's URL space.
+    Cross-project links (``target_project`` set) route to the other
+    project's schema (hyphens in slugs, per :func:`multi.project_to_slug`).
+    """
+    target_project = getattr(link, "target_project", None)
+    to_id = getattr(link, "to_work_item_id", "")
+    if target_project:
+        slug = target_project.replace("_", "-")
+    else:
+        slug = current_project_slug
+    return f"/p/{slug}/issues/{to_id}"
+
+
+def link_target_label(link: Any, issues_by_id: dict[str, Any] | None = None) -> str:
+    """A human-readable label for a link target.
+
+    If the target work item is in the same project and present in
+    *issues_by_id*, use its display key + title; otherwise fall back to
+    a truncated UUID or the target project name.
+    """
+    target_project = getattr(link, "target_project", None)
+    to_id = getattr(link, "to_work_item_id", None)
+    if target_project:
+        return f"{target_project.replace('_', '-')} / {str(to_id)[:8]}"
+    if issues_by_id and to_id in issues_by_id:
+        issue = issues_by_id[to_id]
+        return f"{display_key(issue)} — {issue_title(issue)}"
+    return str(to_id)[:8] if to_id else "—"
+
+
+def is_cross_project_link(link: Any) -> bool:
+    return getattr(link, "target_project", None) is not None
+
+
+def owner_display(entry: Any) -> str:
+    """Return the owner's actor_id, or 'unassigned' if no owner set."""
+    owner = getattr(entry, "owner_actor_id", None) if entry else None
+    return str(owner) if owner else "unassigned"
+
+
+def project_display_name(entry: Any, fallback: str) -> str:
+    """Return display_name from the catalog entry, or *fallback*."""
+    name = getattr(entry, "display_name", None) if entry else None
+    return str(name) if name else fallback
+
+
 def kind_badge(actor: Actor) -> str:
     return str(actor.actor_kind)

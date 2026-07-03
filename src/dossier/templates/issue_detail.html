@@ -21,6 +21,23 @@
 </div>
 {% endif %}
 
+{% if links %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">linked items</div>
+  <ul class="ds-link-list">
+    {% for link in links %}
+    <li>
+      <a href="{{ link_target_url(link, project_slug) }}" class="ds-link-item {% if is_cross_project_link(link) %}ds-link-item--cross{% endif %}">
+        <span class="ds-link-item__type mono">{{ link.link_type }}</span>
+        <span class="ds-link-item__target mono">{{ link_target_label(link) }}</span>
+        {% if is_cross_project_link(link) %}<span class="ds-chip ds-chip--cross">cross-project</span>{% endif %}
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 {% if error %}
 <div class="ds-callout ds-callout--crit">{{ error }}</div>
 {% endif %}

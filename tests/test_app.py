@@ -6,7 +6,11 @@ import pytest
 def test_healthz_ok(client):
     resp = client.get("/healthz")
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True}
+    body = resp.json()
+    assert body["component"] == "dossier"
+    assert "version" in body
+    assert "regista" in body
+    assert "checks" in body
 
 
 def test_me_without_login_is_401(client):
@@ -74,11 +78,53 @@ def test_login_rotates_csrf_token(client):
 def test_load_settings_rejects_short_session_secret(monkeypatch):
     from dossier.config import load_settings
 
-    monkeypatch.setenv("DOSSIER_DATABASE_URL", "postgresql://x/x")
-    monkeypatch.setenv("DOSSIER_HMAC_KEY_PATH", "/x")
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://x/x")
+    monkeypatch.setenv("REGISTA_KEY_PATH", "/x")
     monkeypatch.setenv("DOSSIER_SESSION_SECRET", "short")
     with pytest.raises(RuntimeError):
         load_settings(strict=True)
+
+
+def test_config_prefers_regista_dsn_over_dossier_database_url(monkeypatch):
+    from dossier.config import load_settings
+
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://canonical/x")
+    monkeypatch.setenv("DOSSIER_DATABASE_URL", "postgresql://legacy/x")
+    monkeypatch.setenv("REGISTA_KEY_PATH", "/x")
+    monkeypatch.setenv("DOSSIER_SESSION_SECRET", "a" * 40)
+    settings = load_settings(strict=True)
+    assert settings.database_url == "postgresql://canonical/x"
+
+
+def test_config_falls_back_to_dossier_database_url_with_warning(monkeypatch):
+    from dossier.config import load_settings
+
+    monkeypatch.delenv("REGISTA_DSN", raising=False)
+    monkeypatch.setenv("DOSSIER_DATABASE_URL", "postgresql://legacy/x")
+    monkeypatch.delenv("REGISTA_KEY_PATH", raising=False)
+    monkeypatch.setenv("DOSSIER_HMAC_KEY_PATH", "/legacy-keys")
+    monkeypatch.setenv("DOSSIER_SESSION_SECRET", "a" * 40)
+    with pytest.warns(DeprecationWarning):
+        settings = load_settings(strict=True)
+    assert settings.database_url == "postgresql://legacy/x"
+    assert settings.hmac_key_path == "/legacy-keys"
+
+
+def test_config_canonical_only_no_warning(monkeypatch):
+    from dossier.config import load_settings
+
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://canonical/x")
+    monkeypatch.delenv("DOSSIER_DATABASE_URL", raising=False)
+    monkeypatch.setenv("REGISTA_KEY_PATH", "/canonical-keys")
+    monkeypatch.delenv("DOSSIER_HMAC_KEY_PATH", raising=False)
+    monkeypatch.setenv("DOSSIER_SESSION_SECRET", "a" * 40)
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        settings = load_settings(strict=True)
+    assert settings.database_url == "postgresql://canonical/x"
+    assert settings.hmac_key_path == "/canonical-keys"
 
 
 def test_login_without_csrf_after_session_is_403(client):

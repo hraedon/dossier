@@ -2,8 +2,24 @@
 {% block title %}issues — {{ project_slug }} — dossier{% endblock %}
 {% block content %}
 <div class="ds-pagehead">
-  <h1 class="ds-pagehead__title">{{ project_slug }} — issues</h1>
+  <div>
+    <h1 class="ds-pagehead__title">{{ project_slug }} — issues</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">owner: {{ owner_display(catalog_entry) }}</span>
+    </div>
+  </div>
   <a href="/p/{{ project_slug }}/issues/new" class="ds-btn ds-btn--primary">new issue</a>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <form method="post" action="/p/{{ project_slug }}/owner" class="ds-form ds-form--inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-field ds-field--inline">
+      <label class="ds-label" for="owner-input">set owner</label>
+      <input class="ds-input ds-input--sm" type="text" id="owner-input" name="owner_actor_id" placeholder="actor_id" value="{{ owner_display(catalog_entry) if owner_display(catalog_entry) != 'unassigned' else '' }}">
+    </div>
+    <button type="submit" class="ds-btn ds-btn--ghost">update</button>
+  </form>
 </div>
 
 <form method="get" action="/p/{{ project_slug }}" class="ds-filters">

@@ -53,7 +53,9 @@ def gateway(tmp_path):
     reg = InMemoryRegista(project=_PROJECT, hmac_key_path=str(key_path))
     gw = RegistaGateway(reg, project_name=_PROJECT)
     gw.register_workflow()
+    InMemoryRegista._catalog.clear()
     yield gw
+    InMemoryRegista._catalog.clear()
     gw.close()
 
 
