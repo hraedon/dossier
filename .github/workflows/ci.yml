@@ -110,14 +110,16 @@ jobs:
 
       - name: Read regista pin from SUITE.lock
         id: pin
-        run: echo "ref=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "ref=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+          echo "version=$(grep 'version:' SUITE.lock | head -1 | awk '{print $2}' | tr -d '"')" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         run: |
           docker build \
             --build-arg REGISTA_REF=${{ steps.pin.outputs.ref }} \
             -t ghcr.io/hraedon/dossier:latest \
-            -t ghcr.io/hraedon/dossier:$(grep 'version:' SUITE.lock | head -1 | awk '{print $2}')-${{ steps.pin.outputs.ref }} \
+            -t ghcr.io/hraedon/dossier:${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.ref }} \
             .
 
       - name: Push image
@@ -125,4 +127,4 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker push ghcr.io/hraedon/dossier:latest
-          docker push ghcr.io/hraedon/dossier:$(grep 'version:' SUITE.lock | head -1 | awk '{print $2}')-${{ steps.pin.outputs.ref }}
+          docker push ghcr.io/hraedon/dossier:${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.ref }}
