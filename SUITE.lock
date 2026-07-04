@@ -8,7 +8,7 @@ version: "0.0.1"
 python: "3.13"
 
 regista:
-  ref: 3613d95432548e81596183659c08d80d354843d1
+  ref: d7d156c3841f7d0137c91be2f0558e697c35f4cc
   source: github.com/hraedon/regista
   # Pin to a commit SHA, never a branch. The face and the spine version
   # are a known-good pair recorded here.

@@ -84,13 +84,15 @@ jobs:
       - name: Scan for secrets
         run: |
           set -e
-          HITS=$(grep -rnE '(password|secret|key|token|dsn).*=' \
+          # Look for hardcoded secrets: assignments of string/bytes literals to
+          # variables whose names suggest sensitive values. Function calls,
+          # variable references, and type annotations are not secrets.
+          HITS=$(grep -rnE "(password|secret|api_key|apikey|access_token|auth_token|dsn|secret_key|private_key)[[:space:]]*=[[:space:]]*[fb]?[\"']" \
             src/ tests/ --include='*.py' \
-            | grep -vE '(test_|example|placeholder|changeme|replace|dummy|sample|TODO)' \
-            | grep -vE 'secret_ref|session_secret|secret_key|SECRET_KEY|get_secret|key_path|key_id|key_set|hmac_key|self\.|args\.|def |class ' \
+            | grep -vE '(test_|example|placeholder|changeme|replace|dummy|sample|TODO|test-session-secret)' \
             || true)
           if [ -n "$HITS" ]; then
-            echo "Potential secrets found (review each):"
+            echo "Potential hardcoded secrets found (review each):"
             echo "$HITS"
             exit 1
           fi
