@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, cast
 
 _TRUE = {"1", "true", "yes"}
@@ -45,6 +46,7 @@ class Settings:
     require_ssl: bool
     users_path: str
     auth_backend: Literal["local", "ldap"]
+    principal_key_dir: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +98,10 @@ def load_settings(strict: bool = True) -> Settings:
             f"DOSSIER_AUTH_BACKEND must be 'local' or 'ldap', got {auth_backend!r}"
         )
 
+    principal_key_dir = os.environ.get("DOSSIER_PRINCIPAL_KEY_DIR", "")
+    if not principal_key_dir and hmac_key_path:
+        principal_key_dir = str(Path(hmac_key_path).parent / "principals")
+
     if strict:
         _require("REGISTA_DSN (or DOSSIER_DATABASE_URL)", database_url)
         _require("REGISTA_KEY_PATH (or DOSSIER_HMAC_KEY_PATH)", hmac_key_path)
@@ -125,6 +131,7 @@ def load_settings(strict: bool = True) -> Settings:
         require_ssl=require_ssl,
         users_path=users_path,
         auth_backend=cast(Literal["local", "ldap"], auth_backend),
+        principal_key_dir=principal_key_dir,
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import secrets
+import logging
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -25,8 +25,11 @@ from .auth.throttle import LoginThrottler, _normalize_identifier
 from .authz import can_read_project
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
+from .keys import PrincipalKeyManager
 from .multi import GatewayRegistry, project_to_slug, slug_to_project
 from . import web
+
+logger = logging.getLogger("dossier.app")
 
 _ACTOR_SESSION_KEY = "actor"
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -128,6 +131,8 @@ def create_app(
     app.state.settings = settings
     app.state.registry = registry
     app.state.backend = backend
+    key_mgr = PrincipalKeyManager(settings.principal_key_dir or None)
+    app.state.key_manager = key_mgr
     throttler = LoginThrottler()
 
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -761,12 +766,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        # TODO(Plan 026 integration): In production, the secret backend generates
-        # the Ed25519 keypair and returns only the public key. This random-bytes
-        # stub is for v1 testing only — it is NOT a valid Ed25519 public key and
-        # signature verification against it will fail. Replace with a call to the
-        # secret-backend key generation API when deployed.
-        new_public_key = secrets.token_bytes(32)
+        new_public_key = key_mgr.generate_and_store(actor.actor_id)
 
         success_count = 0
         errors: list[str] = []
@@ -782,6 +782,13 @@ def create_app(
                     success_count += 1
             except Exception as exc:
                 errors.append(f"{project}: {exc}")
+
+        if errors:
+            logger.warning("key.rotation_partial_failure", extra={
+                "actor_id": actor.actor_id,
+                "success_count": success_count,
+                "errors": errors,
+            })
 
         if success_count == 0:
             raise HTTPException(
@@ -891,12 +898,10 @@ def create_app(
         if not principal_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "principal_id is required")
 
-        # TODO(Plan 026 integration): In production, the secret backend generates
-        # the Ed25519 keypair and returns only the public key. This random-bytes
-        # stub is for v1 testing only — it is NOT a valid Ed25519 public key and
-        # signature verification against it will fail. Replace with a call to the
-        # secret-backend key generation API when deployed.
-        public_key = secrets.token_bytes(32)
+        try:
+            new_public_key = key_mgr.generate_and_store(principal_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
         success_count = 0
         errors: list[str] = []
@@ -906,12 +911,20 @@ def create_app(
             try:
                 gw = registry.get(project)
                 result = gw.register_principal(
-                    principal_id, public_key, registered_by=actor.actor_id
+                    principal_id, new_public_key, registered_by=actor.actor_id
                 )
                 if result:
                     success_count += 1
             except Exception as exc:
                 errors.append(f"{project}: {exc}")
+
+        if errors:
+            logger.warning("key.enrollment_partial_failure", extra={
+                "principal_id": principal_id,
+                "actor_id": actor.actor_id,
+                "success_count": success_count,
+                "errors": errors,
+            })
 
         if success_count == 0:
             raise HTTPException(
@@ -977,10 +990,10 @@ def create_app(
         require_admin(actor)
         form = await request.form()
         principal_id = str(form.get("principal_id", "")).strip()
-        reason = str(form.get("reason", "")).strip()
+        raw_reason = str(form.get("reason", "")).strip()
         confirmer_id = str(form.get("confirmer_id", "")).strip()
 
-        if not principal_id or not reason or not confirmer_id:
+        if not principal_id or not raw_reason or not confirmer_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "all fields are required")
 
         if confirmer_id == actor.actor_id:
@@ -995,11 +1008,69 @@ def create_app(
                 "confirmer must be an admin",
             )
 
+        reason = " ".join(raw_reason.split())[:500]
+
         # v1 dual-control simplification: the confirmer_id is checked against the
         # admin set but the second admin does not actively confirm in their own
         # session. v1.5 will implement a two-step flow where the confirmer must
         # approve via a separate authenticated request. This is documented in
-        # Plan 015 WI-2.3.
+        # Plan 015 WI-2.3. Until then, the dual-control check provides attestation
+        # (who approved) but not authentication (that they actually did). This is
+        # a known gap; do not rely on it for security in production.
+
+        try:
+            new_public_key = key_mgr.generate_and_store(principal_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+        success_count = 0
+        errors: list[str] = []
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                existing = gw.get_principal_key(principal_id)
+                if existing:
+                    gw.revoke_principal(
+                        principal_id,
+                        existing["key_id"],
+                        reason=f"break-glass: {reason}",
+                    )
+                gw.register_principal(
+                    principal_id,
+                    new_public_key,
+                    registered_by=actor.actor_id,
+                )
+                success_count += 1
+            except Exception as exc:
+                errors.append(f"{project}: {exc}")
+
+        if errors:
+            logger.warning("break_glass.partial_failure", extra={
+                "principal_id": principal_id,
+                "actor_id": actor.actor_id,
+                "success_count": success_count,
+                "errors": errors,
+            })
+
+        if success_count == 0:
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                "break-glass key rotation failed",
+            )
+
+        logger.warning(
+            "break_glass.executed",
+            extra={
+                "principal_id": principal_id,
+                "actor_id": actor.actor_id,
+                "confirmer_id": confirmer_id,
+                "reason": reason,
+                "projects_succeeded": success_count,
+                "errors": errors,
+            },
+        )
 
         return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
 

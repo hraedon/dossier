@@ -17,6 +17,7 @@ def _settings(tmp_path) -> Settings:
         require_ssl=False,
         users_path=str(tmp_path / "users.json"),
         auth_backend="local",
+        principal_key_dir=str(tmp_path / "principals"),
     )
 
 

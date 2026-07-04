@@ -70,6 +70,7 @@ def _settings(tmp_path):
         require_ssl=False,
         users_path="",
         auth_backend="local",
+        principal_key_dir=str(tmp_path / "principals"),
     )
 
 
