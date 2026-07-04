@@ -115,13 +115,20 @@ docker compose up -d postgres
 
 ## Configuration
 
+dossier reads the shared **suite config** on startup: if
+`$AGENT_SUITE_CONFIG` is set (or `~/.config/agent-suite/suite.env` or
+`/etc/agent-suite/suite.env` exists), it is loaded and any keys not already in
+the process environment are injected. Precedence: process env > suite.env >
+tool default. This lets you set `REGISTA_DSN` / `REGISTA_KEY_PATH` once in
+`suite.env` and have every suite component pick them up.
+
 Copy `.env.example` to `.env` (`.env` is gitignored) and fill in real values.
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DOSSIER_DATABASE_URL` | yes | — | Postgres DSN passed to regista |
+| `REGISTA_DSN` | yes | — | Postgres DSN passed to regista (canonical; `DOSSIER_DATABASE_URL` alias deprecated) |
 | `DOSSIER_PROJECT` | no | `dossier` | regista project/schema name |
-| `DOSSIER_HMAC_KEY_PATH` | yes | — | path to the regista HMAC keyset JSON |
+| `REGISTA_KEY_PATH` | yes | — | path to the regista HMAC keyset JSON (canonical; `DOSSIER_HMAC_KEY_PATH` alias deprecated) |
 | `DOSSIER_SESSION_SECRET` | yes | — | secret for itsdangerous signed session cookies |
 | `DOSSIER_SESSION_MAX_AGE_SECONDS` | no | `43200` | signed session cookie lifetime |
 | `DOSSIER_SECURE_COOKIES` | no | `true` | set `false` only for local dev without TLS |
@@ -134,7 +141,7 @@ Copy `.env.example` to `.env` (`.env` is gitignored) and fill in real values.
 You can point dossier at an existing Postgres server instead of the local
 compose container.
 
-- `DOSSIER_DATABASE_URL` is handed directly to regista as its `dsn`. Use a
+- `REGISTA_DSN` is handed directly to regista as its `dsn`. Use a
   fully-qualified URL such as
   `postgresql://dossier:replace-me@db.example.internal:5432/dossier_owner`.
 - `DOSSIER_PROJECT` becomes the Postgres schema name. One regista project lives in
@@ -164,7 +171,7 @@ needs read/write rights within its own schema; restrict further with
 
 Use two layers:
 
-1. Psycopg TLS: add `?sslmode=require` (or `verify-full`) to `DOSSIER_DATABASE_URL`
+1. Psycopg TLS: add `?sslmode=require` (or `verify-full`) to `REGISTA_DSN`
    so the client refuses plaintext.
 2. regista-level enforcement: set `DOSSIER_REQUIRE_SSL=true`. When the app factory
    passes `require_ssl=True` to regista, regista checks `pg_stat_ssl` on every
@@ -192,7 +199,7 @@ mkdir -p /run/secrets
 chmod 600 /run/secrets/dossier-keys.json
 ```
 
-Set `DOSSIER_HMAC_KEY_PATH=/run/secrets/dossier-keys.json` and keep the file on
+Set `REGISTA_KEY_PATH=/run/secrets/dossier-keys.json` and keep the file on
 a secrets volume. The file is created with mode `0o600` by default.
 
 ### First run

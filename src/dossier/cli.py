@@ -212,6 +212,10 @@ def _charter(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .config import load_suite_env
+
+    load_suite_env()
+
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] in {"-V", "--version", "version"}:
         print(f"dossier {__version__}")

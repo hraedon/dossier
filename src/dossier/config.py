@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import stat
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +10,115 @@ from typing import Literal, cast
 
 _TRUE = {"1", "true", "yes"}
 _FALSE = {"0", "false", "no"}
+
+_EXPORT_RE = re.compile(r"^export\s+")
+
+_BLOCKED_KEYS = frozenset({
+    "PATH", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+    "LD_LIBRARY_PATH", "LD_PRELOAD", "DYLD_LIBRARY_PATH",
+    "SHLIB_PATH", "LIBPATH",
+})
+
+_SUITE_ENV_LOADED = False
+
+
+def load_suite_env() -> None:
+    """Load the shared suite config file into ``os.environ``.
+
+    The suite-wide config file (``suite.env``) is sourced once at startup,
+    before any settings are resolved.  Only keys that are **not already set**
+    in the process environment are injected, so explicit process env always
+    wins (blueprint §2.1 precedence: process env > suite.env > tool default).
+
+    Resolution order for the file path:
+      1. ``$AGENT_SUITE_CONFIG`` (explicit path; an explicit-but-missing file
+         is an error, not silently skipped)
+      2. ``~/.config/agent-suite/suite.env`` (per-user default)
+      3. ``/etc/agent-suite/suite.env`` (system-wide default)
+
+    Missing default-path files are silently skipped — the suite file is
+    optional.  The function is idempotent (guarded by a module-level flag).
+    """
+    global _SUITE_ENV_LOADED
+    if _SUITE_ENV_LOADED:
+        return
+    _SUITE_ENV_LOADED = True
+
+    explicit = os.environ.get("AGENT_SUITE_CONFIG", "")
+    if explicit:
+        if not os.path.isfile(explicit):
+            raise FileNotFoundError(
+                f"AGENT_SUITE_CONFIG points to {explicit!r}, which does not exist."
+            )
+        _inject_env_file(explicit)
+        return
+
+    xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    for path in (
+        f"{xdg}/agent-suite/suite.env",
+        "/etc/agent-suite/suite.env",
+    ):
+        if os.path.isfile(path):
+            _inject_env_file(path)
+            return
+
+
+def _inject_env_file(path: str) -> None:
+    """Parse a KEY=VALUE file and inject unset keys into ``os.environ``.
+
+    Refuses world-writable or group-writable files and symlinks.
+    """
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        st = os.fstat(fd)
+        if st.st_mode & stat.S_IWOTH:
+            raise PermissionError(
+                f"Refusing to load world-writable suite env file: {path}"
+            )
+        with os.fdopen(fd, encoding="utf-8-sig") as f:
+            for line in f:
+                _parse_env_line(line)
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def _parse_env_line(line: str) -> None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return
+    stripped = _EXPORT_RE.sub("", stripped, count=1)
+    if "=" not in stripped:
+        return
+    key, sep, raw_value = stripped.partition("=")
+    key = key.strip()
+    if not key or not sep:
+        return
+    if key in _BLOCKED_KEYS:
+        return
+    value = _strip_value(raw_value.strip())
+    if key not in os.environ:
+        os.environ[key] = value
+
+
+def _strip_value(raw: str) -> str:
+    """Strip surrounding quotes and trailing inline comments from *raw*.
+
+    Quoted values are returned verbatim (minus the quotes); inline comments
+    are only stripped from unquoted values to avoid corrupting quoted content.
+    """
+    if not raw:
+        return raw
+    if len(raw) >= 2 and raw[0] in ("'", '"'):
+        close = raw.rfind(raw[0])
+        if close > 0:
+            return raw[1:close]
+    inline_comment = raw.find(" #")
+    if inline_comment != -1:
+        raw = raw[:inline_comment].rstrip()
+    return raw
 
 
 def _resolve_env(

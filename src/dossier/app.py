@@ -80,9 +80,6 @@ def _configure_admin_ids() -> None:
     _ADMIN_ACTOR_IDS.update(ids)
 
 
-_configure_admin_ids()
-
-
 async def _credential_login(
     request: Request, backend: CredentialBackend
 ) -> tuple[Principal | None, bool]:
@@ -127,6 +124,7 @@ def create_app(
     part) is stable and immutable. This is the G1 invariant
     (``docs/provenance-model.md``).
     """
+    _configure_admin_ids()
     app = FastAPI(title="dossier")
     app.state.settings = settings
     app.state.registry = registry

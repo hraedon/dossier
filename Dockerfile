@@ -6,34 +6,62 @@
 # The regista pin is explicit and matches SUITE.lock. Update both together.
 
 ARG PYTHON_VERSION=3.13
-FROM python:${PYTHON_VERSION}-slim AS base
+ARG REGISTA_REF=d7d156c3841f7d0137c91be2f0558e697c35f4cc
 
+# ── Stage 1: builder ─────────────────────────────────────────────────────────
+# git is needed here to pip-install regista from a pinned SHA but does NOT
+# carry into the runtime image (WI-013).
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ARG REGISTA_REF
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# regista pin — must match SUITE.lock
-ARG REGISTA_REF=3613d95432548e81596183659c08d80d354843d1
-ENV REGISTA_REF=${REGISTA_REF}
-
-# System deps: git for pip install from git, libpq5 for psycopg at runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
-        libpq5 \
+        build-essential \
+        libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install regista from the pinned SHA, then dossier as a wheel (not editable)
+# Build into a virtualenv that we copy wholesale into the runtime image.
+RUN python -m venv /venv
+ENV PATH="/venv/bin:$PATH"
+
+# Install regista from the pinned SHA, then dossier.
 RUN pip install "regista @ git+https://github.com/hraedon/regista.git@${REGISTA_REF}"
 
 COPY pyproject.toml .
 COPY src/ src/
 RUN pip install ".[auth-ldap]"
 
-# Non-root user for the runtime
-RUN useradd -r -s /usr/sbin/nologin dossier
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG REGISTA_REF
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    REGISTA_REF=${REGISTA_REF} \
+    PATH="/venv/bin:$PATH"
+
+# Only the shared libpq library is needed at runtime — no git, no compilers.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -r -s /usr/sbin/nologin dossier
+
+COPY --from=builder /venv /venv
+
+# Smoke test: verify imports resolve in the runtime image before entrypoint.
+RUN python -c "import dossier, regista, uvicorn, itsdangerous" && dossier --version
+
+WORKDIR /app
+
 USER dossier
 
 EXPOSE 8000
