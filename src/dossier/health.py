@@ -6,7 +6,7 @@ from . import __version__
 from .config import Settings
 from .multi import GatewayRegistry
 
-CheckStatus = Literal["pass", "fail", "skip"]
+CheckStatus = Literal["ok", "warn", "fail", "skip"]
 
 
 def build_health(
@@ -20,9 +20,15 @@ def build_health(
         {
             "component": "dossier",
             "version": "0.0.1",
+            "ok": bool,
+            "degraded": bool,
             "regista": {"reachable": bool, "project": str, "chain_ok": bool | None},
-            "checks": [{"name": str, "status": "pass|fail|skip", "detail": str | None}],
+            "checks": [{"name": str, "status": "ok|warn|fail|skip", "detail": str | None}],
         }
+
+    The top-level ``ok`` boolean is what the suite-doctor umbrella reads to
+    classify the component; ``degraded`` marks a healthy-but-warning state.
+    Check status follows regista's canonical vocabulary (``ok/warn/fail/skip``).
 
     An unreachable regista or missing session secret is a named ``checks``
     failure — never an exception.
@@ -57,7 +63,7 @@ def build_health(
         })
 
     if settings.session_secret and len(settings.session_secret) >= 32:
-        checks.append({"name": "session_secret", "status": "pass", "detail": None})
+        checks.append({"name": "session_secret", "status": "ok", "detail": None})
     else:
         checks.append({
             "name": "session_secret",
@@ -69,7 +75,7 @@ def build_health(
         if settings.users_path:
             checks.append({
                 "name": "auth_backend",
-                "status": "pass",
+                "status": "ok",
                 "detail": "local",
             })
         else:
@@ -81,13 +87,20 @@ def build_health(
     elif settings.auth_backend == "ldap":
         checks.append({
             "name": "auth_backend",
-            "status": "pass",
+            "status": "ok",
             "detail": "ldap (bind not checked in health probe)",
         })
+
+    has_fail = any(c["status"] == "fail" for c in checks)
+    has_warn = any(c["status"] == "warn" for c in checks)
+    ok = not has_fail
+    degraded = ok and has_warn
 
     return {
         "component": "dossier",
         "version": __version__,
+        "ok": ok,
+        "degraded": degraded,
         "regista": {
             "reachable": regista_reachable,
             "project": settings.project,

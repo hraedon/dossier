@@ -27,6 +27,8 @@ def test_healthz_returns_suite_shape(app, client):
     body = resp.json()
     assert body["component"] == "dossier"
     assert "version" in body
+    assert isinstance(body["ok"], bool)
+    assert isinstance(body["degraded"], bool)
     assert "regista" in body
     assert "reachable" in body["regista"]
     assert "project" in body["regista"]
@@ -41,11 +43,11 @@ def test_healthz_session_secret_pass(client):
     resp = client.get("/healthz")
     body = resp.json()
     secret_check = next(c for c in body["checks"] if c["name"] == "session_secret")
-    assert secret_check["status"] == "pass"
+    assert secret_check["status"] == "ok"
 
 
 def test_healthz_auth_backend_check_present(client):
     resp = client.get("/healthz")
     body = resp.json()
     auth_check = next(c for c in body["checks"] if c["name"] == "auth_backend")
-    assert auth_check["status"] in ("pass", "fail")
+    assert auth_check["status"] in ("ok", "fail")
