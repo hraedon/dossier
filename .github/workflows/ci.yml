@@ -50,14 +50,16 @@ jobs:
       - name: Scan for work-domain identifiers
         run: |
           set -e
-          # Targeted scan: look for known real hostnames/domains that must
-          # never appear in committed files. Generic LDAP/AD syntax (DC=, CN=,
-          # ldaps://) is allowed when paired with example.com or test.example.
-          REAL_PATTERNS='(mvmpostgres|mvmcitest|mvm[a-z]+0[0-9]|hraedon\.com|ad\.hraedon)'
-          HITS=$(grep -rnE "$REAL_PATTERNS" src/ tests/ docs/ plans/ deploy/ reflections/ \
+          # Targeted scan: look for known real hostnames/domains/service-accounts
+          # that must never appear in committed files. Case-insensitive to catch
+          # uppercase variants. Generic LDAP/AD syntax (DC=, CN=, ldaps://) is
+          # allowed when paired with example.com or test.example.
+          REAL_PATTERNS='(mvmpostgres|mvmcitest|mvm[a-z]+0[0-9]|hraedon\.com|ad\.hraedon|svc-gpolens|windows-test-host|postgres-host)'
+          HITS=$(grep -rniE "$REAL_PATTERNS" src/ tests/ docs/ plans/ deploy/ reflections/ scripts/ githooks/ \
             --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
-            --include='*.xml' --include='*.ps1' --include='*.cmd' \
-            | grep -v 'publication-review' \
+            --include='*.xml' --include='*.ps1' --include='*.cmd' --include='*.sh' \
+            --include='*.txt' --include='*.json' --include='*.toml' --include='*.lock' \
+            | grep -v 'publication-review\|filter-repo-replacements\|history-identifier-audit' \
             || true)
           if [ -n "$HITS" ]; then
             echo "Work-domain identifiers found:"
@@ -68,11 +70,11 @@ jobs:
           # Broad scan: catch new real identifiers in LDAP/AD patterns.
           # Excludes known-safe placeholders (example.com, test.example).
           BROAD_PATTERNS='(DC=[a-z]+,DC=|CN=[^,]+,OU=|ldaps://[a-z])'
-          BROAD_HITS=$(grep -rnE "$BROAD_PATTERNS" src/ tests/ docs/ plans/ deploy/ \
+          BROAD_HITS=$(grep -rnE "$BROAD_PATTERNS" src/ tests/ docs/ plans/ deploy/ reflections/ scripts/ \
             --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
             | grep -v 'example\.com\|example\.internal\|test\.example\|DC=test\|DC=example' \
             | grep -v 'publication-review' \
-            | grep -v 'startswith.*ldaps\|match.*ldaps\|ldaps://' \
+            | grep -v "startswith.*ldaps\|match.*ldaps\|'ldaps://" \
             || true)
           if [ -n "$BROAD_HITS" ]; then
             echo "Potential work-domain identifiers (review):"
@@ -80,6 +82,16 @@ jobs:
             exit 1
           fi
           echo "No work-domain identifiers detected."
+
+      # Denylist-driven gate (Plan 013 WI-4.3): scans all tracked files for
+      # identifiers from the DOSSIER_FORBIDDEN_IDENTIFIERS secret. No-op
+      # until the secret is configured, so it never blocks a fresh clone.
+      # Also enforces the always-on samples/ guard (no tracked files under
+      # gitignored data directories).
+      - name: Denylist identifier gate
+        env:
+          DOSSIER_FORBIDDEN_IDENTIFIERS: ${{ secrets.DOSSIER_FORBIDDEN_IDENTIFIERS }}
+        run: python3 scripts/check_committed_identifiers.py
 
       - name: Scan for secrets
         run: |

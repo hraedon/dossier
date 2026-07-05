@@ -1,7 +1,7 @@
 # Plan 002 — Auth & identity (the actor-binding foundation)
 
-**Status:** Proposed 2026-06-20. Expands `001-mvp.md` WI-4 into a full design. Not
-started.
+**Status:** Implemented 2026-06-22 (foundation slice: auth backends, signed
+sessions, password hashing, principal→actor resolver, login throttling).
 **Author:** Opus 4.8
 **Strategic role:** Auth's deliverable is **not** a login page. It is a trustworthy
 mapping from `request → authenticated principal → regista human actor`, because that

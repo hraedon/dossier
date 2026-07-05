@@ -118,9 +118,9 @@ finding that matters most.
 
 ## Spike Results (2026-07-02, Windows test host)
 
-**Host:** `windows-test-host.example.internal` (Windows, cert-watch deployment host)
+**Host:** `windows-host.example.internal` (Windows, deployment host)
 **Python:** 3.14.5 (system install)
-**Postgres:** `postgres-host.example.internal:5432` (reachable from the test host)
+**Postgres:** `db-host.example.internal:5432` (reachable from the test host)
 **Venv:** `C:\ProgramData\dossier\venv`
 
 ### S1 — dossier as a Windows Service: PASS (with caveats)

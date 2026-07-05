@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Pre-commit identifier gate (Plan 013 WI-4.3).
+# Runs the identifier check on staged files. No-op until a denylist is provided.
+set -euo pipefail
+repo_root="$(git rev-parse --show-toplevel)"
+python3 "$repo_root/scripts/check_committed_identifiers.py" --staged

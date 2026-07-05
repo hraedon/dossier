@@ -1,6 +1,9 @@
 # Plan 013 — Suite cohesion: the human face, deployable
 
-**Status:** Proposed 2026-07-02
+**Status:** Landed 2026-07-05 (WI-1.1 suite config adoption, WI-2.1 container
+image + pinned regista, WI-2.2 idempotent first-run, WI-3.1 `doctor --json` +
+`/healthz`, WI-4.1 secrets-through-backend + Windows Service, WI-4.3 publication
+gate). WI-4.2 (multi-user identity keystone) pending.
 **Author:** Claude (Fable 5), from the 2026-07-02 agent-suite deployment review
 **Strategic role:** dossier is the suite's human face. For the suite to deploy as
 a suite, dossier must stop being configured in its own private vocabulary and

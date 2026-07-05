@@ -1,7 +1,8 @@
 # Plan 004 — Teams & split views
 
-**Status:** Proposed 2026-06-20. Builds on the group membership from
-`003-ldap-integration.md`. Not started.
+**Status:** Proposed 2026-06-20. Not started — the Plan 003 group-fetch
+prerequisite landed, but the team model, `team` custom field, split views, and
+team-scoped writes are unbuilt (`authz.py` defers team mapping to a future v1.1).
 **Author:** Opus 4.8
 **Strategic role:** Let multiple teams share one dossier instance — each working its
 own queue, leads seeing across — with team membership **sourced from AD groups** so

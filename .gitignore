@@ -2,6 +2,11 @@
 
 # Never commit
 samples/
+.identifiers-denylist.local
+
+# Dry-run audit artifacts — contain raw identifiers, never committed
+docs/history-identifier-audit.md
+scripts/filter-repo-replacements.txt
 secrets/
 .env
 *.env.local

@@ -1,8 +1,9 @@
 # Plan 005 — Adversarial review as a structural gate
 
-**Status:** Proposed 2026-06-20. Specifies the `adversarial_review` validator and
-review semantics referenced by `src/dossier/workflows/dossier.workflow.yaml`. Not
-started.
+**Status:** Implemented 2026-06-26 (`adversarial_review` + `human_gate` validators
+landed in regista as built-ins, wired into the canonical workflow; dossier review
+flow UI + review-note capture in place; separation-of-duties and agent→human
+rules tested).
 **Author:** Opus 4.8
 **Strategic role:** Make adversarial review a **structural property of the
 workflow**, not a convention people can skip. `done` is unreachable except through

@@ -1,9 +1,9 @@
 # Plan 007 — Canonical workflow convergence: one lifecycle, lease as a separate axis
 
-**Status:** Proposed 2026-06-26. Cross-repo (dossier + agent-notes); spawns an
-agent-notes implementation plan. Builds on dossier Plan 006 (convergence, whose
-P1–P3 are delivered) and the dossier v4 review-gate workflow landed this session.
-Not started.
+**Status:** Landed 2026-06-29 (via Plan 010: canonical workflow unified — both
+faces register one shared definition; §6 end-to-end proof PASSED with an
+ephemeral Postgres: mixed agent+human chain drives one item to `done`, hash
+chain verifies).
 **Author:** glm-5.2 (session)
 **Strategic role:** Make dossier and agent-notes two **faces of one work-item
 universe** — the same regista work-items, driven through one canonical lifecycle

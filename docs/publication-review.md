@@ -22,18 +22,47 @@ real user display names, no real project slugs from production schemas.
 ## CI automation
 
 The `identifier-gate` job in `.github/workflows/ci.yml` runs on every push
-and pull request. It performs two scans:
+and pull request. It performs three scans:
 
-1. **Targeted scan** — blocks known real hostnames/domains (e.g.
-   `mvmpostgres*`, `example.com`, `ad.hraedon`) from appearing in any
-   committed file.
+1. **Targeted scan** — blocks known real hostnames/domains/service-accounts
+   (e.g. `mvmpostgres*`, `hraedon.com`, `ad.hraedon`, `svc-gpolens`,
+   `windows-test-host`, `postgres-host`) from appearing in any committed file.
 2. **Broad scan** — catches new LDAP/AD patterns (`DC=`, `CN=`, `ldaps://`)
    that are not paired with known-safe placeholders (`example.com`,
    `test.example`, `example.internal`).
+3. **Denylist gate** — `scripts/check_committed_identifiers.py` scans all
+   tracked files against a denylist provided via the `DOSSIER_FORBIDDEN_IDENTIFIERS`
+   CI secret. Also enforces the always-on `samples/` guard (no tracked files
+   under gitignored data directories). No-op until the secret is configured,
+   so it never blocks a fresh clone or fork.
 
 The gate must be green before merging to `main`. If it fails, fix the
 identifier before proceeding — do not add exclusions unless the pattern is
 a confirmed false positive.
+
+### Local pre-commit hook
+
+```bash
+# Install the identifier-gate pre-commit hook
+bash scripts/install-git-hooks.sh
+
+# Provide a denylist (gitignored, never committed)
+echo 'svc-gpolens' >> .identifiers-denylist.local
+echo 'windows-test-host' >> .identifiers-denylist.local
+# ... or set DOSSIER_FORBIDDEN_IDENTIFIERS in your environment
+```
+
+### History audit (dry-run, read-only)
+
+```bash
+# Audit full git history for denylist identifier leaks
+python3 scripts/audit_history_identifiers.py
+# Report written to docs/history-identifier-audit.md (gitignored)
+```
+
+This is the dry-run / report-only companion to the identifier gate. It scans
+ALL of git history (every commit's diff content + commit messages + author/
+committer identity) for denylist identifiers and reports every occurrence.
 
 ## Pre-push checklist (manual)
 
@@ -121,11 +150,15 @@ Confirm `pyproject.toml` pins are safe to publish:
 
 | Category | Example (forbidden) | Placeholder (allowed) |
 |---|---|---|
-| Server hostnames | `postgres-host` | `localhost`, `db.example.internal` |
+| Server hostnames | `postgres-host`, `mvmpostgres01` | `localhost`, `db.example.internal`, `suite-db` |
+| Windows hostnames | `windows-test-host` | `windows-host.example.internal` |
+| AD DC hostnames | `mvmdc01`, `mvmdc02`, `mvmdc03` | `dc1.example.internal`, `dc2.example.internal` |
 | AD domain | `example.com` | `example.com` |
 | LDAP bind DN | `CN=svc-dossier,OU=Service Accounts,DC=example,DC=com` | `CN=svc-dossier,OU=Service Accounts,DC=example,DC=com` |
+| Service accounts | `svc-gpolens` | `svc-bind`, `svc-dossier` |
 | Database DSN | `postgresql://dossier:realpass@postgres-host:5432/dossier` | `postgresql://dossier:changeme@localhost:5432/dossier` |
 | HMAC key | (any real key material) | (generated at runtime, never committed) |
+| CA CN | `Hraedon Root` | `Internal Root CA` |
 | User display names | Real employee names | `Alice`, `Bob`, `Carol`, `Dave` |
 | Project slugs | Real production schema names | `dossier`, `dossier_test` |
 | Agent identifiers | Real agent model IDs | `agent-relay`, `agent-glm`, `agent-kimi` |
@@ -145,7 +178,34 @@ Confirm `pyproject.toml` pins are safe to publish:
 
 Before the first `git push` to a public remote, run a history scrub using
 `git filter-repo` to remove any work-domain identifiers that may have been
-introduced and later removed:
+introduced and later removed.
+
+**Per the adcs-lens WI-010 lesson: the scrub must cover CA CN / all
+identifier forms, not just hostnames.** This includes:
+- Server hostnames (`mvmpostgres01`, `mvmcitest01`, `mvmdc01-03`)
+- AD domain (`hraedon.com`, `ad.hraedon`)
+- Service account names (`svc-gpolens`)
+- CA CNs (`Hraedon Root`)
+- Personal names and emails (author/committer identity)
+- Test host names (`windows-test-host`, `postgres-host`)
+
+### Pre-scrub audit (dry-run, read-only)
+
+```bash
+# 1. Run the history audit to identify all leaks
+python3 scripts/audit_history_identifiers.py
+
+# 2. Review the report
+cat docs/history-identifier-audit.md
+
+# 3. Run git filter-repo --dry-run to verify the replacements
+git clone /path/to/dossier dossier-public
+cd dossier-public
+git filter-repo --dry-run --replace-text scripts/filter-repo-replacements.txt
+# Compare .git/filter-repo/fast-export.original vs .git/filter-repo/fast-export.filtered
+```
+
+### Scrub (DESTRUCTIVE — requires human approval)
 
 ```bash
 # Install git-filter-repo
@@ -156,15 +216,16 @@ git clone /path/to/dossier dossier-public
 cd dossier-public
 
 # Scrub known patterns from all history
-git filter-repo --replace-text <(echo '
-postgres-host==>postgres-host
-windows-test-host==>windows-test-host
-ad.example.com==>ad.example.com
-example.com==>example.com
-')
+git filter-repo --replace-text scripts/filter-repo-replacements.txt
+
+# Scrub author/committer identity (not handled by --replace-text)
+# Use --mailmap or --name-callback / --email-callback to rewrite
+# the author/committer name and email in ALL commits.
+git filter-repo --name-callback 'return b"regista-contributors"' \
+  --email-callback 'return b"regista@users.noreply.github.com"'
 
 # Verify the scrub
-git log --all -p | grep -E 'mvmpostgres|hraedon\.com|ad\.hraedon' || echo "Clean"
+git log --all -p | grep -E 'mvmpostgres|hraedon\.com|ad\.hraedon|svc-gpolens|Hraedon Root' || echo "Clean"
 
 # Then add the remote and push
 git remote add origin git@github.com:hraedon/dossier.git
@@ -174,6 +235,35 @@ git push -u origin main
 After the first push, the CI identifier-gate prevents new identifiers from
 entering. The manual checklist above remains the review process for every
 subsequent push.
+
+### Audit results (2026-07-05)
+
+**Dossier** — 43 commits scanned, 48 leaks found across 6 identifiers:
+| Identifier | Occurrences | Source |
+|---|---|---|
+| `hraedon.com` | 17 | author/committer email + reflection reference |
+| `postgres-host` | 11 | plan 016 spike results |
+| `svc-gpolens` | 9 | test integration docs + plan 003 + reflections |
+| `windows-test-host` | 9 | plan 016 spike results |
+| `ad.hraedon` | 1 | publication-review.md (this file, as a pattern) |
+| `mvmpostgres01` | 1 | reflection reference |
+
+**Regista** — 203 commits scanned, 1651 leaks found across 6 identifiers:
+| Identifier | Occurrences | Source |
+|---|---|---|
+| `hraedon` (org) | 420 | author/committer identity (all commits) |
+| `hraedon.com` | 406 | author/committer email (all commits) |
+| Personal name | 406 | author/committer name (all commits) |
+| Personal email | 406 | author/committer email (all commits) |
+| `mvmpostgres01` | 8 | plans + worklog + reflections |
+| `mvmcitest01` | 5 | worklog + reflections |
+
+**Note:** `git filter-repo --replace-text` only handles file content, not
+author/committer identity. For regista (already public), the author/committer
+identity rewrite requires `--name-callback` / `--email-callback` and a
+GitHub repo delete+recreate (per adcs-lens WI-010 lesson: force-push alone
+leaves pushed refs cached on GitHub's side). This is the irreversible step
+the repo owner must execute.
 
 ## Exceptions
 

@@ -4,10 +4,10 @@ These tests connect to a real LDAP/Active Directory server and exercise the
 full search-then-bind flow. They are skipped by default — set
 ``DOSSIER_LDAP_E2E=1`` and provide the ``DOSSIER_LDAP_*`` env vars to run.
 
-Usage with a real AD server (requires the svc-gpolens credential)::
+Usage with a real AD server (requires the svc-bind credential)::
 
     ACB_VAULT_ENV=/home/itadmin/.claude/vault.env \\
-    acb exec cred:svc-gpolens -- env DOSSIER_LDAP_E2E=1 \\
+    acb exec cred:svc-bind -- env DOSSIER_LDAP_E2E=1 \\
     DOSSIER_LDAP_SERVER=ldaps://ad.example.com:636 \\
     DOSSIER_LDAP_BASE_DN=DC=example,DC=com \\
     DOSSIER_LDAP_DOMAIN=example.com \\
@@ -16,7 +16,7 @@ Usage with a real AD server (requires the svc-gpolens credential)::
     DOSSIER_LDAP_TEST_PASSWORD=<test-password> \\
     python -m pytest tests/test_ldap_integration.py -m ldap_e2e -v
 
-The ``cred:svc-gpolens`` broker injects ``DOSSIER_LDAP_BIND_DN`` and
+The ``cred:svc-bind`` broker injects ``DOSSIER_LDAP_BIND_DN`` and
 ``DOSSIER_LDAP_BIND_PASSWORD`` into the child environment — they never appear
 in this file or in stdout.
 """

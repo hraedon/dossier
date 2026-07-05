@@ -19,7 +19,7 @@ so eventual Microsoft Entra (OIDC) adoption is additive, not a refactor** — se
 - cert-watch authenticates against a real AD over LDAPS today (multiple DCs
   on :636) and has both a samba-container e2e and a real-AD remote
   login script — patterns to adapt.
-- A least-privilege bind account exists for the homelab (`svc-gpolens`, Vault) and is
+- A least-privilege bind account exists for the homelab (service-account, Vault) and is
   sufficient for read/search during dev and integration tests.
 
 ## Principles this plan must hold

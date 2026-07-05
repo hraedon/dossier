@@ -1,7 +1,8 @@
 # Plan 006 — Convergence on regista: one work-item universe, fault-tolerant by design
 
-**Status:** Proposed 2026-06-22. Cross-project north-star (regista + agent-notes +
-dossier). Spawns per-repo implementation plans; nothing started.
+**Status:** Strategic direction — convergence achieved for the dossier face
+(dossier is a regista client since the 2026-06-22 foundation slice; P1–P3
+delivered per Plan 007). P4 (knowledge `note` entity) pending Plan 009.
 **Author:** Opus 4.8
 **Strategic role:** Collapse the two parallel work-item engines in the stack onto a
 single authoritative store (regista), with dossier (human/web) and agent-notes
