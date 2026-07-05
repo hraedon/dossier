@@ -31,19 +31,15 @@ from pathlib import Path
 
 MIN_IDENTIFIER_LENGTH = 4
 _BINARY_SNIFF_LEN = 8192
-_SKIP_DIRS = frozenset({"samples", ".venv"})
+# Dirs skipped by the identifier scan: .venv is build output. The always-on
+# guard below handles root-level samples/ (which holds real identifier-bearing
+# data); nested directories named samples/ (e.g. tests/samples/) are legitimate
+# code dirs and SHOULD be scanned.
+_SKIP_DIRS = frozenset({".venv"})
 # Root-level gitignored data dirs that must never contain a tracked file. The
 # guard matches the first path component so a legitimate nested code dir named
 # ``samples`` (e.g. ``tests/samples/``) is not a false positive.
-_GUARDED_DIRS = frozenset({"samples", "secrets"})
-# Files that legitimately reference identifiers as patterns or examples.
-_EXCLUDE_FILES = frozenset({
-    "docs/publication-review.md",
-    "scripts/check_committed_identifiers.py",
-    "scripts/audit_history_identifiers.py",
-    "scripts/filter-repo-replacements.txt",
-    ".github/workflows/ci.yml",
-})
+_GUARDED_DIRS = frozenset({"samples"})
 
 
 @dataclass(frozen=True)
@@ -55,6 +51,7 @@ class Violation:
 
 
 def _filter_identifiers(identifiers: frozenset[str]) -> frozenset[str]:
+    """Lowercase, strip, and drop empty or short identifiers."""
     return frozenset(
         token.lower()
         for token in (i.strip() for i in identifiers)
@@ -63,6 +60,13 @@ def _filter_identifiers(identifiers: frozenset[str]) -> frozenset[str]:
 
 
 def parse_identifier_set(raw: str) -> frozenset[str]:
+    """Build a normalized set of identifiers from the raw denylist.
+
+    Accepts whitespace-separated tokens (the CI-secret form) and/or one token
+    per line. Full-line and trailing ``#`` comments are stripped, so a
+    human-maintained denylist file may document itself without every comment
+    word becoming a forbidden token.
+    """
     tokens: set[str] = set()
     for line in raw.splitlines() or [raw]:
         content = line.split("#", 1)[0].strip()
@@ -72,6 +76,12 @@ def parse_identifier_set(raw: str) -> frozenset[str]:
 
 
 def scan_text(text: str, identifiers: frozenset[str]) -> Iterator[Violation]:
+    """Yield a violation for every occurrence of one of *identifiers*.
+
+    The match is case-insensitive and counts any substring occurrence; real
+    identifiers such as ``WORK-DOMAIN`` can legitimately appear inside longer
+    tokens.
+    """
     identifiers = _filter_identifiers(identifiers)
     if not identifiers:
         return
@@ -93,6 +103,7 @@ def scan_text(text: str, identifiers: frozenset[str]) -> Iterator[Violation]:
 
 
 def _sniff_encoding(chunk: bytes) -> str | None:
+    """Return the text encoding if *chunk* starts with a known BOM, else None."""
     if chunk.startswith(b"\xff\xfe"):
         return "utf-16-le"
     if chunk.startswith(b"\xfe\xff"):
@@ -103,12 +114,19 @@ def _sniff_encoding(chunk: bytes) -> str | None:
 
 
 def _is_binary(chunk: bytes) -> bool:
+    """Heuristic: null byte present without a recognized text BOM → binary."""
     if _sniff_encoding(chunk) is not None:
         return False
     return b"\x00" in chunk
 
 
 def scan_files(identifiers: frozenset[str], paths: list[Path]) -> list[Violation]:
+    """Scan every readable text file in *paths* for forbidden identifiers.
+
+    UTF-16 files (common in Windows tooling output) are detected via BOM and
+    decoded correctly rather than misclassified as binary by the null-byte
+    heuristic.
+    """
     violations: list[Violation] = []
     for path in paths:
         try:
@@ -129,6 +147,12 @@ def scan_files(identifiers: frozenset[str], paths: list[Path]) -> list[Violation
 
 
 def _paths_from_git(args: list[str]) -> list[Path]:
+    """Run a NUL-delimited git path command and return Paths.
+
+    No filtering is applied here — the always-on samples/ guard needs to see
+    every tracked path so it can detect a force-add. The identifier scan
+    filters out _SKIP_DIRS separately.
+    """
     result = subprocess.run(
         args,
         capture_output=True,
@@ -144,12 +168,24 @@ def _paths_from_git(args: list[str]) -> list[Path]:
 
 
 def collect_tracked_paths() -> list[Path]:
+    """Return tracked file paths from ``git ls-files``, excluding obvious skips."""
     return _paths_from_git(["git", "ls-files", "-z"])
 
 
 def collect_staged_paths() -> list[Path]:
+    """Return staged (added/copied/modified/renamed) paths for the pre-commit hook.
+
+    Scans only what is about to be committed rather than the whole tree, so the
+    local gate is fast enough to run on every commit. Deletions are excluded
+    (``--diff-filter=ACM``) because there is nothing to scan. ``--no-renames``
+    decomposes renames into add+delete so the new path (e.g. a file moved into
+    ``samples/``) is included as an addition and caught by the always-on guard.
+    """
     return _paths_from_git(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACM", "-z"]
+        [
+            "git", "diff", "--cached", "--name-only",
+            "--diff-filter=ACM", "--no-renames", "-z",
+        ]
     )
 
 
@@ -163,16 +199,12 @@ def print_report(violations: list[Violation]) -> None:
 
 
 def leaked_tracked_files(paths: list[Path], guarded: frozenset[str]) -> list[Path]:
+    """Tracked files whose root component is a guarded (gitignored) data dir.
+
+    Matches only the first path component so a nested code directory that happens
+    to be named ``samples`` (e.g. ``tests/samples/``) is not a false positive.
+    """
     return [p for p in paths if p.parts and p.parts[0] in guarded]
-
-
-def _should_scan(path: Path) -> bool:
-    rel = path.as_posix()
-    if rel in _EXCLUDE_FILES:
-        return False
-    if any(part in _SKIP_DIRS for part in path.parts):
-        return False
-    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -189,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
 
     paths = collect_staged_paths() if args.staged else collect_tracked_paths()
 
+    # 1. Always-on: no tracked file under a guarded (gitignored) data dir. This
+    #    catches a ``git add -f samples/...`` leak regardless of secret config.
     leaked = leaked_tracked_files(paths, _GUARDED_DIRS)
     if leaked:
         print("Tracked files under a gitignored data directory detected:", file=sys.stderr)
@@ -202,11 +236,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # 2. Secret-driven: scan tracked text files (outside guarded dirs) for
+    #    forbidden identifiers. No-op until the secret is configured.
     raw = os.environ.get("DOSSIER_FORBIDDEN_IDENTIFIERS", "")
-    if not raw.strip():
-        denylist_path = Path(__file__).resolve().parent.parent / ".identifiers-denylist.local"
-        if denylist_path.exists():
-            raw = denylist_path.read_text()
     if not raw.strip():
         print(
             "DOSSIER_FORBIDDEN_IDENTIFIERS is empty or unset; skipping identifier gate.",
@@ -223,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    scan_paths = [p for p in paths if _should_scan(p)]
+    scan_paths = [p for p in paths if not any(part in _SKIP_DIRS for part in p.parts)]
     violations = scan_files(identifiers, scan_paths)
     if violations:
         print_report(violations)

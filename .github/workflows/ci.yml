@@ -47,47 +47,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Scan for work-domain identifiers
-        run: |
-          set -e
-          # Targeted scan: look for known real hostnames/domains/service-accounts
-          # that must never appear in committed files. Case-insensitive to catch
-          # uppercase variants. Generic LDAP/AD syntax (DC=, CN=, ldaps://) is
-          # allowed when paired with example.com or test.example.
-          REAL_PATTERNS='(mvmpostgres|mvmcitest|mvm[a-z]+0[0-9]|hraedon\.com|ad\.hraedon|svc-gpolens|windows-test-host|postgres-host)'
-          HITS=$(grep -rniE "$REAL_PATTERNS" src/ tests/ docs/ plans/ deploy/ reflections/ scripts/ githooks/ \
-            --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
-            --include='*.xml' --include='*.ps1' --include='*.cmd' --include='*.sh' \
-            --include='*.txt' --include='*.json' --include='*.toml' --include='*.lock' \
-            | grep -v 'publication-review\|filter-repo-replacements\|history-identifier-audit' \
-            || true)
-          if [ -n "$HITS" ]; then
-            echo "Work-domain identifiers found:"
-            echo "$HITS"
-            exit 1
-          fi
-
-          # Broad scan: catch new real identifiers in LDAP/AD patterns.
-          # Excludes known-safe placeholders (example.com, test.example).
-          BROAD_PATTERNS='(DC=[a-z]+,DC=|CN=[^,]+,OU=|ldaps://[a-z])'
-          BROAD_HITS=$(grep -rnE "$BROAD_PATTERNS" src/ tests/ docs/ plans/ deploy/ reflections/ scripts/ \
-            --include='*.py' --include='*.md' --include='*.yaml' --include='*.yml' \
-            | grep -v 'example\.com\|example\.internal\|test\.example\|DC=test\|DC=example' \
-            | grep -v 'publication-review' \
-            | grep -v "startswith.*ldaps\|match.*ldaps\|'ldaps://" \
-            || true)
-          if [ -n "$BROAD_HITS" ]; then
-            echo "Potential work-domain identifiers (review):"
-            echo "$BROAD_HITS"
-            exit 1
-          fi
-          echo "No work-domain identifiers detected."
-
-      # Denylist-driven gate (Plan 013 WI-4.3): scans all tracked files for
-      # identifiers from the DOSSIER_FORBIDDEN_IDENTIFIERS secret. No-op
-      # until the secret is configured, so it never blocks a fresh clone.
-      # Also enforces the always-on samples/ guard (no tracked files under
-      # gitignored data directories).
+      # Canonical denylist-driven gate: scans all tracked files for the tokens in
+      # the DOSSIER_FORBIDDEN_IDENTIFIERS secret (the shared canonical work-domain
+      # set), plus the always-on samples/ guard (no tracked files under gitignored
+      # data dirs). No-op until the secret is configured. Replaced the bespoke
+      # hardcoded scan, which was miscalibrated — it targeted lab identifiers and
+      # forbade the allowed `hraedon` identity while omitting the work-domain token.
+      # Single source of truth is ~/.config/agent-suite/forbidden-identifiers;
+      # never hand-roll patterns.
       - name: Denylist identifier gate
         env:
           DOSSIER_FORBIDDEN_IDENTIFIERS: ${{ secrets.DOSSIER_FORBIDDEN_IDENTIFIERS }}
