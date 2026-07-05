@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .gateway import RegistaGateway
+from . import secrets as suite_secrets
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -50,6 +51,13 @@ class GatewayRegistry:
     ) -> None:
         self._settings = settings
         self._gateways: dict[str, RegistaGateway] = {}
+        # Per-project key-set manifest cleanups (Plan 013 WI-4.1). When the
+        # HMAC key-set is sourced from a remote backend (env:/vault:/azure:),
+        # ``materialize_key_manifest`` writes a 0600 temp file and returns a
+        # cleanup; we hold it and scrub on close so no material outlives the
+        # process. A literal/bare-path manifest returns ``None`` cleanup, so
+        # today's plaintext installs incur nothing here.
+        self._key_cleanups: dict[str, suite_secrets.CleanupFn] = {}
         if known_projects:
             self._known_projects: set[str] = set(known_projects)
         elif settings:
@@ -125,7 +133,20 @@ class GatewayRegistry:
 
     def close_all(self) -> None:
         for gw in self._gateways.values():
-            gw.close()
+            try:
+                gw.close()
+            except Exception:
+                logger.debug("gateway close failed during close_all", exc_info=True)
+        # Scrub any materialized key-set temp files so they do not outlive the
+        # registry (Plan 013 WI-4.1). atexit is the safety net; this is the
+        # prompt path so a process that re-uses the registry (CLI doctor) does
+        # not accumulate stale manifests between calls.
+        for cleanup in self._key_cleanups.values():
+            try:
+                cleanup()
+            except Exception:
+                logger.debug("key cleanup failed during close_all", exc_info=True)
+        self._key_cleanups.clear()
         self._gateways.clear()
 
     def _build(self, project: str) -> RegistaGateway:
@@ -133,12 +154,43 @@ class GatewayRegistry:
 
         assert self._settings is not None
         s = self._settings
-        reg = regista.Regista(
-            s.database_url,
-            project,
-            s.hmac_key_path,
-            require_ssl=s.require_ssl,
-        )
-        gw = RegistaGateway(reg, project_name=project)
-        gw.register_workflow()
+        # Resolve suite secrets through the backend (Plan 013 WI-4.1). A
+        # literal DSN / bare key path passes through unchanged (no regression);
+        # a backend ref resolves at use time. The key-set manifest may
+        # materialize to a 0600 temp file whose cleanup is tracked alongside
+        # the gateway and scrubbed on close_all.
+        #
+        # The resolved values are bound to short-lived locals and consumed
+        # immediately: a resolved DSN may contain a plaintext password, and a
+        # construction failure traceback that renders locals would otherwise
+        # echo it. If Regista() or register_workflow() raises, we scrub the
+        # materialized manifest before re-raising so a retry loop (e.g. a
+        # dashboard rebuild on each request) cannot accumulate temp files.
+        key_path, cleanup = suite_secrets.materialize_key_manifest(s.hmac_key_path)
+        reg: Any = None
+        try:
+            reg = regista.Regista(
+                suite_secrets.resolve_dsn(s.database_url),
+                project,
+                key_path,
+                require_ssl=s.require_ssl,
+            )
+            gw = RegistaGateway(reg, project_name=project)
+            gw.register_workflow()
+        except BaseException:
+            # Scrub the materialized manifest AND release the connection pool
+            # if Regista() opened one before register_workflow() raised. A
+            # retry loop (e.g. a dashboard rebuild on each request) must not
+            # accumulate temp files or idle Postgres connections.
+            if reg is not None:
+                try:
+                    reg.close()
+                except Exception:
+                    logger.debug("reg.close failed during _build cleanup", exc_info=True)
+            if cleanup is not None:
+                cleanup()
+            raise
+        del key_path
+        if cleanup is not None:
+            self._key_cleanups[project] = cleanup
         return gw

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal
 
 from . import __version__
@@ -91,6 +92,8 @@ def build_health(
             "detail": "ldap (bind not checked in health probe)",
         })
 
+    checks.extend(_secrets_backend_checks(settings))
+
     has_fail = any(c["status"] == "fail" for c in checks)
     has_warn = any(c["status"] == "warn" for c in checks)
     ok = not has_fail
@@ -113,3 +116,61 @@ def build_health(
 def has_failures(health: dict[str, Any]) -> bool:
     """Return True if any check has status 'fail'."""
     return any(c["status"] == "fail" for c in health.get("checks", []))
+
+
+def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:
+    """Verify configured suite secret refs resolve (Plan 013 WI-4.1).
+
+    A plaintext/bare-path deployment (the default) has nothing to verify → a
+    single ``skip`` check. When a backend ref (``env:``/``vault:``/``azure:``/
+    ``file:``) is configured for the regista DSN or signing key, this contacts
+    the backend once to confirm the secret is reachable and (for the manifest)
+    the material parses. Failures surface the exception type only — the wrapped
+    message may echo partial material, but our wrapper already strips that, so
+    this is a defense-in-depth. The materialized manifest temp file is cleaned
+    up here; nothing persistent is left.
+    """
+    from . import secrets as suite_secrets
+
+    refs: list[tuple[str, str]] = []
+    if settings.database_url and suite_secrets.is_backend_ref(settings.database_url):
+        refs.append(("REGISTA_DSN", settings.database_url))
+    if settings.hmac_key_path and suite_secrets.is_backend_ref(settings.hmac_key_path):
+        refs.append(("REGISTA_KEY_PATH", settings.hmac_key_path))
+
+    if not refs:
+        return [{
+            "name": "secrets_backend",
+            "status": "skip",
+            "detail": "no backend refs configured (plaintext/file path)",
+        }]
+
+    results: list[dict[str, Any]] = []
+    for label, ref in refs:
+        try:
+            if label == "REGISTA_DSN":
+                suite_secrets.resolve_dsn(ref)
+            else:
+                path, cleanup = suite_secrets.materialize_key_manifest(ref)
+                # A bare/file: path is returned unread — confirm it exists AND
+                # parses as a key-set manifest, so a missing or corrupt file is
+                # a named failure, not a silent pass that surfaces later when
+                # regista's KeySet reads it. Remote refs are already validated
+                # structurally by materialize_key_manifest.
+                if cleanup is None and path is not None:
+                    data = Path(path).read_bytes()
+                    suite_secrets._validate_manifest_bytes(data)
+                if cleanup is not None:
+                    cleanup()
+            results.append({
+                "name": f"secrets_backend:{label}",
+                "status": "ok",
+                "detail": "resolved",
+            })
+        except Exception as exc:
+            results.append({
+                "name": f"secrets_backend:{label}",
+                "status": "fail",
+                "detail": f"{label} ref unresolvable: {type(exc).__name__}",
+            })
+    return results

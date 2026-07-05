@@ -27,11 +27,19 @@ def _check_provisioned(database_url: str, project: str, require_ssl: bool) -> bo
     """
     import psycopg
 
+    from .secrets import resolve_dsn
+
+    dsn = resolve_dsn(database_url)
+    if dsn is None:
+        # An empty/unresolved DSN cannot connect — treat as not provisioned
+        # rather than crashing the doctor/provision-check call.
+        return False
+
     try:
         conn_kwargs: dict[str, Any] = {}
         if require_ssl:
             conn_kwargs["sslmode"] = "require"
-        with psycopg.connect(database_url, **conn_kwargs) as conn:
+        with psycopg.connect(dsn, **conn_kwargs) as conn:
             row = conn.execute(
                 "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s",
                 [project],
@@ -67,22 +75,38 @@ def _cmd_init(args: argparse.Namespace) -> int:
         print(f"init requires: {', '.join(missing)}", file=sys.stderr)
         return 2
 
-    if not _check_provisioned(settings.database_url, settings.project, settings.require_ssl):
+    from .secrets import materialize_key_manifest, resolve_dsn
+
+    # Resolve once and reuse for both the provision check and the Regista
+    # construction (Plan 013 WI-4.1). The resolved DSN is bound to a short-
+    # lived local and consumed immediately; it may contain a plaintext
+    # password, so we del it as soon as the connection holds it.
+    resolved_dsn = resolve_dsn(settings.database_url)
+    if resolved_dsn is None:
+        print("REGISTA_DSN is empty; cannot check provisioning.", file=sys.stderr)
+        return 2
+    if not _check_provisioned(resolved_dsn, settings.project, settings.require_ssl):
         print(_provision_error(settings.project), file=sys.stderr)
         return 1
 
     from regista import Regista
 
-    reg = Regista(
-        settings.database_url,
-        settings.project,
-        settings.hmac_key_path,
-        require_ssl=settings.require_ssl,
-    )
+    key_path, key_cleanup = materialize_key_manifest(settings.hmac_key_path)
+    reg: Regista | None = None
     try:
+        reg = Regista(
+            resolved_dsn,
+            settings.project,
+            key_path,
+            require_ssl=settings.require_ssl,
+        )
+        del resolved_dsn  # scrub the plaintext-DSN local before further work
         reg.register_workflow(packaged_workflow_yaml())
     finally:
-        reg.close()
+        if reg is not None:
+            reg.close()
+        if key_cleanup is not None:
+            key_cleanup()
     print(
         f"dossier project {settings.project!r} workflow registered.",
         file=sys.stdout,
@@ -172,11 +196,19 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     registry = GatewayRegistry(settings=settings, known_projects=known_projects)
 
     if not args.skip_provision_check:
+        from .secrets import resolve_dsn
+
+        resolved_dsn = resolve_dsn(settings.database_url)
+        if resolved_dsn is None:
+            print("REGISTA_DSN is empty; cannot check provisioning.", file=sys.stderr)
+            registry.close_all()
+            return 2
         for p in known_projects:
-            if not _check_provisioned(settings.database_url, p, settings.require_ssl):
+            if not _check_provisioned(resolved_dsn, p, settings.require_ssl):
                 print(_provision_error(p), file=sys.stderr)
                 registry.close_all()
                 return 1
+        del resolved_dsn  # scrub the plaintext-DSN local before serving
 
     backend: CredentialBackend
     if settings.auth_backend == "ldap":

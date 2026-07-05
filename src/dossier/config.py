@@ -211,7 +211,27 @@ def load_settings(strict: bool = True) -> Settings:
 
     principal_key_dir = os.environ.get("DOSSIER_PRINCIPAL_KEY_DIR", "")
     if not principal_key_dir and hmac_key_path:
-        principal_key_dir = str(Path(hmac_key_path).parent / "principals")
+        # Derive ``<key_dir>/principals`` only when the key path is a real
+        # filesystem location. A backend ref (env:/vault:/azure:) has no
+        # meaningful parent directory, and a ``file:`` ref must be stripped of
+        # its prefix before Path() treats the whole string as one segment.
+        # Deriving from a ref would silently drop principal keys into the
+        # process CWD — a private-key leak. Refuse and ask the operator to set
+        # DOSSIER_PRINCIPAL_KEY_DIR explicitly.
+        from .secrets import is_backend_ref
+
+        if is_backend_ref(hmac_key_path):
+            if hmac_key_path.lower().startswith("file:"):
+                principal_key_dir = str(
+                    Path(hmac_key_path.split(":", 1)[1]).expanduser().parent / "principals"
+                )
+            else:
+                raise RuntimeError(
+                    "DOSSIER_PRINCIPAL_KEY_DIR must be set explicitly when "
+                    "REGISTA_KEY_PATH is a remote backend ref (env:/vault:/azure:)"
+                )
+        else:
+            principal_key_dir = str(Path(hmac_key_path).parent / "principals")
 
     if strict:
         _require("REGISTA_DSN (or DOSSIER_DATABASE_URL)", database_url)
