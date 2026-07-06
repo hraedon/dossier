@@ -86,12 +86,10 @@ def build_health(
                 "detail": "local backend selected but DOSSIER_USERS_PATH not set",
             })
     elif settings.auth_backend == "ldap":
-        checks.append({
-            "name": "auth_backend",
-            "status": "ok",
-            "detail": "ldap (bind not checked in health probe)",
-        })
+        checks.append(_ldap_config_check())
 
+    checks.extend(_tls_checks())
+    checks.append(_suite_env_check())
     checks.extend(_secrets_backend_checks(settings))
 
     has_fail = any(c["status"] == "fail" for c in checks)
@@ -116,6 +114,90 @@ def build_health(
 def has_failures(health: dict[str, Any]) -> bool:
     """Return True if any check has status 'fail'."""
     return any(c["status"] == "fail" for c in health.get("checks", []))
+
+
+def _tls_checks() -> list[dict[str, Any]]:
+    """Report TLS termination config status (Plan 014 WI-1.5).
+
+    ``warn`` when TLS is not configured (plain HTTP — acceptable for dev,
+    a posture flag for production). ``ok`` when both the cert and key paths
+    resolve to readable files. ``fail`` when TLS is configured but a path is
+    missing or unreadable — a half-configured TLS deploy must not silently
+    fall back to plaintext.
+    """
+    from .config import load_tls_config
+
+    tls = load_tls_config()
+    if tls is None:
+        return [{
+            "name": "tls",
+            "status": "warn",
+            "detail": "not configured (plain HTTP — dev only)",
+        }]
+    problems: list[str] = []
+    if not tls.cert_path:
+        problems.append("DOSSIER_TLS_CERT_PATH not set")
+    elif not Path(tls.cert_path).is_file():
+        problems.append(f"cert not found: {tls.cert_path}")
+    if not tls.key_path:
+        problems.append("DOSSIER_TLS_KEY_PATH not set")
+    elif not Path(tls.key_path).is_file():
+        problems.append(f"key not found: {tls.key_path}")
+    if problems:
+        return [{"name": "tls", "status": "fail", "detail": "; ".join(problems)}]
+    return [{"name": "tls", "status": "ok", "detail": f"cert={tls.cert_path}"}]
+
+
+def _suite_env_check() -> dict[str, Any]:
+    """Report which suite.env source is active (Plan 014 WI-1.5)."""
+    from .config import suite_env_path
+
+    path = suite_env_path()
+    if path:
+        return {"name": "suite_env", "status": "ok", "detail": f"loaded {path}"}
+    return {
+        "name": "suite_env",
+        "status": "skip",
+        "detail": "no suite.env found (process env only)",
+    }
+
+
+def _ldap_config_check() -> dict[str, Any]:
+    """Report LDAP config completeness without performing a bind (Plan 014 WI-1.5).
+
+    The identity source's *configuration* is checked (all required env vars
+    present); the live bind is operator-gated infra and is not exercised by a
+    health probe. An incomplete config is a ``fail`` so a misconfigured deploy
+    is visible before a user hits a login failure.
+    """
+    from .config import load_ldap_config
+
+    try:
+        cfg = load_ldap_config(strict=False)
+    except ValueError as exc:
+        return {"name": "auth_backend", "status": "fail", "detail": f"ldap: {exc}"}
+    missing: list[str] = []
+    if not cfg.server_urls:
+        missing.append("DOSSIER_LDAP_SERVER")
+    if not cfg.base_dn:
+        missing.append("DOSSIER_LDAP_BASE_DN")
+    if not cfg.bind_dn:
+        missing.append("DOSSIER_LDAP_BIND_DN")
+    if not cfg.bind_password:
+        missing.append("DOSSIER_LDAP_BIND_PASSWORD")
+    if not cfg.domain:
+        missing.append("DOSSIER_LDAP_DOMAIN")
+    if missing:
+        return {
+            "name": "auth_backend",
+            "status": "fail",
+            "detail": f"ldap incomplete: {', '.join(missing)}",
+        }
+    return {
+        "name": "auth_backend",
+        "status": "ok",
+        "detail": "ldap configured (bind not checked in health probe)",
+    }
 
 
 def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:

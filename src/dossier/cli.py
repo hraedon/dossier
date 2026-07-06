@@ -226,9 +226,26 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     else:
         assert_never(settings.auth_backend)
 
+    from .config import load_tls_config
+
+    tls = load_tls_config()
+    ssl_kwargs: dict[str, Any] = {}
+    if tls is not None:
+        if not tls.cert_path or not tls.key_path:
+            print(
+                "Both DOSSIER_TLS_CERT_PATH and DOSSIER_TLS_KEY_PATH must be set "
+                "to serve over TLS — only one was provided.",
+                file=sys.stderr,
+            )
+            registry.close_all()
+            return 2
+        ssl_kwargs["ssl_certfile"] = tls.cert_path
+        ssl_kwargs["ssl_keyfile"] = tls.key_path
+        print(f"dossier: serving over TLS (cert={tls.cert_path})", file=sys.stderr)
+
     app = create_app(settings, registry, backend)
     try:
-        uvicorn_run(app, host=args.host, port=args.port)
+        uvicorn_run(app, host=args.host, port=args.port, **ssl_kwargs)
     finally:
         registry.close_all()
     return 0

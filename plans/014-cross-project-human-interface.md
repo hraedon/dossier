@@ -1,6 +1,9 @@
 # Plan 014 — The cross-project human interface (team-accessible, all projects)
 
-**Status:** In Progress 2026-07-03 — Phase 1 (WI-1.1 through WI-2.2) implemented; WI-1.5 (team deploy) pending suite Plan 013
+**Status:** In Progress 2026-07-06 — Phase 1 (WI-1.1 through WI-2.2) implemented;
+WI-1.5 (team deploy) implemented (TLS seam + reproducible compose + doctor
+tls/ldap/suite_env checks); the live cross-machine TLS login is operator-gated
+validation (real LDAP + real certs + the work network), like the public flip.
 **Author:** Claude (Fable 5), from the 2026-07-02 agent-suite deployment review
 **Strategic role:** Make dossier the interface a team member logs into and reads
 the *whole estate's* work through — every project's work-items, their signed

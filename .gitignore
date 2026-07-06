@@ -9,6 +9,8 @@ docs/history-identifier-audit.md
 scripts/filter-repo-replacements.txt
 secrets/
 .env
+suite.env
+certs/
 *.env.local
 *.db
 *.sqlite3

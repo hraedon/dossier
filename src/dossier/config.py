@@ -20,6 +20,18 @@ _BLOCKED_KEYS = frozenset({
 })
 
 _SUITE_ENV_LOADED = False
+# The suite.env file that was actually loaded (None when no file was found).
+# Recorded so ``doctor`` can report which config source is active (Plan 014 WI-1.5).
+_SUITE_ENV_PATH: str | None = None
+
+
+def suite_env_path() -> str | None:
+    """Return the suite.env path that was loaded, or ``None`` if none was found.
+
+    Set by :func:`load_suite_env`. Lets the health/doctor surface report the
+    active config source without re-reading the filesystem.
+    """
+    return _SUITE_ENV_PATH
 
 
 def load_suite_env() -> None:
@@ -39,10 +51,11 @@ def load_suite_env() -> None:
     Missing default-path files are silently skipped — the suite file is
     optional.  The function is idempotent (guarded by a module-level flag).
     """
-    global _SUITE_ENV_LOADED
+    global _SUITE_ENV_LOADED, _SUITE_ENV_PATH
     if _SUITE_ENV_LOADED:
         return
     _SUITE_ENV_LOADED = True
+    _SUITE_ENV_PATH = None
 
     explicit = os.environ.get("AGENT_SUITE_CONFIG", "")
     if explicit:
@@ -51,6 +64,7 @@ def load_suite_env() -> None:
                 f"AGENT_SUITE_CONFIG points to {explicit!r}, which does not exist."
             )
         _inject_env_file(explicit)
+        _SUITE_ENV_PATH = explicit
         return
 
     xdg = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
@@ -60,6 +74,7 @@ def load_suite_env() -> None:
     ):
         if os.path.isfile(path):
             _inject_env_file(path)
+            _SUITE_ENV_PATH = path
             return
 
 
@@ -177,6 +192,39 @@ class LdapConfig:
     ca_cert_file: str
     connect_timeout: int
     domain: str
+
+
+@dataclass(frozen=True, slots=True)
+class TlsConfig:
+    """TLS termination config for the dossier web server (Plan 014 WI-1.5).
+
+    Env-driven: when both ``DOSSIER_TLS_CERT_PATH`` and ``DOSSIER_TLS_KEY_PATH``
+    are set, the uvicorn server serves over TLS; when both are unset, plain
+    HTTP (dev). Setting only one is a configuration error caught at serve time.
+    No certificate is ever committed — these are host paths the operator
+    provisions (or a mounted secret in the container deploy). This is the seam
+    the AC ("logs in over TLS") exercises; the live cross-machine validation
+    is operator-gated (real certs + work network).
+    """
+
+    cert_path: str
+    key_path: str
+
+
+def load_tls_config() -> TlsConfig | None:
+    """Load TLS config from the environment.
+
+    Returns ``None`` when TLS is not configured (both vars unset) so the
+    caller serves plain HTTP. Returns a :class:`TlsConfig` (possibly with an
+    empty field) when at least one var is set; the caller validates that both
+    are present before serving — a half-set pair is a fail-loud error, not a
+    silent plaintext fallback.
+    """
+    cert = os.environ.get("DOSSIER_TLS_CERT_PATH", "")
+    key = os.environ.get("DOSSIER_TLS_KEY_PATH", "")
+    if not cert and not key:
+        return None
+    return TlsConfig(cert_path=cert, key_path=key)
 
 
 def _parse_bool(name: str, raw: str) -> bool:

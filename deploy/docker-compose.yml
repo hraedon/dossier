@@ -1,0 +1,87 @@
+# deploy/docker-compose.yml — reproducible TLS-ready team deploy (Plan 014 WI-1.5).
+#
+# This is the "documented step" an operator follows to bring up dossier for a
+# team over TLS. Unlike the root docker-compose.yml (local-dev, plaintext),
+# this compose reads a gitignored `suite.env` and mounts a gitignored `certs/`
+# directory so no plaintext secret lands in the repo and dossier serves HTTPS.
+#
+# Prerequisites (see docs/deploy.md for the full step):
+#   1. cp suite.env.example suite.env  &&  edit suite.env (real DSN, key path, LDAP)
+#   2. mkdir certs && place cert.pem + key.pem (operator-provisioned; never committed)
+#   3. regista provision --project <slug>   (the spine must exist first)
+#   4. docker compose -f deploy/docker-compose.yml up -d --build
+#   5. reach https://<host>:8443/  from a second machine on the work network
+#
+# The live cross-machine TLS login (real LDAP + real certs + work network) is
+# operator-gated validation, like the public flip — this compose is the artifact
+# that makes it reproducible; the validation itself needs the workplace infra.
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: dossier-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: dossier
+      POSTGRES_PASSWORD: dossier
+      POSTGRES_DB: dossier
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dossier"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+    networks:
+      - dossier
+
+  dossier:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: hraedon/dossier:local
+    container_name: dossier-app
+    ports:
+      - "8443:8000"
+    env_file:
+      - ../suite.env
+    environment:
+      # The DSN points at the compose-internal postgres; suite.env may override
+      # for an external store. Keep secrets out of this file — they live in
+      # suite.env (gitignored) or the process env.
+      REGISTA_DSN: postgresql://dossier:dossier@postgres:5432/dossier
+      DOSSIER_TLS_CERT_PATH: /run/secrets/tls/cert.pem
+      DOSSIER_TLS_KEY_PATH: /run/secrets/tls/key.pem
+    volumes:
+      # TLS cert + key (operator-provisioned; gitignored). Read-only mount.
+      - ../certs:/run/secrets/tls:ro
+      # The HMAC keyset manifest and (for local auth) the users file live in
+      # the gitignored secrets/ dir; mount them rather than baking them in.
+      - ../secrets:/run/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # dossier serves HTTPS directly (uvicorn ssl_certfile), so the healthcheck
+    # probes https. A local self-signed cert uses an unverified context (this
+    # is intra-container, localhost only); a production deploy with a real CA
+    # cert may drop the unverified context.
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,ssl,json; ctx=ssl._create_unverified_context(); r=urllib.request.urlopen('https://127.0.0.1:8000/healthz',timeout=4,context=ctx); d=json.load(r); exit(1 if any(c['status']=='fail' for c in d.get('checks',[])) else 0)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - dossier
+
+volumes:
+  postgres_data:
+
+networks:
+  dossier:
