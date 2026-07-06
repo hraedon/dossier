@@ -141,6 +141,31 @@ def create_app(
         key_manifest_path=key_manifest_path or None,
     )
     app.state.key_manager = key_mgr
+
+    def _actor_key_custody_ready() -> bool:
+        hmac_path = settings.hmac_key_path
+        if not hmac_path:
+            return True
+        if is_backend_ref(hmac_path) and not hmac_path.lower().startswith("file:"):
+            return False
+        return True
+
+    _rotation_throttle: dict[str, float] = {}
+    _rotation_cooldown_seconds = 60.0
+
+    def _rotation_allowed(actor_id: str) -> bool:
+        import time
+
+        last = _rotation_throttle.get(actor_id)
+        if last is None:
+            return True
+        return (time.monotonic() - last) >= _rotation_cooldown_seconds
+
+    def _record_rotation(actor_id: str) -> None:
+        import time
+
+        _rotation_throttle[actor_id] = time.monotonic()
+
     throttler = LoginThrottler()
 
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -747,7 +772,7 @@ def create_app(
     ) -> Response:
         ctx = actor_context(request, actor)
         principal_key = None
-        rotation_allowed = True
+        rotation_allowed = _rotation_allowed(actor.actor_id)
         key_events: list[dict[str, Any]] = []
 
         for project in registry.list_projects():
@@ -785,23 +810,64 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        private_key, new_public_key = key_mgr.generate(actor.actor_id)
+        if not _actor_key_custody_ready():
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "actor-key custody requires a file-backed key manifest; remote backends are a v1.1 seam",
+            )
 
-        success_count = 0
-        errors: list[str] = []
-        for project in registry.list_projects():
-            if not can_read_project(actor, project):
-                continue
-            try:
-                gw = registry.get(project)
-                result = gw.rotate_principal(
-                    actor.actor_id, new_public_key, registered_by=actor.actor_id
-                )
-                if result:
-                    key_mgr.store_private_key(actor.actor_id, result["key_id"], private_key)
+        if not _rotation_allowed(actor.actor_id):
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "rotation rate-limited; try again later",
+            )
+
+        private_key, new_public_key = key_mgr.generate(actor.actor_id)
+        try:
+            success_count = 0
+            errors: list[str] = []
+            for project in registry.list_projects():
+                if not can_read_project(actor, project):
+                    continue
+                try:
+                    gw = registry.get(project)
+                    old_key = gw.get_principal_key(actor.actor_id)
+                    result = gw.rotate_principal(
+                        actor.actor_id, new_public_key, registered_by=actor.actor_id
+                    )
+                    if not result:
+                        errors.append(f"{project}: rotation returned no result")
+                        continue
+                    try:
+                        key_mgr.store_private_key(
+                            actor.actor_id, result["key_id"], private_key
+                        )
+                    except Exception as store_exc:
+                        try:
+                            gw.revoke_principal(
+                                actor.actor_id,
+                                result["key_id"],
+                                reason="private-key custody failure",
+                            )
+                        except Exception:
+                            pass
+                        if old_key is not None:
+                            try:
+                                old_public_key = bytes.fromhex(old_key["public_key"])
+                                gw.register_principal(
+                                    actor.actor_id,
+                                    old_public_key,
+                                    registered_by=actor.actor_id,
+                                )
+                            except Exception:
+                                pass
+                        errors.append(f"{project}: {store_exc}")
+                        continue
                     success_count += 1
-            except Exception as exc:
-                errors.append(f"{project}: {exc}")
+                except Exception as exc:
+                    errors.append(f"{project}: {exc}")
+        finally:
+            del private_key
 
         if errors:
             logger.warning("key.rotation_partial_failure", extra={
@@ -815,6 +881,7 @@ def create_app(
                 status.HTTP_500_INTERNAL_SERVER_ERROR, "key rotation failed"
             )
 
+        _record_rotation(actor.actor_id)
         return RedirectResponse(url="/me/identity", status_code=status.HTTP_303_SEE_OTHER)
 
     # ---- my signing history (Plan 015 WI-1.3) ----
@@ -1040,13 +1107,11 @@ def create_app(
 
         reason = " ".join(raw_reason.split())[:500]
 
-        # v1 dual-control simplification: the confirmer_id is checked against the
-        # admin set but the second admin does not actively confirm in their own
-        # session. v1.5 will implement a two-step flow where the confirmer must
-        # approve via a separate authenticated request. This is documented in
-        # Plan 015 WI-2.3. Until then, the dual-control check provides attestation
-        # (who approved) but not authentication (that they actually did). This is
-        # a known gap; do not rely on it for security in production.
+        if not _actor_key_custody_ready():
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "actor-key custody requires a file-backed key manifest; remote backends are a v1.1 seam",
+            )
 
         try:
             private_key, new_public_key = key_mgr.generate(principal_id)
@@ -1060,11 +1125,11 @@ def create_app(
                 continue
             try:
                 gw = registry.get(project)
-                existing = gw.get_principal_key(principal_id)
-                if existing:
+                old_key = gw.get_principal_key(principal_id)
+                if old_key is not None:
                     gw.revoke_principal(
                         principal_id,
-                        existing["key_id"],
+                        old_key["key_id"],
                         reason=f"break-glass: {reason}",
                     )
                 result = gw.register_principal(
@@ -1072,11 +1137,42 @@ def create_app(
                     new_public_key,
                     registered_by=actor.actor_id,
                 )
-                if result:
-                    key_mgr.store_private_key(principal_id, result["key_id"], private_key)
+                if not result:
+                    errors.append(f"{project}: break-glass returned no result")
+                    continue
+                try:
+                    key_mgr.store_private_key(
+                        principal_id, result["key_id"], private_key
+                    )
+                except Exception as store_exc:
+                    try:
+                        gw.revoke_principal(
+                            principal_id,
+                            result["key_id"],
+                            reason="private-key custody failure",
+                        )
+                    except Exception:
+                        pass
+                    if old_key is not None:
+                        try:
+                            old_public_key = bytes.fromhex(old_key["public_key"])
+                            gw.register_principal(
+                                principal_id,
+                                old_public_key,
+                                registered_by=actor.actor_id,
+                            )
+                        except Exception:
+                            pass
+                    errors.append(f"{project}: {store_exc}")
+                    continue
                 success_count += 1
             except Exception as exc:
                 errors.append(f"{project}: {exc}")
+
+        try:
+            del private_key
+        except NameError:
+            pass
 
         if errors:
             logger.warning("break_glass.partial_failure", extra={

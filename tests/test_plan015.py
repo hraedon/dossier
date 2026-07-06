@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.keys import generate_ed25519_keypair
-from dossier.principals import InMemoryPrincipalKeyStore
+from _doubles import InMemoryPrincipalKeyStore, inject_test_store
 
 _ALICE_ID = "11111111-1111-1111-1111-111111111111"
 _SECOND_ADMIN_ID = "22222222-2222-2222-2222-222222222222"
@@ -39,9 +42,9 @@ def admin_env_dual(monkeypatch):
 @pytest.fixture
 def principal_store(gateway):
     store = InMemoryPrincipalKeyStore()
-    gateway._principal_store = store
+    inject_test_store(gateway, store)
     yield store
-    gateway._principal_store = None
+    inject_test_store(gateway, None)
 
 
 def _enroll(store, principal_id=_ALICE_ID):
@@ -519,3 +522,221 @@ def test_break_glass_stores_private_key(client, principal_store, admin_env_dual,
 
     key_path = tmp_path / "principals" / f"{_NEW_PRINCIPAL_ID}_ed25519.key"
     assert key_path.exists()
+
+
+# ---- adversarial review fixes (Plan 015 follow-up) ----
+
+
+def _users_file_for(tmp_path: Path) -> Path:
+    from dossier.auth.passwords import hash_password
+
+    path = tmp_path / "users.json"
+    path.write_text(
+        json.dumps(
+            [
+                {
+                    "stable_id": _ALICE_ID,
+                    "username": "alice",
+                    "display_name": "Alice",
+                    "password": hash_password("s3cret"),
+                    "groups": [],
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_key_manifest_written_with_owner_only_permissions(tmp_path):
+    import os
+
+    from dossier.keys import PrincipalKeyManager
+
+    key_dir = tmp_path / "principals"
+    manifest_path = tmp_path / "keys.json"
+    mgr = PrincipalKeyManager(key_dir, key_manifest_path=manifest_path)
+    private_key, _public_key = mgr.generate("test-principal")
+    mgr.store_private_key("test-principal", "pk_test", private_key)
+
+    assert manifest_path.exists()
+    mode = os.stat(manifest_path).st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_rotate_rolls_back_on_custody_failure(client, principal_store, admin_env, monkeypatch):
+    entry = _enroll(principal_store, _ALICE_ID)
+    _login(client)
+
+    def _fail(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(client.app.state.key_manager, "store_private_key", _fail)
+
+    identity_page = client.get("/me/identity")
+    csrf = _extract_csrf(identity_page.text)
+    resp = client.post("/me/key/rotate", data={"csrf_token": csrf}, follow_redirects=False)
+
+    assert resp.status_code == 500
+    active = principal_store.get_active(_ALICE_ID)
+    assert active["public_key"] == entry["public_key"]
+
+
+def test_break_glass_rolls_back_on_custody_failure(
+    client, principal_store, admin_env_dual, monkeypatch
+):
+    entry = _enroll(principal_store, _NEW_PRINCIPAL_ID)
+    old_public_key = entry["public_key"]
+    _login(client)
+
+    def _fail(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(client.app.state.key_manager, "store_private_key", _fail)
+
+    bg_page = client.get("/admin/break-glass")
+    csrf = _extract_csrf(bg_page.text)
+    resp = client.post(
+        "/admin/break-glass",
+        data={
+            "principal_id": _NEW_PRINCIPAL_ID,
+            "reason": "emergency access",
+            "confirmer_id": _SECOND_ADMIN_ID,
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+
+    assert resp.status_code == 500
+    active = principal_store.get_active(_NEW_PRINCIPAL_ID)
+    assert active["public_key"] == old_public_key
+
+
+def test_enroll_principal_failure_logs_warning(caplog):
+    from unittest.mock import MagicMock
+
+    from helpers import ALICE
+    from regista import RegistaError
+    from regista._errors import ErrorCode
+
+    from dossier.gateway import RegistaGateway
+
+    reg = MagicMock()
+    reg.enroll_principal.side_effect = RegistaError(
+        ErrorCode.INVALID_ARGUMENT, "bad principal"
+    )
+    gw = RegistaGateway(reg, project_name="test")
+
+    with caplog.at_level("WARNING", logger="dossier.gateway"):
+        result = gw.enroll_principal("alice", actor=ALICE)
+
+    assert result is None
+    assert "enroll_principal failed" in caplog.text
+    assert "bad principal" not in caplog.text
+    record = [r for r in caplog.records if "enroll_principal failed" in r.getMessage()][0]
+    assert record.error_code == "INVALID_ARGUMENT"
+    assert record.principal_id == "alice"
+
+
+def test_rotation_rate_limit_blocks_repeat(client, principal_store, admin_env):
+    _enroll(principal_store, _ALICE_ID)
+    _login(client)
+
+    identity_page = client.get("/me/identity")
+    assert "try again later" not in identity_page.text.lower()
+
+    csrf = _extract_csrf(identity_page.text)
+    resp = client.post("/me/key/rotate", data={"csrf_token": csrf}, follow_redirects=False)
+    assert resp.status_code == 303
+
+    identity_page = client.get("/me/identity")
+    assert "rotation is rate-limited" in identity_page.text.lower()
+
+    csrf = _extract_csrf(identity_page.text)
+    resp = client.post("/me/key/rotate", data={"csrf_token": csrf}, follow_redirects=False)
+    assert resp.status_code == 429
+
+
+def test_gateway_test_store_guard_requires_testing_flag(gateway):
+    import dossier.gateway as gw_module
+
+    prev = gw_module._TESTING
+    try:
+        gw_module._TESTING = False
+        store = InMemoryPrincipalKeyStore()
+        store.register("alice", b"0" * 32)
+        gateway._principal_store = store
+        assert gateway.list_principals("alice") == []
+    finally:
+        gateway._principal_store = None
+        gw_module._TESTING = prev
+
+
+def test_remote_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from regista.testing import InMemoryRegista
+
+    from dossier.app import _configure_admin_ids, create_app
+    from dossier.auth.backends import LocalBackend
+    from dossier.config import Settings
+    from dossier.gateway import RegistaGateway
+    from dossier.keys import generate_keyset
+    from dossier.multi import GatewayRegistry
+
+    monkeypatch.setenv("DOSSIER_ADMIN_IDS", f"{_ALICE_ID},{_SECOND_ADMIN_ID}")
+    _configure_admin_ids()
+    try:
+        key_path = tmp_path / "keys.json"
+        generate_keyset(key_path)
+        project = "dossier_test"
+        reg = InMemoryRegista(project=project, hmac_key_path=str(key_path))
+        gw = RegistaGateway(reg, project_name=project)
+        gw.register_workflow()
+
+        settings = Settings(
+            database_url="",
+            project=project,
+            hmac_key_path="env:REGISTA_REMOTE_KEY",
+            session_secret="test-session-secret-not-for-prod",
+            session_max_age_seconds=43200,
+            secure_cookies=False,
+            require_ssl=False,
+            users_path=str(_users_file_for(tmp_path)),
+            auth_backend="local",
+            principal_key_dir=str(tmp_path / "principals"),
+        )
+        backend = LocalBackend(_users_file_for(tmp_path))
+        registry = GatewayRegistry(known_projects=[project])
+        registry.add(project, gw)
+        app = create_app(settings, registry, backend)
+
+        with TestClient(app) as client:
+            _login(client)
+
+            identity_page = client.get("/me/identity")
+            csrf = _extract_csrf(identity_page.text)
+            resp = client.post(
+                "/me/key/rotate",
+                data={"csrf_token": csrf},
+                follow_redirects=False,
+            )
+            assert resp.status_code == 400
+            assert "remote backends are a v1.1 seam" in resp.text
+
+            bg_page = client.get("/admin/break-glass")
+            csrf = _extract_csrf(bg_page.text)
+            resp = client.post(
+                "/admin/break-glass",
+                data={
+                    "principal_id": _NEW_PRINCIPAL_ID,
+                    "reason": "emergency",
+                    "confirmer_id": _SECOND_ADMIN_ID,
+                    "csrf_token": csrf,
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code == 400
+            assert "remote backends are a v1.1 seam" in resp.text
+    finally:
+        monkeypatch.delenv("DOSSIER_ADMIN_IDS", raising=False)
+        _configure_admin_ids()

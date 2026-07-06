@@ -8,11 +8,13 @@ from typing import Any, cast
 import yaml
 
 import regista
-from regista import Event, QueryPage, Regista, ReplayReport, WorkItem
+from regista import Event, QueryPage, Regista, RegistaError, ReplayReport, WorkItem
 
 from .actors import Actor
 
 logger = logging.getLogger("dossier.gateway")
+
+_TESTING = False
 
 # Plan 010 (WI-3): dossier registers the single canonical workflow shipped from
 # regista — the same one agent-notes registers — so human and agent work share
@@ -268,6 +270,11 @@ class RegistaGateway:
         """True when the backend is real regista with principal-key ops."""
         return hasattr(self._reg, "principals")
 
+    def _test_store(self) -> Any | None:
+        if not _TESTING:
+            return None
+        return getattr(self, "_principal_store", None)
+
     def list_principals(self, principal_id: str | None = None) -> list[dict[str, Any]]:
         """List principal keys from the regista registry (Plan 015).
 
@@ -276,7 +283,7 @@ class RegistaGateway:
         (InMemoryRegista), checks for an injected test-double store
         (``_principal_store``), then falls back to an empty list.
         """
-        store = getattr(self, "_principal_store", None)
+        store = self._test_store()
         if store is not None:
             return cast(list[dict[str, Any]], store.list(principal_id))
         if self.has_principal_ops():
@@ -330,13 +337,16 @@ class RegistaGateway:
                     private_key_dir=private_key_dir,
                 ),
             )
-        except Exception:
-            logger.debug("enroll_principal failed", exc_info=True)
+        except Exception as exc:
+            detail = {"principal_id": principal_id, "error": type(exc).__name__}
+            if isinstance(exc, RegistaError):
+                detail["error_code"] = exc.code.value
+            logger.warning("enroll_principal failed", extra=detail)
             return None
 
     def get_principal_key(self, principal_id: str) -> dict[str, Any] | None:
         """Get the active key for a principal, or None if not registered."""
-        store = getattr(self, "_principal_store", None)
+        store = self._test_store()
         if store is not None:
             try:
                 return cast(dict[str, Any], store.get_active(principal_id))
@@ -353,7 +363,7 @@ class RegistaGateway:
         self, principal_id: str, public_key: bytes, *, registered_by: str = "system"
     ) -> dict[str, Any] | None:
         """Register a new principal key (Plan 015 WI-2.1)."""
-        store = getattr(self, "_principal_store", None)
+        store = self._test_store()
         if store is not None:
             return cast(dict[str, Any], store.register(principal_id, public_key, registered_by=registered_by))
         if self.has_principal_ops():
@@ -367,7 +377,7 @@ class RegistaGateway:
         self, principal_id: str, new_public_key: bytes, *, registered_by: str = "system"
     ) -> dict[str, Any] | None:
         """Rotate a principal's key (Plan 015 WI-1.2)."""
-        store = getattr(self, "_principal_store", None)
+        store = self._test_store()
         if store is not None:
             return cast(dict[str, Any], store.rotate(principal_id, new_public_key, registered_by=registered_by))
         if self.has_principal_ops():
@@ -381,7 +391,7 @@ class RegistaGateway:
         self, principal_id: str, key_id: str, *, reason: str = "unspecified"
     ) -> dict[str, Any] | None:
         """Revoke a principal's key (Plan 015 WI-2.2)."""
-        store = getattr(self, "_principal_store", None)
+        store = self._test_store()
         if store is not None:
             return cast(dict[str, Any], store.revoke(principal_id, key_id, reason=reason))
         if self.has_principal_ops():

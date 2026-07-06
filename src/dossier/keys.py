@@ -235,7 +235,26 @@ class PrincipalKeyManager:
         data["keys"] = keys
 
         tmp_path = path.with_suffix(path.suffix + ".tmp")
-        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        encoded = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+        fd = os.open(
+            str(tmp_path),
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+            0o600,
+        )
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(encoded)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(str(tmp_path))
+            except OSError:
+                pass
+            raise
+        os.chmod(str(tmp_path), 0o600)
         os.replace(str(tmp_path), str(path))
 
 

@@ -1,19 +1,3 @@
-"""In-memory principal key store for testing (Plan 015).
-
-The real regista ``PrincipalKeyOps`` requires a Postgres connection.
-This test double provides the same interface (``list``, ``get_active``,
-``register``, ``rotate``, ``revoke``) backed by an in-memory dict, so
-dossier's key-management UX can be tested without a database.
-
-Usage in tests::
-
-    store = InMemoryPrincipalKeyStore()
-    gateway._principal_store = store  # inject before running tests
-
-The gateway's principal methods check for this attribute first, then fall
-back to ``reg.principals`` if available.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -21,6 +5,10 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
+
+import dossier.gateway as _gw_module
+
+_gw_module._TESTING = True
 
 
 @dataclass(frozen=True)
@@ -64,13 +52,6 @@ def _generate_key_id() -> str:
 
 
 class InMemoryPrincipalKeyStore:
-    """In-memory principal key registry for testing.
-
-    Implements the same ``list``/``get_active``/``register``/``rotate``/
-    ``revoke`` interface as regista's ``PrincipalKeyOps``, backed by a
-    plain list. No Postgres required.
-    """
-
     def __init__(self) -> None:
         self._entries: list[PrincipalKeyEntry] = []
 
@@ -241,3 +222,7 @@ class InMemoryPrincipalKeyStore:
 
     def clear(self) -> None:
         self._entries.clear()
+
+
+def inject_test_store(gateway: Any, store: InMemoryPrincipalKeyStore) -> None:
+    gateway._principal_store = store
