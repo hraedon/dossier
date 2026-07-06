@@ -6,7 +6,7 @@
 # The regista pin is explicit and matches SUITE.lock. Update both together.
 
 ARG PYTHON_VERSION=3.13
-ARG REGISTA_REF=d7d156c3841f7d0137c91be2f0558e697c35f4cc
+ARG REGISTA_REF=11c82b1a2d509b71246361fb7972d14eea7c77cb
 
 # ── Stage 1: builder ─────────────────────────────────────────────────────────
 # git is needed here to pip-install regista from a pinned SHA but does NOT

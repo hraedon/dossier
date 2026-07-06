@@ -264,6 +264,10 @@ class RegistaGateway:
                 info["verified"] = False
         return info
 
+    def has_principal_ops(self) -> bool:
+        """True when the backend is real regista with principal-key ops."""
+        return hasattr(self._reg, "principals")
+
     def list_principals(self, principal_id: str | None = None) -> list[dict[str, Any]]:
         """List principal keys from the regista registry (Plan 015).
 
@@ -275,14 +279,60 @@ class RegistaGateway:
         store = getattr(self, "_principal_store", None)
         if store is not None:
             return cast(list[dict[str, Any]], store.list(principal_id))
-        reg = self._reg
-        if hasattr(reg, "principals"):
+        if self.has_principal_ops():
             try:
-                ops = reg.principals
-                return cast(list[dict[str, Any]], ops.list(principal_id))
+                return cast(list[dict[str, Any]], self._reg.principals.list(principal_id))
             except Exception:
                 return []
         return []
+
+    def read_principal_enrollment_events(self, principal_id: str) -> list[Event]:
+        """Read principal enrollment/rotation/revocation events.
+
+        Returns an empty list when the backend does not support principal
+        entities (e.g. InMemoryRegista without an injected test store).
+        """
+        reg = self._reg
+        if hasattr(reg, "read_principal_enrollment_events"):
+            try:
+                return cast(list[Event], reg.read_principal_enrollment_events(principal_id=principal_id))
+            except Exception:
+                logger.debug("read_principal_enrollment_events failed", exc_info=True)
+        return []
+
+    def enroll_principal(
+        self,
+        principal_id: str,
+        *,
+        actor: Actor | None = None,
+        private_key_dir: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Enroll a principal through regista (Plan 015 WI-2.1).
+
+        Real regista generates the Ed25519 keypair, stores the private key in
+        the secret backend, registers the public key, and emits a signed
+        ``principal_enrolled`` event. The returned dict contains only public
+        metadata: ``key_id``, ``fingerprint``, ``scheme``.
+        """
+        if not self.has_principal_ops():
+            return None
+        actor_id = actor.actor_id if actor else "system"
+        actor_kind = actor.actor_kind if actor else "system"
+        actor_metadata = _metadata(actor) if actor else None
+        try:
+            return cast(
+                dict[str, Any],
+                self._reg.enroll_principal(
+                    principal_id,
+                    actor_id=actor_id,
+                    actor_kind=actor_kind,
+                    actor_metadata=actor_metadata,
+                    private_key_dir=private_key_dir,
+                ),
+            )
+        except Exception:
+            logger.debug("enroll_principal failed", exc_info=True)
+            return None
 
     def get_principal_key(self, principal_id: str) -> dict[str, Any] | None:
         """Get the active key for a principal, or None if not registered."""
@@ -292,11 +342,9 @@ class RegistaGateway:
                 return cast(dict[str, Any], store.get_active(principal_id))
             except Exception:
                 return None
-        reg = self._reg
-        if hasattr(reg, "principals"):
+        if self.has_principal_ops():
             try:
-                ops = reg.principals
-                return cast(dict[str, Any], ops.get_active(principal_id))
+                return cast(dict[str, Any], self._reg.principals.get_active(principal_id))
             except Exception:
                 return None
         return None
@@ -308,10 +356,11 @@ class RegistaGateway:
         store = getattr(self, "_principal_store", None)
         if store is not None:
             return cast(dict[str, Any], store.register(principal_id, public_key, registered_by=registered_by))
-        reg = self._reg
-        if hasattr(reg, "principals"):
-            ops = reg.principals
-            return cast(dict[str, Any], ops.register(principal_id, public_key, registered_by=registered_by))
+        if self.has_principal_ops():
+            return cast(
+                dict[str, Any],
+                self._reg.principals.register(principal_id, public_key, registered_by=registered_by),
+            )
         return None
 
     def rotate_principal(
@@ -321,10 +370,11 @@ class RegistaGateway:
         store = getattr(self, "_principal_store", None)
         if store is not None:
             return cast(dict[str, Any], store.rotate(principal_id, new_public_key, registered_by=registered_by))
-        reg = self._reg
-        if hasattr(reg, "principals"):
-            ops = reg.principals
-            return cast(dict[str, Any], ops.rotate(principal_id, new_public_key, registered_by=registered_by))
+        if self.has_principal_ops():
+            return cast(
+                dict[str, Any],
+                self._reg.principals.rotate(principal_id, new_public_key, registered_by=registered_by),
+            )
         return None
 
     def revoke_principal(
@@ -334,10 +384,11 @@ class RegistaGateway:
         store = getattr(self, "_principal_store", None)
         if store is not None:
             return cast(dict[str, Any], store.revoke(principal_id, key_id, reason=reason))
-        reg = self._reg
-        if hasattr(reg, "principals"):
-            ops = reg.principals
-            return cast(dict[str, Any], ops.revoke(principal_id, key_id, reason=reason))
+        if self.has_principal_ops():
+            return cast(
+                dict[str, Any],
+                self._reg.principals.revoke(principal_id, key_id, reason=reason),
+            )
         return None
 
     def transitions_from(self, state: str, workflow_version: int) -> list[Any]:

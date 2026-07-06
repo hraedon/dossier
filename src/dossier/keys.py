@@ -65,36 +65,85 @@ def generate_ed25519_keypair() -> tuple[bytes, bytes]:
 
 
 class PrincipalKeyManager:
-    """Manages Ed25519 keypair generation and private-key storage.
+    """Manages Ed25519 keypair generation and private-key custody.
 
     The public key is registered with regista's principal registry (via the
-    gateway). The private key is stored in a file-based key store — the v1
-    secret backend until Plan 026 lands a real one (KMS/Vault).
+    gateway). The private key is stored in the configured secret backend
+    through regista's key-set manifest: for the file backend this is a
+    private (0600) file referenced by ``secret_ref`` in the key manifest.
+    Remote backends are deferred to Plan 026 secret-backend integration.
 
-    Private keys are written with 0600 permissions and never appear in the
-    UI (Plan 015 design principle: no raw key material in the UX, ever).
+    Private keys are never returned to callers that render UI or logs
+    (Plan 015 design principle: no raw key material in the UX, ever).
     """
 
-    def __init__(self, key_dir: Path | str | None = None) -> None:
+    def __init__(
+        self,
+        key_dir: Path | str | None = None,
+        key_manifest_path: Path | str | None = None,
+    ) -> None:
         self._key_dir = Path(key_dir) if key_dir else None
+        self._key_manifest_path = Path(key_manifest_path) if key_manifest_path else None
+
+    def generate(self, principal_id: str) -> tuple[bytes, bytes]:
+        """Generate a new Ed25519 keypair for *principal_id*.
+
+        Returns ``(private_key, public_key)`` as raw 32-byte secrets. The
+        caller must hand the private key to :meth:`store_private_key` once
+        the matching ``key_id`` is known from regista.
+        """
+        _validate_principal_id(principal_id)
+        return generate_ed25519_keypair()
 
     def generate_and_store(self, principal_id: str) -> bytes:
         """Generate a new Ed25519 keypair and store the private key.
 
         Returns the ``public_key`` for registration with regista. The private
         key is stored internally and never returned to the caller.
+
+        This is the legacy v1 path used when dossier itself generates the
+        keypair (e.g. the InMemoryRegista test backend). Real regista
+        enrollment uses :meth:`regista.Regista.enroll_principal` instead.
         """
         _validate_principal_id(principal_id)
         private_key, public_key = generate_ed25519_keypair()
-        self._store_private_key(principal_id, private_key)
+        key_id = f"dossier-actor-{principal_id}"
+        self.store_private_key(principal_id, key_id, private_key)
         return public_key
 
-    def _store_private_key(self, principal_id: str, private_key: bytes) -> None:
+    def store_private_key(
+        self,
+        principal_id: str,
+        key_id: str,
+        private_key: bytes,
+    ) -> str:
+        """Store *private_key* for *principal_id* and return its ``secret_ref``.
+
+        When a key-set manifest path is configured, the manifest is updated
+        so regista can resolve the secret on the actor's behalf.
+        """
+        secret_ref = self._store_private_key(principal_id, private_key)
+        if self._key_manifest_path is not None:
+            from nacl.signing import SigningKey
+
+            verify_key = SigningKey(private_key).verify_key
+            public_key = bytes(verify_key)
+            self._update_key_manifest(
+                principal_id,
+                key_id,
+                public_key,
+                secret_ref,
+            )
+        return secret_ref
+
+    def _store_private_key(self, principal_id: str, private_key: bytes) -> str:
         """Write a principal's Ed25519 private key to a file (0600 perms).
 
         Writes atomically via a temp file + ``os.rename`` to avoid races
         where another process reads a partially-written key. Uses
         ``O_NOFOLLOW`` to reject symlink-based redirection attacks.
+
+        Returns the ``file:`` secret_ref for the stored key.
         """
         if self._key_dir is None:
             raise RuntimeError(
@@ -129,6 +178,65 @@ class PrincipalKeyManager:
             except OSError:
                 pass
             raise
+        return f"file:{key_path}"
+
+    def _update_key_manifest(
+        self,
+        principal_id: str,
+        key_id: str,
+        public_key: bytes,
+        secret_ref: str,
+    ) -> None:
+        """Update the regista key-set manifest with a new actor key entry.
+
+        Existing active entries for the same principal are marked deprecated,
+        matching the semantics of regista's own ``provision-principal``.
+        """
+        if self._key_manifest_path is None:
+            return
+
+        import base64
+
+        path = self._key_manifest_path
+        data: dict[str, Any] = {"keys": []}
+        if path.exists():
+            try:
+                raw = path.read_text(encoding="utf-8")
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict) and "keys" in parsed:
+                    data = parsed
+            except (OSError, json.JSONDecodeError):
+                data = {"keys": []}
+
+        keys: list[dict[str, Any]] = data.get("keys", [])
+        if not isinstance(keys, list):
+            keys = []
+
+        existing = [
+            k for k in keys
+            if k.get("principal_id") == principal_id and k.get("key_id") == key_id
+        ]
+        if existing:
+            return
+
+        for k in keys:
+            if k.get("principal_id") == principal_id and k.get("status") == "active":
+                k["status"] = "deprecated"
+
+        keys.append({
+            "key_id": key_id,
+            "scheme": "ed25519",
+            "principal_id": principal_id,
+            "secret_ref": secret_ref,
+            "public_key": base64.b64encode(public_key).decode("ascii"),
+            "role": "actor",
+            "status": "active",
+        })
+        data["keys"] = keys
+
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(str(tmp_path), str(path))
 
 
 def generate_keyset(path: Path, *, key_id: str | None = None) -> dict[str, Any]:

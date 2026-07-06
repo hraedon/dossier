@@ -25,8 +25,9 @@ from .auth.throttle import LoginThrottler, _normalize_identifier
 from .authz import can_read_project
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
-from .keys import PrincipalKeyManager
+from .keys import PrincipalKeyManager, _validate_principal_id
 from .multi import GatewayRegistry, project_to_slug, slug_to_project
+from .secrets import is_backend_ref
 from . import web
 
 logger = logging.getLogger("dossier.app")
@@ -129,7 +130,16 @@ def create_app(
     app.state.settings = settings
     app.state.registry = registry
     app.state.backend = backend
-    key_mgr = PrincipalKeyManager(settings.principal_key_dir or None)
+    key_manifest_path = settings.hmac_key_path
+    if key_manifest_path and is_backend_ref(key_manifest_path):
+        if key_manifest_path.lower().startswith("file:"):
+            key_manifest_path = key_manifest_path.split(":", 1)[1]
+        else:
+            key_manifest_path = ""
+    key_mgr = PrincipalKeyManager(
+        settings.principal_key_dir or None,
+        key_manifest_path=key_manifest_path or None,
+    )
     app.state.key_manager = key_mgr
     throttler = LoginThrottler()
 
@@ -738,6 +748,7 @@ def create_app(
         ctx = actor_context(request, actor)
         principal_key = None
         rotation_allowed = True
+        key_events: list[dict[str, Any]] = []
 
         for project in registry.list_projects():
             if not can_read_project(actor, project):
@@ -746,12 +757,22 @@ def create_app(
                 gw = registry.get(project)
                 principal_key = gw.get_principal_key(actor.actor_id)
                 if principal_key:
+                    key_events = [
+                        {
+                            "transition": web.transition_label(getattr(ev, "transition", "")),
+                            "timestamp": web.format_timestamp(getattr(ev, "timestamp", None)),
+                            "key_id": ev.payload.get("key_id") if isinstance(ev.payload, dict) else None,
+                            "fingerprint": ev.payload.get("fingerprint") if isinstance(ev.payload, dict) else None,
+                        }
+                        for ev in gw.read_principal_enrollment_events(actor.actor_id)
+                    ]
                     break
             except Exception:
                 pass
 
         ctx["principal_key"] = principal_key
         ctx["rotation_allowed"] = rotation_allowed
+        ctx["key_events"] = key_events
         return templates.TemplateResponse(
             request,
             "my_identity.html",
@@ -764,7 +785,7 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        new_public_key = key_mgr.generate_and_store(actor.actor_id)
+        private_key, new_public_key = key_mgr.generate(actor.actor_id)
 
         success_count = 0
         errors: list[str] = []
@@ -777,6 +798,7 @@ def create_app(
                     actor.actor_id, new_public_key, registered_by=actor.actor_id
                 )
                 if result:
+                    key_mgr.store_private_key(actor.actor_id, result["key_id"], private_key)
                     success_count += 1
             except Exception as exc:
                 errors.append(f"{project}: {exc}")
@@ -897,9 +919,11 @@ def create_app(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "principal_id is required")
 
         try:
-            new_public_key = key_mgr.generate_and_store(principal_id)
+            _validate_principal_id(principal_id)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+        private_key_dir = settings.principal_key_dir or None
 
         success_count = 0
         errors: list[str] = []
@@ -908,9 +932,17 @@ def create_app(
                 continue
             try:
                 gw = registry.get(project)
-                result = gw.register_principal(
-                    principal_id, new_public_key, registered_by=actor.actor_id
-                )
+                if gw.has_principal_ops():
+                    result = gw.enroll_principal(
+                        principal_id,
+                        actor=actor,
+                        private_key_dir=private_key_dir,
+                    )
+                else:
+                    new_public_key = key_mgr.generate_and_store(principal_id)
+                    result = gw.register_principal(
+                        principal_id, new_public_key, registered_by=actor.actor_id
+                    )
                 if result:
                     success_count += 1
             except Exception as exc:
@@ -1017,7 +1049,7 @@ def create_app(
         # a known gap; do not rely on it for security in production.
 
         try:
-            new_public_key = key_mgr.generate_and_store(principal_id)
+            private_key, new_public_key = key_mgr.generate(principal_id)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
 
@@ -1035,11 +1067,13 @@ def create_app(
                         existing["key_id"],
                         reason=f"break-glass: {reason}",
                     )
-                gw.register_principal(
+                result = gw.register_principal(
                     principal_id,
                     new_public_key,
                     registered_by=actor.actor_id,
                 )
+                if result:
+                    key_mgr.store_private_key(principal_id, result["key_id"], private_key)
                 success_count += 1
             except Exception as exc:
                 errors.append(f"{project}: {exc}")

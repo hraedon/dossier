@@ -82,6 +82,34 @@
 </div>
 {% endif %}
 
+{% if key_events %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">key history</div>
+  <div class="ds-table-wrap">
+    <table class="ds-table">
+      <thead>
+        <tr>
+          <th>transition</th>
+          <th>timestamp</th>
+          <th>key id</th>
+          <th>fingerprint</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ev in key_events %}
+        <tr>
+          <td class="mono">{{ ev.transition }}</td>
+          <td class="mono tnum">{{ ev.timestamp }}</td>
+          <td class="mono">{{ ev.key_id or '—' }}</td>
+          <td class="mono">{{ (ev.fingerprint[:32] ~ '…') if ev.fingerprint else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <div class="ds-panel ds-panel--pad">
   <div class="ds-prose muted">You will never see or handle the private key. Rotation is handled by the backend.</div>
 </div>
