@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from ._platform import open_no_follow
+
 logger = logging.getLogger("dossier.keys")
 
 _ED25519_PUBLIC_KEY_LEN = 32
@@ -140,8 +142,9 @@ class PrincipalKeyManager:
         """Write a principal's Ed25519 private key to a file (0600 perms).
 
         Writes atomically via a temp file + ``os.rename`` to avoid races
-        where another process reads a partially-written key. Uses
-        ``O_NOFOLLOW`` to reject symlink-based redirection attacks.
+        where another process reads a partially-written key. Key-custody
+        writes (manifest, keyset) use ``open_no_follow`` to reject
+        symlink-based redirection attacks cross-platform.
 
         Returns the ``file:`` secret_ref for the stored key.
         """
@@ -236,9 +239,9 @@ class PrincipalKeyManager:
 
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         encoded = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
-        fd = os.open(
+        fd = open_no_follow(
             str(tmp_path),
-            os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+            os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
             0o600,
         )
         try:
@@ -278,7 +281,7 @@ def generate_keyset(path: Path, *, key_id: str | None = None) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     data = json.dumps(keyset, indent=2).encode("utf-8")
 
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    fd = open_no_follow(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)

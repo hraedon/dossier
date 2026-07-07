@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from ._platform import open_no_follow
+
 _TRUE = {"1", "true", "yes"}
 _FALSE = {"0", "false", "no"}
 
@@ -83,7 +85,7 @@ def _inject_env_file(path: str) -> None:
 
     Refuses world-writable or group-writable files and symlinks.
     """
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    fd = open_no_follow(path, os.O_RDONLY)
     try:
         st = os.fstat(fd)
         if st.st_mode & stat.S_IWOTH:

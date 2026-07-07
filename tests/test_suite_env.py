@@ -129,7 +129,10 @@ def test_inject_env_file_rejects_symlink(tmp_path):
     target = tmp_path / "real.env"
     target.write_text("FOO=bar\n")
     link = tmp_path / "suite.env"
-    os.symlink(target, link)
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable on this platform")
     with pytest.raises(OSError):
         _inject_env_file(str(link))
 

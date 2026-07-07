@@ -107,3 +107,39 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker push ghcr.io/hraedon/dossier:latest
           docker push ghcr.io/hraedon/dossier:${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.ref }}
+
+  # Plan 003 WI-5.1 — prove dossier imports, lints, and runs unit tests on
+  # native Windows. Phase 1 (WI-1.1) eliminated the bare os.O_NOFOLLOW crash
+  # that made the key-custody and config-load paths un-importable on Windows;
+  # this job guards against future non-portable additions (fcntl, etc.).
+  # Postgres-dependent tests skip cleanly — no Docker or Postgres on the
+  # windows-latest runner (each checks connectivity and calls pytest.skip).
+  windows-test:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install regista (pinned to SUITE.lock)
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          REGISTA_REF=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')
+          pip install "regista @ git+https://github.com/hraedon/regista.git@${REGISTA_REF}"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check src/ tests/
+
+      - name: Type check (mypy)
+        run: mypy src/dossier/
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
