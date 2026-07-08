@@ -101,3 +101,22 @@ parallel with 009; close WI-1.1/1.2 only against the live proof. Phase 2 rides
 on the verifier-report decision with regista and can land second. Plan 018
 (working views + notifications) builds on this plan's pages but does not block
 on it.
+
+## Extension by agent-provenance Plan 010 (session-content capture + portal)
+
+**This plan is the portal vehicle for cairn v2.** agent-provenance Plan 010
+(session-content capture and the authorized-viewer portal) extends this plan's
+session-detail view (WI-1.1) to render v2 session content — the decrypted
+prompt/response transcript interleaved with the tool-call trail. The
+dependency is one-directional: Plan 010's Phase 4 (portal) adds a content view
+*on top of* this plan's WI-1.1/1.2 session/trail views. This plan should land
+its structural views first; Plan 010 Phase 4 WI-4.2 layers content rendering
+onto them.
+
+Cross-references:
+- agent-provenance Plan 010 WI-4.1 (dossier fronts the cairn project
+  read-only) depends on dossier Plan 011 (multi-project fronting).
+- agent-provenance Plan 010 WI-4.2 (session-content view) extends this
+  plan's WI-1.1 (session detail).
+- agent-provenance Plan 010 WI-4.3 (content-encryption stance banner) is
+  additive to this plan's WI-2.2 (verified-history stamp).
