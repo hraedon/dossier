@@ -35,6 +35,15 @@ from .provenance import (
     read_session_detail,
     read_session_summaries,
 )
+from .notifications import NotificationEmitter
+from .views import (
+    ActivityEntry,
+    MyWorkEntry,
+    ReviewQueueEntry,
+    read_activity_feed,
+    read_my_work,
+    read_review_queue,
+)
 
 logger = logging.getLogger("dossier.app")
 
@@ -147,6 +156,12 @@ def create_app(
         key_manifest_path=key_manifest_path or None,
     )
     app.state.key_manager = key_mgr
+
+    notifier = NotificationEmitter(
+        sink_url=settings.notification_sink,
+        base_url=settings.base_url,
+    )
+    app.state.notifier = notifier
 
     def _actor_key_custody_ready() -> bool:
         hmac_path = settings.hmac_key_path
@@ -577,6 +592,156 @@ def create_app(
             },
         )
 
+    # ---- review queue (Plan 018 WI-1.1) ----
+
+    @app.get("/review")
+    def review_queue_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.review_queue")
+        all_entries: list[ReviewQueueEntry] = []
+
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                entries = read_review_queue(gw, project_to_slug(project))
+            except Exception:
+                logger.warning("review queue: project %s unreachable", project, exc_info=True)
+                entries = []
+            all_entries.extend(entries)
+
+        all_entries.sort(
+            key=lambda e: (
+                0 if e.state == "in_human_review" else (1 if e.strict_gate else 2),
+                -e.age_hours,
+            ),
+        )
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "review_queue.html",
+            {
+                **ctx,
+                "entries": all_entries,
+            },
+        )
+
+    # ---- my work (Plan 018 WI-1.2) ----
+
+    @app.get("/my-work")
+    def my_work_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.my_work")
+        all_entries: list[MyWorkEntry] = []
+
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                entries = read_my_work(gw, project_to_slug(project), actor.actor_id)
+            except Exception:
+                logger.warning("my work: project %s unreachable", project, exc_info=True)
+                entries = []
+            all_entries.extend(entries)
+
+        grouped: dict[str, list[MyWorkEntry]] = {}
+        for entry in all_entries:
+            grouped.setdefault(entry.state, []).append(entry)
+        state_order = [
+            "in_review", "in_human_review", "in_progress", "open",
+            "blocked", "deferred", "done",
+        ]
+        ordered_groups = [
+            (state, grouped[state]) for state in state_order if state in grouped
+        ]
+        for state in sorted(grouped):
+            if state not in state_order:
+                ordered_groups.append((state, grouped[state]))
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "my_work.html",
+            {
+                **ctx,
+                "groups": ordered_groups,
+                "total_count": len(all_entries),
+            },
+        )
+
+    # ---- activity feed (Plan 018 WI-1.3) ----
+
+    @app.get("/feed")
+    def activity_feed_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        filter_project: str | None = Query(default=None, alias="project"),
+        filter_actor_kind: str | None = Query(default=None, alias="actor_kind"),
+        filter_transition: str | None = Query(default=None, alias="transition"),
+        page: int = Query(default=1, ge=1),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.feed")
+        page_size = 50
+        all_entries: list[ActivityEntry] = []
+
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            if filter_project:
+                slug = project_to_slug(project)
+                if slug != filter_project:
+                    continue
+            try:
+                gw = registry.get(project)
+                entries = read_activity_feed(
+                    gw,
+                    project_to_slug(project),
+                    limit=page_size * 3,
+                    actor_kind_filter=filter_actor_kind,
+                    transition_filter=filter_transition,
+                )
+            except Exception:
+                logger.warning("feed: project %s unreachable", project, exc_info=True)
+                entries = []
+            all_entries.extend(entries)
+
+        all_entries.sort(key=lambda e: e.timestamp, reverse=True)
+        total = len(all_entries)
+        start = (page - 1) * page_size
+        end = start + page_size
+        page_entries = all_entries[start:end]
+        has_next = end < total
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "activity_feed.html",
+            {
+                **ctx,
+                "entries": page_entries,
+                "filter_project": filter_project or "",
+                "filter_actor_kind": filter_actor_kind or "",
+                "filter_transition": filter_transition or "",
+                "page": page,
+                "has_next": has_next,
+                "has_prev": page > 1,
+                "total_count": total,
+            },
+        )
+
     # ---- project-scoped routes (Plan 011 WI-2) ----
 
     @app.get("/p/{project}")
@@ -793,6 +958,37 @@ def create_app(
                 },
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
+
+        try:
+            wi_post = gw.get_issue(work_item_id)
+            if wi_post is not None:
+                events = gw.history(work_item_id)
+                creator_id: str | None = None
+                for ev in events:
+                    if ev.transition == "created":
+                        creator_id = ev.actor_id
+                        break
+                last_ev = events[-1] if events else None
+                on_behalf_principal: str | None = None
+                if last_ev is not None:
+                    ob = getattr(last_ev, "on_behalf_of", None)
+                    if isinstance(ob, dict):
+                        pid = ob.get("principal_id")
+                        if pid:
+                            on_behalf_principal = str(pid)
+                notifier.emit_for_transition(
+                    transition_name=transition_name,
+                    to_state=wi_post.current_state,
+                    project_slug=project,
+                    work_item_id=work_item_id,
+                    item_key=web.display_key(wi_post),
+                    item_title=web.issue_title(wi_post),
+                    assignee=web.issue_field(wi_post, "assignee", ""),
+                    creator_id=creator_id,
+                    on_behalf_principal=on_behalf_principal,
+                )
+        except Exception:
+            logger.warning("notification.emit_error", exc_info=True)
 
         return RedirectResponse(
             url=f"/p/{project}/issues/{work_item_id}",

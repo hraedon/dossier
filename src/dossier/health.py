@@ -91,6 +91,7 @@ def build_health(
     checks.extend(_tls_checks())
     checks.append(_suite_env_check())
     checks.extend(_secrets_backend_checks(settings))
+    checks.append(_notification_sink_check(settings))
 
     has_fail = any(c["status"] == "fail" for c in checks)
     has_warn = any(c["status"] == "warn" for c in checks)
@@ -256,3 +257,15 @@ def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:
                 "detail": f"{label} ref unresolvable: {type(exc).__name__}",
             })
     return results
+
+
+def _notification_sink_check(settings: Settings) -> dict[str, Any]:
+    """Report notification sink configuration status (Plan 018 WI-2.1).
+
+    ``warn`` when no sink is configured — notifications are not being
+    delivered, which is acceptable for dev but a posture flag for
+    production. ``ok`` when ``DOSSIER_NOTIFICATION_SINK`` is set.
+    """
+    from .notifications import notification_health_check
+
+    return notification_health_check(settings.notification_sink)

@@ -175,6 +175,8 @@ class Settings:
     users_path: str
     auth_backend: Literal["local", "ldap"]
     principal_key_dir: str
+    notification_sink: str = ""
+    base_url: str = "http://localhost:8000"
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,6 +315,8 @@ def load_settings(strict: bool = True) -> Settings:
         users_path=users_path,
         auth_backend=cast(Literal["local", "ldap"], auth_backend),
         principal_key_dir=principal_key_dir,
+        notification_sink=os.environ.get("DOSSIER_NOTIFICATION_SINK", ""),
+        base_url=os.environ.get("DOSSIER_BASE_URL", "http://localhost:8000"),
     )
 
 

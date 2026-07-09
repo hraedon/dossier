@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}activity feed — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">activity feed</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ total_count }} recent transitions</span>
+    </div>
+  </div>
+</div>
+
+<form method="get" action="/feed" class="ds-filters">
+  <div class="ds-field ds-field--inline">
+    <label class="ds-label" for="f-actor-kind">actor kind</label>
+    <select class="ds-select ds-select--sm" id="f-actor-kind" name="actor_kind">
+      <option value="">all</option>
+      <option value="human" {{ 'selected' if filter_actor_kind == 'human' else '' }}>human</option>
+      <option value="agent" {{ 'selected' if filter_actor_kind == 'agent' else '' }}>agent</option>
+      <option value="system" {{ 'selected' if filter_actor_kind == 'system' else '' }}>system</option>
+    </select>
+  </div>
+  <div class="ds-field ds-field--inline">
+    <label class="ds-label" for="f-transition">transition</label>
+    <select class="ds-select ds-select--sm" id="f-transition" name="transition">
+      <option value="">all</option>
+      <option value="created" {{ 'selected' if filter_transition == 'created' else '' }}>created</option>
+      <option value="start" {{ 'selected' if filter_transition == 'start' else '' }}>started</option>
+      <option value="submit_for_review" {{ 'selected' if filter_transition == 'submit_for_review' else '' }}>submitted for review</option>
+      <option value="adversarial_pass" {{ 'selected' if filter_transition == 'adversarial_pass' else '' }}>review passed</option>
+      <option value="request_changes" {{ 'selected' if filter_transition == 'request_changes' else '' }}>requested changes</option>
+      <option value="accept" {{ 'selected' if filter_transition == 'accept' else '' }}>accepted</option>
+      <option value="reject" {{ 'selected' if filter_transition == 'reject' else '' }}>rejected</option>
+      <option value="close_from_open" {{ 'selected' if filter_transition == 'close_from_open' else '' }}>closed</option>
+    </select>
+  </div>
+  <button type="submit" class="ds-btn ds-btn--ghost">filter</button>
+</form>
+
+{% if entries %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>when</th>
+        <th>action</th>
+        <th>key</th>
+        <th>title</th>
+        <th>project</th>
+        <th>actor</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td class="mono tnum">{{ e.timestamp_label }}</td>
+        <td class="mono">{{ e.transition_label }}</td>
+        <td class="mono"><a href="{{ e.issue_url }}">{{ e.display_key }}</a></td>
+        <td><a href="{{ e.issue_url }}">{{ e.title }}</a></td>
+        <td class="mono"><a href="/p/{{ e.project_slug }}">{{ e.project_slug }}</a></td>
+        <td>
+          <span class="ds-badge ds-badge--{{ e.actor_kind }}">{{ e.actor_kind }}</span>
+          {{ e.actor_display }}
+          {% if e.on_behalf_display %}
+          <span class="ds-chip">on behalf of {{ e.on_behalf_display }}</span>
+          {% endif %}
+          {% if e.session_url %}
+          <a href="{{ e.session_url }}" class="ds-chip mono">trail</a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="ds-pagination">
+  {% if has_prev %}
+  <a href="/feed?page={{ page - 1 }}{% if filter_project %}&project={{ filter_project }}{% endif %}{% if filter_actor_kind %}&actor_kind={{ filter_actor_kind }}{% endif %}{% if filter_transition %}&transition={{ filter_transition }}{% endif %}" class="ds-btn ds-btn--ghost">prev</a>
+  {% endif %}
+  <span class="ds-chip mono">page {{ page }}</span>
+  {% if has_next %}
+  <a href="/feed?page={{ page + 1 }}{% if filter_project %}&project={{ filter_project }}{% endif %}{% if filter_actor_kind %}&actor_kind={{ filter_actor_kind }}{% endif %}{% if filter_transition %}&transition={{ filter_transition }}{% endif %}" class="ds-btn ds-btn--ghost">next</a>
+  {% endif %}
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no recent activity</div>
+  <div class="ds-empty__sub">transitions across permitted projects will appear here</div>
+</div>
+{% endif %}
+{% endblock %}

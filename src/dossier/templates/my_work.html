@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}my work — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">my work</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ total_count }} items</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Items where you are the actor-in-flight: created by you, assigned to you,
+    or last transitioned by your agents on your behalf. Grouped by state.
+  </p>
+</div>
+
+{% if groups %}
+{% for state, entries in groups %}
+<div class="ds-section">
+  <div class="ds-section-label">
+    <span class="ds-pill {{ status_pill_class(state) }}"><span class="ds-pill__dot"></span>{{ state }}</span>
+    <span class="ds-chip mono">{{ entries | length }}</span>
+  </div>
+  <div class="ds-table-wrap">
+    <table class="ds-table">
+      <thead>
+        <tr>
+          <th>key</th>
+          <th>title</th>
+          <th>project</th>
+          <th>relation</th>
+          <th>last action</th>
+          <th>when</th>
+          <th>assignee</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td class="mono"><a href="{{ e.issue_url }}">{{ e.key }}</a></td>
+          <td><a href="{{ e.issue_url }}">{{ e.title }}</a></td>
+          <td class="mono"><a href="{{ e.project_url }}">{{ e.project_slug }}</a></td>
+          <td>
+            {% if e.relation == 'agent-on-behalf' %}
+            <span class="ds-badge ds-badge--agent">agent</span>
+            {{ e.relation_label }}
+            {% else %}
+            <span class="ds-badge ds-badge--human">human</span>
+            {{ e.relation_label }}
+            {% endif %}
+          </td>
+          <td class="mono">{{ e.last_action }}</td>
+          <td class="mono tnum">{{ e.last_action_time }}</td>
+          <td>{{ e.assignee or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no items in your work</div>
+  <div class="ds-empty__sub">items you create, are assigned, or your agents act on will appear here</div>
+</div>
+{% endif %}
+{% endblock %}

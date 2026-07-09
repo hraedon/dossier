@@ -172,6 +172,24 @@ class RegistaGateway:
     def history(self, work_item_id: uuid.UUID) -> list[Event]:
         return cast(list[Event], self._reg.read_events(work_item_id=work_item_id, limit=10_000))
 
+    def read_recent_events(
+        self,
+        *,
+        limit: int = 100,
+        actor_id: str | None = None,
+        transition: str | None = None,
+    ) -> list[Event]:
+        """Read recent events across the project in descending time order.
+
+        Used by the activity feed (Plan 018 WI-1.3). Supports optional
+        filtering by *actor_id* or *transition* name. Results are
+        descending by ``(timestamp, event_seq)`` per regista's contract.
+        """
+        return cast(
+            list[Event],
+            self._reg.read_events(actor_id=actor_id, transition=transition, limit=limit),
+        )
+
     def read_events_by_transition(self, transition: str, limit: int = 10_000) -> list[Event]:
         """Read events across the project filtered by transition name.
 

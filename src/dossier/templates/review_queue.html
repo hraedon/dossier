@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}review queue — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">review queue</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ entries | length }} awaiting review</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Cross-project view of items awaiting review. Strict-gate items needing a
+    human accept sort first. Every entry derives from the regista event log.
+  </p>
+</div>
+
+{% if entries %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>key</th>
+        <th>title</th>
+        <th>project</th>
+        <th>state</th>
+        <th>gate</th>
+        <th>assurance</th>
+        <th>age</th>
+        <th>submitted by</th>
+        <th>assignee</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr {% if e.strict_gate %}class="ds-row--warn"{% endif %}>
+        <td class="mono"><a href="{{ e.issue_url }}">{{ e.key }}</a></td>
+        <td><a href="{{ e.issue_url }}">{{ e.title }}</a></td>
+        <td class="mono"><a href="{{ e.project_url }}">{{ e.project_slug }}</a></td>
+        <td><span class="ds-pill {{ status_pill_class(e.state) }}"><span class="ds-pill__dot"></span>{{ e.state }}</span></td>
+        <td class="mono">{{ e.gate }}</td>
+        <td><span class="ds-pill ds-pill--{{ e.assurance_css }}"><span class="ds-pill__dot"></span>{{ e.assurance_label }}</span></td>
+        <td class="mono tnum">{{ e.age }}</td>
+        <td>{{ e.submitted_by }}</td>
+        <td>{{ e.assignee or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">nothing awaiting review</div>
+  <div class="ds-empty__sub">items submitted for review will appear here</div>
+</div>
+{% endif %}
+{% endblock %}
