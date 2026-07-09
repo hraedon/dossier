@@ -8,10 +8,13 @@ version: "0.0.1"
 python: "3.13"
 
 regista:
-  ref: 11c82b1a2d509b71246361fb7972d14eea7c77cb
+  ref: dd22197eaafe11afabdae488b6908a5729b3b343
   source: github.com/hraedon/regista
   # Pin to a commit SHA, never a branch. The face and the spine version
   # are a known-good pair recorded here.
+  # Bumped 2026-07-09: Plan 015 adopts regista Plan 029's backend-aware
+  # custody (regista._custody.store_private_key), which postdates the
+  # previous pin (11c82b1, Plan 026).
 
 container:
   registry: ghcr.io
