@@ -336,7 +336,7 @@ def read_session_summaries(
         integrity = gateway.integrity()
         chain_intact = integrity.replayed_drift == 0
     except Exception:
-        chain_intact = True
+        chain_intact = False
 
     summaries: list[SessionSummary] = []
     for att_ev in attestation_events:
@@ -404,7 +404,7 @@ def read_session_detail(
         integrity = gateway.integrity()
         chain_intact = integrity.replayed_drift == 0
     except Exception:
-        chain_intact = True
+        chain_intact = False
 
     verification = compute_verification(chain_intact, tool_calls)
 

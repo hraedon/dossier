@@ -290,14 +290,17 @@ def format_bytes(n: Any) -> str:
 
 
 def safe_path(path: Any) -> str:
-    """Render an attested file path safely (no traversal/injection).
+    """Render an attested file path for display.
 
-    Plan 017 WI-1.3 AC: paths are rendered safely (no traversal/injection
-    via attested strings). The path is returned as-is for display (HTML
-    auto-escaping handles injection); this function exists as the single
-    point where path-sanitization policy can be tightened.
+    Strips NUL bytes and C0 control characters (except tab/newline) that
+    could enable traversal or injection via attested strings. HTML escaping
+    is Jinja's responsibility at the template level; this is the single
+    point for path-content policy.
     """
-    return str(path) if path else "—"
+    if not path:
+        return "—"
+    text = str(path)
+    return "".join(c for c in text if c in "\t\n" or ord(c) >= 0x20)
 
 
 def session_principal_display(summary: Any) -> str:
