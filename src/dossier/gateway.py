@@ -172,6 +172,16 @@ class RegistaGateway:
     def history(self, work_item_id: uuid.UUID) -> list[Event]:
         return cast(list[Event], self._reg.read_events(work_item_id=work_item_id, limit=10_000))
 
+    def read_events_by_transition(self, transition: str, limit: int = 10_000) -> list[Event]:
+        """Read events across the project filtered by transition name.
+
+        Unlike :meth:`history` (which is per-work-item), this scans the
+        entire project's event log for events matching *transition*. Used
+        by the agent-activity window (Plan 017) to discover cairn
+        ``session_attestation`` and ``tool_call_*`` events.
+        """
+        return cast(list[Event], self._reg.read_events(transition=transition, limit=limit))
+
     def list_links(self, work_item_id: uuid.UUID) -> list[Any]:
         """Return all live (non-removed) links from *work_item_id*.
 

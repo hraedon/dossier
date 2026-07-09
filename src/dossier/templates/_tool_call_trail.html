@@ -1,0 +1,89 @@
+<section class="ds-trail">
+  <div class="ds-trail__head">
+    <h2 class="ds-trail__title">tool-call trail</h2>
+    {% set v = detail.verification %}
+    <span class="ds-verify {{ verification_status_class(v.status) }}">
+      <span class="ds-pill__dot"></span>{{ verification_status_label(v.status) }}
+    </span>
+    {% if not detail.summary.chain_intact %}
+    <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>chain broken</span>
+    {% endif %}
+  </div>
+
+  {% if v.degradation_flags %}
+  <div class="ds-callout ds-callout--crit">
+    <div>
+      <strong>degradation detected</strong>
+      <ul class="ds-degradation-list">
+        {% for flag in v.degradation_flags %}
+        <li class="mono">{{ flag }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if detail.tool_calls %}
+  <div class="ds-chain">
+    <div class="ds-chain__spine"></div>
+    {% for tc in detail.tool_calls %}
+    <div class="ds-chain__event ds-trail__event">
+      <div class="ds-chain__rule ds-trail__rule--{{ tc.status }}"></div>
+      <div class="ds-chain__row">
+        <time class="ds-chain__time mono tnum">{{ format_timestamp(tc.begin_timestamp) }}</time>
+        <span class="ds-chain__action mono">{{ tc.tool }}</span>
+        <span class="ds-pill {{ tool_call_status_class(tc.status) }}"><span class="ds-pill__dot"></span>{{ tc.status }}</span>
+        {% if tc.harness_name %}
+        <span class="ds-chip mono">{{ tc.harness_name }}@{{ tc.harness_version or '?' }}</span>
+        {% endif %}
+      </div>
+
+      {% if tc.files %}
+      <div class="ds-trail__files">
+        {% for fd in tc.files %}
+        <div class="ds-trail__file">
+          <span class="ds-trail__filepath mono">{{ safe_path(fd.path) }}</span>
+          {% if fd.pre_digest %}
+          <span class="ds-trail__digest mono">pre: {{ fd.pre_digest[:16] }}…</span>
+          {% endif %}
+          {% if fd.post_digest %}
+          <span class="ds-trail__digest mono">post: {{ fd.post_digest[:16] }}…</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="ds-trail__result">
+        {% if tc.exit_code is not none %}
+        <span class="ds-chip mono">exit: {{ tc.exit_code }}</span>
+        {% endif %}
+        {% if tc.stdout_digest %}
+        <span class="ds-chip mono">digest: {{ format_digest(tc.stdout_digest, tc.stdout_digest_alg) }}</span>
+        {% endif %}
+        {% if tc.stdout_bytes_total is not none %}
+        <span class="ds-chip mono">{{ format_bytes(tc.stdout_bytes_total) }}{% if tc.stdout_truncated %} (truncated){% endif %}</span>
+        {% endif %}
+        {% if tc.stderr_digest %}
+        <span class="ds-chip mono">stderr: {{ tc.stderr_digest[:16] }}…</span>
+        {% endif %}
+        {% if tc.error %}
+        <span class="ds-chip mono ds-chip--crit">error: {{ tc.error }}</span>
+        {% endif %}
+      </div>
+
+      {% if tc.end_timestamp %}
+      <div class="ds-trail__timing mono tnum">
+        ended: {{ format_timestamp(tc.end_timestamp) }}
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="ds-empty">
+    <div class="ds-empty__title">no tool calls</div>
+    <div class="ds-empty__sub">no tool-call attestations bound to this session</div>
+  </div>
+  {% endif %}
+</section>

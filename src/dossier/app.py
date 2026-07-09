@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,11 @@ from .keys import PrincipalKeyManager, _validate_principal_id
 from .multi import GatewayRegistry, project_to_slug, slug_to_project
 from .secrets import is_backend_ref
 from . import web
+from .provenance import (
+    SessionSummary,
+    read_session_detail,
+    read_session_summaries,
+)
 
 logger = logging.getLogger("dossier.app")
 
@@ -191,6 +197,14 @@ def create_app(
         owner_display=web.owner_display,
         project_display_name=web.project_display_name,
         state_description=web.state_description,
+        harness_display=web.harness_display,
+        verification_status_class=web.verification_status_class,
+        verification_status_label=web.verification_status_label,
+        tool_call_status_class=web.tool_call_status_class,
+        format_digest=web.format_digest,
+        format_bytes=web.format_bytes,
+        safe_path=web.safe_path,
+        session_principal_display=web.session_principal_display,
     )
     app.state.templates = templates
 
@@ -494,6 +508,72 @@ def create_app(
                 "search_results": results,
                 "result_count": len(results),
                 "project_count": project_count,
+            },
+        )
+
+    # ---- agent-activity window: session list + detail (Plan 017 WI-1.1) ----
+
+    @app.get("/sessions")
+    def sessions_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        filter_project: str | None = Query(default=None, alias="project"),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.sessions")
+        all_sessions: list[SessionSummary] = []
+
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            if filter_project:
+                slug = project_to_slug(project)
+                if slug != filter_project:
+                    continue
+            try:
+                gw = registry.get(project)
+                sessions = read_session_summaries(gw, project_to_slug(project))
+            except Exception:
+                logger.warning("sessions: project %s unreachable", project, exc_info=True)
+                sessions = []
+            all_sessions.extend(sessions)
+
+        all_sessions.sort(key=lambda s: s.attested_at or datetime.min, reverse=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "sessions.html",
+            {
+                **ctx,
+                "sessions": all_sessions,
+                "filter_project": filter_project or "",
+            },
+        )
+
+    @app.get("/p/{project}/sessions/{session_id}")
+    def session_detail_route(
+        project: str,
+        session_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        gw = resolve_gateway(project, actor)
+        detail = read_session_detail(gw, session_id, project)
+        if detail is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
+
+        ctx = actor_context(request, actor)
+        ctx["current_project"] = slug_to_project(project)
+        return templates.TemplateResponse(
+            request,
+            "session_detail.html",
+            {
+                **ctx,
+                "detail": detail,
+                "project_slug": project,
+                "session_id": session_id,
             },
         )
 

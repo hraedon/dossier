@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}agent activity — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">agent activity</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ sessions | length }} attested sessions</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Every entry comes from signed regista attestation events authored by cairn.
+    The UI renders the record — it does not re-derive activity from side channels.
+  </p>
+</div>
+
+{% if filter_project %}
+<form method="get" action="/sessions" class="ds-filters">
+  <div class="ds-field ds-field--inline">
+    <button type="submit" class="ds-btn ds-btn--ghost">show all projects</button>
+  </div>
+</form>
+{% endif %}
+
+{% if sessions %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>session</th>
+        <th>principal</th>
+        <th>harness</th>
+        <th>events</th>
+        <th>started</th>
+        <th>ended</th>
+        <th>status</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in sessions %}
+      <tr>
+        <td class="mono">
+          <a href="/p/{{ s.project_slug }}/sessions/{{ s.session_id }}">{{ s.session_id[:8] }}…</a>
+        </td>
+        <td>{{ session_principal_display(s) }}</td>
+        <td class="mono">{{ harness_display(s.harnesses) }}</td>
+        <td class="mono tnum">{{ s.event_count }}</td>
+        <td class="mono tnum">{{ format_timestamp(s.start_time) }}</td>
+        <td class="mono tnum">{{ format_timestamp(s.end_time) }}</td>
+        <td>
+          {% if s.degraded %}
+          <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>degraded</span>
+          {% elif not s.chain_intact %}
+          <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>chain broken</span>
+          {% else %}
+          <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>intact</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no attested sessions</div>
+  <div class="ds-empty__sub">agent sessions recorded by cairn will appear here</div>
+</div>
+{% endif %}
+{% endblock %}

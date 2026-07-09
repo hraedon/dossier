@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}session {{ session_id[:8] }} — {{ project_slug }} — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <div class="ds-pagehead__key mono">session</div>
+    <h1 class="ds-pagehead__title mono" style="font-size: var(--fs-md); word-break: break-all;">{{ session_id }}</h1>
+    <div class="ds-pagehead__meta">
+      {% set s = detail.summary %}
+      <span class="ds-chip mono">principal: {{ session_principal_display(s) }}</span>
+      <span class="ds-chip mono">harness: {{ harness_display(s.harnesses) }}</span>
+      <span class="ds-chip mono">{{ s.event_count }} events</span>
+      {% if s.degraded %}
+      <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>degraded</span>
+      {% elif not s.chain_intact %}
+      <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>chain broken</span>
+      {% else %}
+      <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>chain intact</span>
+      {% endif %}
+    </div>
+  </div>
+  <a href="/sessions" class="ds-btn ds-btn--ghost">back</a>
+</div>
+
+{% if detail.attestation_event %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">session attestation</div>
+  <div class="ds-prose" style="font-size: var(--fs-sm);">
+    <div>attested at: <span class="mono">{{ format_timestamp(detail.attestation_event.timestamp) }}</span></div>
+    {% set payload = detail.attestation_event.payload %}
+    {% if payload and payload.get('scope_statement') %}
+    <div class="muted">{{ payload.scope_statement }}</div>
+    {% endif %}
+    {% if payload and payload.get('harness_config_digests') %}
+    <div class="ds-trail__config-digests">
+      {% for name, digest in payload.harness_config_digests.items() %}
+      <span class="ds-chip mono">{{ name }}: {{ digest[:16] }}…</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <div class="ds-chain__actor" style="margin-top: var(--space-3);">
+    <span class="ds-chain__who">{{ actor_display(detail.attestation_event) }}</span>
+    <span class="ds-badge ds-badge--{{ detail.attestation_event.actor_kind }}">{{ detail.attestation_event.actor_kind }}</span>
+    {% set ob = on_behalf_display(detail.attestation_event) %}
+    {% if ob %}
+    <span class="ds-chain__delegation">on behalf of {{ ob }}</span>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% include "_tool_call_trail.html" %}
+{% endblock %}

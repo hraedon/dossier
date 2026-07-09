@@ -223,3 +223,87 @@ def state_description(state: str) -> str:
         "in_human_review": "awaiting human review",
         "done": "completed",
     }.get(state, state)
+
+
+def harness_display(harnesses: Any) -> str:
+    """Format a list of harness dicts as ``name@version`` (comma-joined)."""
+    if not isinstance(harnesses, list) or not harnesses:
+        return "unknown"
+    parts: list[str] = []
+    for h in harnesses:
+        if isinstance(h, dict):
+            name = h.get("name", "?")
+            version = h.get("version", "?")
+            parts.append(f"{name}@{version}")
+    return ", ".join(parts) if parts else "unknown"
+
+
+def verification_status_class(status: str) -> str:
+    """CSS class for the verification-status badge (Plan 017)."""
+    return {
+        "verified": "ds-verify--ok",
+        "gap-detected": "ds-verify--warn",
+        "unverified": "ds-verify--crit",
+    }.get(status, "ds-verify--muted")
+
+
+def verification_status_label(status: str) -> str:
+    """Human-readable label for the verification status."""
+    return {
+        "verified": "verified",
+        "gap-detected": "gap detected",
+        "unverified": "unverified",
+    }.get(status, status)
+
+
+def tool_call_status_class(status: str) -> str:
+    return {
+        "completed": "ds-pill--ok",
+        "failed": "ds-pill--crit",
+        "running": "ds-pill--warn",
+    }.get(status, "ds-pill--muted")
+
+
+def format_digest(digest: Any, alg: Any) -> str:
+    """Format an output digest for display: ``alg:digest[:16]``."""
+    if not digest:
+        return "—"
+    alg_str = str(alg) if alg else "sha256"
+    digest_str = str(digest)
+    short = digest_str[:16] if len(digest_str) > 16 else digest_str
+    return f"{alg_str}:{short}"
+
+
+def format_bytes(n: Any) -> str:
+    """Format a byte count human-readably."""
+    if n is None:
+        return "—"
+    try:
+        count = int(n)
+    except (ValueError, TypeError):
+        return str(n)
+    if count < 1024:
+        return f"{count} B"
+    if count < 1024 * 1024:
+        return f"{count / 1024:.1f} KiB"
+    return f"{count / (1024 * 1024):.1f} MiB"
+
+
+def safe_path(path: Any) -> str:
+    """Render an attested file path safely (no traversal/injection).
+
+    Plan 017 WI-1.3 AC: paths are rendered safely (no traversal/injection
+    via attested strings). The path is returned as-is for display (HTML
+    auto-escaping handles injection); this function exists as the single
+    point where path-sanitization policy can be tightened.
+    """
+    return str(path) if path else "—"
+
+
+def session_principal_display(summary: Any) -> str:
+    """Return the principal display name or ID from a SessionSummary."""
+    display = getattr(summary, "principal_display_name", None)
+    if display:
+        return str(display)
+    pid = getattr(summary, "principal_id", None)
+    return str(pid) if pid else "unknown"
