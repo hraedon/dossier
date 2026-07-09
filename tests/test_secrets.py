@@ -81,15 +81,17 @@ def test_manifest_none_and_empty():
 
 
 def test_manifest_bare_path_passes_through():
-    path, cleanup = suite_secrets.materialize_key_manifest("/etc/regista/keys.json")
-    assert path == "/etc/regista/keys.json"
+    raw = "/etc/regista/keys.json"
+    path, cleanup = suite_secrets.materialize_key_manifest(raw)
+    assert path == str(Path(raw))
     assert cleanup is None
 
 
 def test_manifest_tilde_path_is_expanded(monkeypatch):
     monkeypatch.setenv("HOME", "/home/test")
+    monkeypatch.setenv("USERPROFILE", "/home/test")
     path, cleanup = suite_secrets.materialize_key_manifest("~/.config/regista/keys.json")
-    assert path == "/home/test/.config/regista/keys.json"
+    assert path == str(Path("/home/test/.config/regista/keys.json"))
     assert cleanup is None
 
 

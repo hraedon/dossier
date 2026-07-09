@@ -117,6 +117,10 @@ def test_inject_env_file_blocked_keys_skipped(tmp_path):
     assert os.environ["DOSSIER_TEST_VAR"] == "ok"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="world-writable mode-bit check is POSIX-only; Windows uses ACLs",
+)
 def test_inject_env_file_rejects_world_writable(tmp_path):
     f = tmp_path / "suite.env"
     f.write_text("FOO=bar\n")

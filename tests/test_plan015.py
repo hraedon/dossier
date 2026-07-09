@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,16 @@ import pytest
 from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.keys import generate_ed25519_keypair
 from _doubles import InMemoryPrincipalKeyStore, inject_test_store
+
+# These tests exercise the file-backend key-custody path (regista Plan 029's
+# FileProvider: 0o600 atomic writes, 0o700 parent dirs, Unix mode assertions).
+# That path is POSIX-only; a Windows deployment uses the DPAPI/Windows secret
+# backend instead. Skip on Windows CI rather than assert POSIX file semantics
+# there (regista's own CI is Linux-only, so file-custody is exercised on Linux).
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="file-backend key custody is POSIX; Windows uses the DPAPI backend",
+)
 
 _ALICE_ID = "11111111-1111-1111-1111-111111111111"
 _SECOND_ADMIN_ID = "22222222-2222-2222-2222-222222222222"

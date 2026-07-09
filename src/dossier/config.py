@@ -88,7 +88,12 @@ def _inject_env_file(path: str) -> None:
     fd = open_no_follow(path, os.O_RDONLY)
     try:
         st = os.fstat(fd)
-        if st.st_mode & stat.S_IWOTH:
+        # The world-writable refusal is a POSIX security check (mode bits are
+        # authoritative there). On Windows, st_mode permission bits are
+        # synthesized from ACLs and routinely report S_IWOTH on temp files
+        # that are not actually world-accessible, so the check misfires; real
+        # access control on Windows is ACL-based, not mode-based.
+        if os.name == "posix" and st.st_mode & stat.S_IWOTH:
             raise PermissionError(
                 f"Refusing to load world-writable suite env file: {path}"
             )
