@@ -158,12 +158,16 @@ class NotificationEmitter:
 
         Returns the emitted :class:`NotificationEvent` (or ``None`` if the
         transition was not notification-worthy). The principal to notify is
-        resolved as: the assignee if set, else the on_behalf principal if
-        the actor was an agent, else the creator. In v1 (flat-open authz)
-        any authenticated principal is an eligible reviewer; the sink
+        resolved as: the assignee (the reviewer who must act) if set, else the
+        creator (the item owner who can route it), else the on_behalf principal
+        (the human an acting agent represents). The on_behalf principal is the
+        stakeholder, not the reviewer, so it is the last resort — an
+        ``awaiting_your_accept`` addressed to the on_behalf principal would be
+        wrong when a creator can route the item instead. In v1 (flat-open
+        authz) any authenticated principal is an eligible reviewer; the sink
         handles routing.
         """
-        principal = assignee or on_behalf_principal or creator_id or ""
+        principal = assignee or creator_id or on_behalf_principal or ""
         if not principal:
             return None
 
