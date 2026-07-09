@@ -43,6 +43,24 @@ def _metadata(actor: Actor) -> dict[str, Any]:
     return meta
 
 
+def _manifest_path_for(hmac_key_path: str) -> str | None:
+    """Resolve the key-set manifest path from an hmac_key_path.
+
+    For a ``file:`` ref or a bare filesystem path, returns the path to write
+    the key-set manifest. For a non-file backend (``env:``/``vault:``/
+    ``azure:``/``literal:``/``operator:``) returns ``None`` — the key-set is
+    resolved from the secret backend at sign time, not from a local manifest
+    file, so writing one would create a bogus file named after the ref and
+    leak the ``secret_ref``. Mirrors regista's ``_resolve_key_dir``.
+    """
+    from regista._secrets import _detect_prefix
+
+    prefix, stripped = _detect_prefix(hmac_key_path)
+    if prefix == "file" and isinstance(stripped, str):
+        return stripped
+    return None
+
+
 class RegistaGateway:
     """The only place dossier mutates work-state.
 
@@ -391,7 +409,7 @@ class RegistaGateway:
             if store is None:
                 logger.warning(
                     "custody_orphaned_secret",
-                    extra={"principal_id": principal_id, "secret_ref": custody.secret_ref},
+                    extra={"principal_id": principal_id, "backend": custody.backend},
                 )
                 return None
             if rotate:
@@ -413,10 +431,10 @@ class RegistaGateway:
                     ),
                 )
 
-        hmac_key_path = getattr(self._reg, "_hmac_key_path", "")
-        if hmac_key_path:
+        manifest_path = _manifest_path_for(getattr(self._reg, "_hmac_key_path", "") or "")
+        if manifest_path:
             _update_key_file(
-                hmac_key_path,
+                manifest_path,
                 principal_id,
                 entry["key_id"],
                 custody.public_key,

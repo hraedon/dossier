@@ -69,6 +69,15 @@ def generate_ed25519_keypair() -> tuple[bytes, bytes]:
 class PrincipalKeyManager:
     """Manages Ed25519 keypair generation and private-key custody.
 
+    .. deprecated::
+        Superseded by regista's backend-aware custody path (Plan 029
+        ``regista._custody.store_private_key``), which dossier's
+        ``RegistaGateway`` now calls directly (Plan 015). This class retains
+        a local-file private-key write path and is **not** used by the app —
+        it exists only for legacy tests. Do not import or copy it for new
+        code; route key generation through ``RegistaGateway.enroll_principal``
+        / ``rotate_principal`` / ``register_principal`` instead.
+
     The public key is registered with regista's principal registry (via the
     gateway). The private key is stored in the configured secret backend
     through regista's key-set manifest: for the file backend this is a

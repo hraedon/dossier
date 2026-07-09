@@ -1373,8 +1373,13 @@ def create_app(
                             old_key["key_id"],
                             reason=f"break-glass: {reason}",
                         )
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        errors.append(
+                            f"{project}: break-glass registered the new key but "
+                            f"failed to revoke old key {old_key['key_id']} "
+                            f"({type(exc).__name__}) — the old key remains "
+                            f"superseded but is not marked revoked"
+                        )
                 success_count += 1
             except RegistaError as exc:
                 if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
