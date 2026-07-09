@@ -335,35 +335,154 @@ class RegistaGateway:
                 logger.debug("read_principal_enrollment_events failed", exc_info=True)
         return []
 
+    def _custody_and_register(
+        self,
+        principal_id: str,
+        *,
+        private_key_dir: str | None = None,
+        secret_backend: str | None = None,
+        registered_by: str = "system",
+        rotate: bool = False,
+    ) -> dict[str, Any] | None:
+        """Generate a keypair via regista custody and register/rotate it.
+
+        Uses ``regista._custody.store_private_key`` (Plan 029) to generate an
+        Ed25519 keypair and store the private key in the configured secret
+        backend. The private key **never** enters dossier's memory — it flows
+        from ``store_private_key`` directly to the secret backend. Only the
+        public key is returned (inside the ``CustodyResult``) and handed to
+        the principal-key registry.
+
+        After custody, the public key is registered (or rotated) in the
+        principal-key registry, and the key-set manifest is updated so regista
+        can resolve the secret for future signing.
+        """
+        from regista._custody import store_private_key
+        from regista._provision import _update_key_file
+
+        custody = store_private_key(
+            backend=secret_backend,
+            principal_id=principal_id,
+            project=self._project_name,
+            private_key_dir=private_key_dir,
+        )
+
+        if self.has_principal_ops():
+            if rotate:
+                entry = cast(
+                    dict[str, Any],
+                    self._reg.principals.rotate(
+                        principal_id,
+                        custody.public_key,
+                        registered_by=registered_by,
+                    ),
+                )
+            else:
+                entry = cast(
+                    dict[str, Any],
+                    self._reg.principals.register(
+                        principal_id,
+                        custody.public_key,
+                        registered_by=registered_by,
+                    ),
+                )
+        else:
+            store = self._test_store()
+            if store is None:
+                logger.warning(
+                    "custody_orphaned_secret",
+                    extra={"principal_id": principal_id, "secret_ref": custody.secret_ref},
+                )
+                return None
+            if rotate:
+                entry = cast(
+                    dict[str, Any],
+                    store.rotate(
+                        principal_id,
+                        custody.public_key,
+                        registered_by=registered_by,
+                    ),
+                )
+            else:
+                entry = cast(
+                    dict[str, Any],
+                    store.register(
+                        principal_id,
+                        custody.public_key,
+                        registered_by=registered_by,
+                    ),
+                )
+
+        hmac_key_path = getattr(self._reg, "_hmac_key_path", "")
+        if hmac_key_path:
+            _update_key_file(
+                hmac_key_path,
+                principal_id,
+                entry["key_id"],
+                custody.public_key,
+                custody.secret_ref,
+                encoding=custody.encoding,
+            )
+
+        return entry
+
     def enroll_principal(
         self,
         principal_id: str,
         *,
         actor: Actor | None = None,
         private_key_dir: str | None = None,
+        secret_backend: str | None = None,
     ) -> dict[str, Any] | None:
         """Enroll a principal through regista (Plan 015 WI-2.1).
 
-        Real regista generates the Ed25519 keypair, stores the private key in
-        the secret backend, registers the public key, and emits a signed
-        ``principal_enrolled`` event. The returned dict contains only public
-        metadata: ``key_id``, ``fingerprint``, ``scheme``.
+        Real regista (Postgres): delegates to ``reg.enroll_principal`` which
+        generates the Ed25519 keypair, stores the private key in the secret
+        backend (Plan 029 custody), registers the public key, and emits a
+        signed ``principal_enrolled`` event — all in one call.
+
+        InMemoryRegista (tests): uses ``_custody_and_register`` which calls
+        ``regista._custody.store_private_key`` for real key generation +
+        backend-aware custody, then registers via the injected test-double
+        store. The private key never enters dossier's memory on either path.
+
+        The returned dict contains only public metadata: ``key_id``,
+        ``fingerprint``, ``scheme``. No private key material is ever returned.
         """
-        if not self.has_principal_ops():
-            return None
-        actor_id = actor.actor_id if actor else "system"
-        actor_kind = actor.actor_kind if actor else "system"
-        actor_metadata = _metadata(actor) if actor else None
+        if self.has_principal_ops():
+            actor_id = actor.actor_id if actor else "system"
+            actor_kind = actor.actor_kind if actor else "system"
+            actor_metadata = _metadata(actor) if actor else None
+            try:
+                return cast(
+                    dict[str, Any],
+                    self._reg.enroll_principal(
+                        principal_id,
+                        actor_id=actor_id,
+                        actor_kind=actor_kind,
+                        actor_metadata=actor_metadata,
+                        private_key_dir=private_key_dir,
+                        secret_backend=secret_backend,
+                    ),
+                )
+            except Exception as exc:
+                detail: dict[str, Any] = {
+                    "principal_id": principal_id,
+                    "error": type(exc).__name__,
+                }
+                if isinstance(exc, RegistaError):
+                    detail["error_code"] = exc.code.value
+                logger.warning("enroll_principal failed", extra=detail)
+                return None
+
+        registered_by = actor.actor_id if actor else "system"
         try:
-            return cast(
-                dict[str, Any],
-                self._reg.enroll_principal(
-                    principal_id,
-                    actor_id=actor_id,
-                    actor_kind=actor_kind,
-                    actor_metadata=actor_metadata,
-                    private_key_dir=private_key_dir,
-                ),
+            return self._custody_and_register(
+                principal_id,
+                private_key_dir=private_key_dir,
+                secret_backend=secret_backend,
+                registered_by=registered_by,
+                rotate=False,
             )
         except Exception as exc:
             detail = {"principal_id": principal_id, "error": type(exc).__name__}
@@ -388,32 +507,56 @@ class RegistaGateway:
         return None
 
     def register_principal(
-        self, principal_id: str, public_key: bytes, *, registered_by: str = "system"
+        self,
+        principal_id: str,
+        *,
+        actor: Actor | None = None,
+        private_key_dir: str | None = None,
+        secret_backend: str | None = None,
     ) -> dict[str, Any] | None:
-        """Register a new principal key (Plan 015 WI-2.1)."""
-        store = self._test_store()
-        if store is not None:
-            return cast(dict[str, Any], store.register(principal_id, public_key, registered_by=registered_by))
-        if self.has_principal_ops():
-            return cast(
-                dict[str, Any],
-                self._reg.principals.register(principal_id, public_key, registered_by=registered_by),
-            )
-        return None
+        """Register a new principal key with backend-aware custody (Plan 015).
+
+        Generates an Ed25519 keypair via ``regista._custody.store_private_key``
+        (Plan 029), stores the private key in the secret backend, registers
+        the public key, and updates the key-set manifest. The private key
+        never enters dossier's memory.
+
+        Used by break-glass (WI-2.3) to issue a new key after revoking the
+        old one.
+        """
+        registered_by = actor.actor_id if actor else "system"
+        return self._custody_and_register(
+            principal_id,
+            private_key_dir=private_key_dir,
+            secret_backend=secret_backend,
+            registered_by=registered_by,
+            rotate=False,
+        )
 
     def rotate_principal(
-        self, principal_id: str, new_public_key: bytes, *, registered_by: str = "system"
+        self,
+        principal_id: str,
+        *,
+        actor: Actor | None = None,
+        private_key_dir: str | None = None,
+        secret_backend: str | None = None,
     ) -> dict[str, Any] | None:
-        """Rotate a principal's key (Plan 015 WI-1.2)."""
-        store = self._test_store()
-        if store is not None:
-            return cast(dict[str, Any], store.rotate(principal_id, new_public_key, registered_by=registered_by))
-        if self.has_principal_ops():
-            return cast(
-                dict[str, Any],
-                self._reg.principals.rotate(principal_id, new_public_key, registered_by=registered_by),
-            )
-        return None
+        """Rotate a principal's key with backend-aware custody (Plan 015 WI-1.2).
+
+        Generates a new Ed25519 keypair via ``regista._custody.store_private_key``
+        (Plan 029), stores the private key in the secret backend, rotates the
+        public key in the principal-key registry (superseding the old key),
+        and updates the key-set manifest. The private key never enters
+        dossier's memory.
+        """
+        registered_by = actor.actor_id if actor else "system"
+        return self._custody_and_register(
+            principal_id,
+            private_key_dir=private_key_dir,
+            secret_backend=secret_backend,
+            registered_by=registered_by,
+            rotate=True,
+        )
 
     def revoke_principal(
         self, principal_id: str, key_id: str, *, reason: str = "unspecified"

@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
 from regista import RegistaError, WorkItem
+from regista._errors import ErrorCode
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -26,9 +27,8 @@ from .auth.throttle import LoginThrottler, _normalize_identifier
 from .authz import can_read_project
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
-from .keys import PrincipalKeyManager, _validate_principal_id
+from .keys import _validate_principal_id
 from .multi import GatewayRegistry, project_to_slug, slug_to_project
-from .secrets import is_backend_ref
 from . import web
 from .provenance import (
     SessionSummary,
@@ -145,31 +145,12 @@ def create_app(
     app.state.settings = settings
     app.state.registry = registry
     app.state.backend = backend
-    key_manifest_path = settings.hmac_key_path
-    if key_manifest_path and is_backend_ref(key_manifest_path):
-        if key_manifest_path.lower().startswith("file:"):
-            key_manifest_path = key_manifest_path.split(":", 1)[1]
-        else:
-            key_manifest_path = ""
-    key_mgr = PrincipalKeyManager(
-        settings.principal_key_dir or None,
-        key_manifest_path=key_manifest_path or None,
-    )
-    app.state.key_manager = key_mgr
 
     notifier = NotificationEmitter(
         sink_url=settings.notification_sink,
         base_url=settings.base_url,
     )
     app.state.notifier = notifier
-
-    def _actor_key_custody_ready() -> bool:
-        hmac_path = settings.hmac_key_path
-        if not hmac_path:
-            return True
-        if is_backend_ref(hmac_path) and not hmac_path.lower().startswith("file:"):
-            return False
-        return True
 
     _rotation_throttle: dict[str, float] = {}
     _rotation_cooldown_seconds = 60.0
@@ -1086,64 +1067,40 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
         _: None = Depends(verify_csrf),
     ) -> Response:
-        if not _actor_key_custody_ready():
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "actor-key custody requires a file-backed key manifest; remote backends are a v1.1 seam",
-            )
-
         if not _rotation_allowed(actor.actor_id):
             raise HTTPException(
                 status.HTTP_429_TOO_MANY_REQUESTS,
                 "rotation rate-limited; try again later",
             )
 
-        private_key, new_public_key = key_mgr.generate(actor.actor_id)
-        try:
-            success_count = 0
-            errors: list[str] = []
-            for project in registry.list_projects():
-                if not can_read_project(actor, project):
+        private_key_dir = settings.principal_key_dir or None
+        success_count = 0
+        errors: list[str] = []
+        for project in registry.list_projects():
+            if not can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                result = gw.rotate_principal(
+                    actor.actor_id,
+                    actor=actor,
+                    private_key_dir=private_key_dir,
+                )
+                if not result:
+                    errors.append(f"{project}: rotation returned no result")
                     continue
-                try:
-                    gw = registry.get(project)
-                    old_key = gw.get_principal_key(actor.actor_id)
-                    result = gw.rotate_principal(
-                        actor.actor_id, new_public_key, registered_by=actor.actor_id
+                success_count += 1
+            except RegistaError as exc:
+                if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        "key custody requires a writable secret backend "
+                        "(file/windows/vault/azure); the configured backend "
+                        "cannot store a generated private key",
                     )
-                    if not result:
-                        errors.append(f"{project}: rotation returned no result")
-                        continue
-                    try:
-                        key_mgr.store_private_key(
-                            actor.actor_id, result["key_id"], private_key
-                        )
-                    except Exception as store_exc:
-                        try:
-                            gw.revoke_principal(
-                                actor.actor_id,
-                                result["key_id"],
-                                reason="private-key custody failure",
-                            )
-                        except Exception:
-                            pass
-                        if old_key is not None:
-                            try:
-                                old_public_key = bytes.fromhex(old_key["public_key"])
-                                gw.register_principal(
-                                    actor.actor_id,
-                                    old_public_key,
-                                    registered_by=actor.actor_id,
-                                )
-                            except Exception:
-                                pass
-                        errors.append(f"{project}: {store_exc}")
-                        continue
-                    success_count += 1
-                except Exception as exc:
-                    errors.append(f"{project}: {exc}")
-        finally:
-            del private_key
+                errors.append(f"{project}: {type(exc).__name__}")
+            except Exception as exc:
+                errors.append(f"{project}: {type(exc).__name__}")
 
         if errors:
             logger.warning("key.rotation_partial_failure", extra={
@@ -1275,21 +1232,24 @@ def create_app(
                 continue
             try:
                 gw = registry.get(project)
-                if gw.has_principal_ops():
-                    result = gw.enroll_principal(
-                        principal_id,
-                        actor=actor,
-                        private_key_dir=private_key_dir,
-                    )
-                else:
-                    new_public_key = key_mgr.generate_and_store(principal_id)
-                    result = gw.register_principal(
-                        principal_id, new_public_key, registered_by=actor.actor_id
-                    )
+                result = gw.enroll_principal(
+                    principal_id,
+                    actor=actor,
+                    private_key_dir=private_key_dir,
+                )
                 if result:
                     success_count += 1
+            except RegistaError as exc:
+                if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        "key custody requires a writable secret backend "
+                        "(file/windows/vault/azure); the configured backend "
+                        "cannot store a generated private key",
+                    )
+                errors.append(f"{project}: {type(exc).__name__}")
             except Exception as exc:
-                errors.append(f"{project}: {exc}")
+                errors.append(f"{project}: {type(exc).__name__}")
 
         if errors:
             logger.warning("key.enrollment_partial_failure", extra={
@@ -1383,16 +1343,12 @@ def create_app(
 
         reason = " ".join(raw_reason.split())[:500]
 
-        if not _actor_key_custody_ready():
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "actor-key custody requires a file-backed key manifest; remote backends are a v1.1 seam",
-            )
-
         try:
-            private_key, new_public_key = key_mgr.generate(principal_id)
+            _validate_principal_id(principal_id)
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+
+        private_key_dir = settings.principal_key_dir or None
 
         success_count = 0
         errors: list[str] = []
@@ -1402,53 +1358,35 @@ def create_app(
             try:
                 gw = registry.get(project)
                 old_key = gw.get_principal_key(principal_id)
-                if old_key is not None:
-                    gw.revoke_principal(
-                        principal_id,
-                        old_key["key_id"],
-                        reason=f"break-glass: {reason}",
-                    )
                 result = gw.register_principal(
                     principal_id,
-                    new_public_key,
-                    registered_by=actor.actor_id,
+                    actor=actor,
+                    private_key_dir=private_key_dir,
                 )
                 if not result:
                     errors.append(f"{project}: break-glass returned no result")
                     continue
-                try:
-                    key_mgr.store_private_key(
-                        principal_id, result["key_id"], private_key
-                    )
-                except Exception as store_exc:
+                if old_key is not None:
                     try:
                         gw.revoke_principal(
                             principal_id,
-                            result["key_id"],
-                            reason="private-key custody failure",
+                            old_key["key_id"],
+                            reason=f"break-glass: {reason}",
                         )
                     except Exception:
                         pass
-                    if old_key is not None:
-                        try:
-                            old_public_key = bytes.fromhex(old_key["public_key"])
-                            gw.register_principal(
-                                principal_id,
-                                old_public_key,
-                                registered_by=actor.actor_id,
-                            )
-                        except Exception:
-                            pass
-                    errors.append(f"{project}: {store_exc}")
-                    continue
                 success_count += 1
+            except RegistaError as exc:
+                if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
+                    raise HTTPException(
+                        status.HTTP_400_BAD_REQUEST,
+                        "key custody requires a writable secret backend "
+                        "(file/windows/vault/azure); the configured backend "
+                        "cannot store a generated private key",
+                    )
+                errors.append(f"{project}: {type(exc).__name__}")
             except Exception as exc:
-                errors.append(f"{project}: {exc}")
-
-        try:
-            del private_key
-        except NameError:
-            pass
+                errors.append(f"{project}: {type(exc).__name__}")
 
         if errors:
             logger.warning("break_glass.partial_failure", extra={

@@ -470,6 +470,42 @@ def test_enrollment_produces_valid_ed25519_key(client, principal_store, admin_en
     assert bytes(signing_key.verify_key) == public_key_bytes
 
 
+def test_gateway_custody_never_returns_private_key(gateway, principal_store, tmp_path):
+    from dossier.actors import Actor
+
+    actor = Actor(
+        actor_id="custody-test-actor",
+        actor_kind="human",
+        display_name="Custody Test",
+        model_lineage=None,
+        on_behalf_of=None,
+    )
+    result = gateway.enroll_principal(
+        "custody-test-principal",
+        actor=actor,
+        private_key_dir=str(tmp_path / "principals"),
+    )
+    assert result is not None
+    for key in ("private_key", "private", "secret", "secret_ref"):
+        assert key not in result, f"gateway result must not contain {key!r}"
+    assert "public_key" in result
+    assert "fingerprint" in result
+    assert "key_id" in result
+    assert "scheme" in result
+
+
+def test_rotation_result_has_no_private_key_material(client, principal_store, admin_env):
+    _enroll(principal_store, _ALICE_ID)
+    _login(client)
+    identity_page = client.get("/me/identity")
+    csrf = _extract_csrf(identity_page.text)
+    client.post("/me/key/rotate", data={"csrf_token": csrf}, follow_redirects=False)
+
+    new_entry = principal_store.get_active(_ALICE_ID)
+    for key in ("private_key", "private", "secret", "secret_ref"):
+        assert key not in new_entry, f"rotation result must not contain {key!r}"
+
+
 def test_principal_key_manager_stores_private_key(tmp_path):
     from dossier.keys import PrincipalKeyManager
 
@@ -571,7 +607,7 @@ def test_rotate_rolls_back_on_custody_failure(client, principal_store, admin_env
     def _fail(*args, **kwargs):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(client.app.state.key_manager, "store_private_key", _fail)
+    monkeypatch.setattr("regista._custody.store_private_key", _fail)
 
     identity_page = client.get("/me/identity")
     csrf = _extract_csrf(identity_page.text)
@@ -592,7 +628,7 @@ def test_break_glass_rolls_back_on_custody_failure(
     def _fail(*args, **kwargs):
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(client.app.state.key_manager, "store_private_key", _fail)
+    monkeypatch.setattr("regista._custody.store_private_key", _fail)
 
     bg_page = client.get("/admin/break-glass")
     csrf = _extract_csrf(bg_page.text)
@@ -672,9 +708,11 @@ def test_gateway_test_store_guard_requires_testing_flag(gateway):
         gw_module._TESTING = prev
 
 
-def test_remote_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
+def test_readonly_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
+    from regista import RegistaError
+    from regista._errors import ErrorCode
     from regista.testing import InMemoryRegista
+    from fastapi.testclient import TestClient
 
     from dossier.app import _configure_admin_ids, create_app
     from dossier.auth.backends import LocalBackend
@@ -685,6 +723,16 @@ def test_remote_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
 
     monkeypatch.setenv("DOSSIER_ADMIN_IDS", f"{_ALICE_ID},{_SECOND_ADMIN_ID}")
     _configure_admin_ids()
+
+    def _readonly_fail(*args, **kwargs):
+        raise RegistaError(
+            ErrorCode.SECRET_WRITE_UNSUPPORTED,
+            "env: cannot custody a generated secret into a read-only "
+            "environment variable",
+        )
+
+    monkeypatch.setattr("regista._custody.store_private_key", _readonly_fail)
+
     try:
         key_path = tmp_path / "keys.json"
         generate_keyset(key_path)
@@ -696,7 +744,7 @@ def test_remote_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
         settings = Settings(
             database_url="",
             project=project,
-            hmac_key_path="env:REGISTA_REMOTE_KEY",
+            hmac_key_path=str(key_path),
             session_secret="test-session-secret-not-for-prod",
             session_max_age_seconds=43200,
             secure_cookies=False,
@@ -721,7 +769,7 @@ def test_remote_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
                 follow_redirects=False,
             )
             assert resp.status_code == 400
-            assert "remote backends are a v1.1 seam" in resp.text
+            assert "writable secret backend" in resp.text
 
             bg_page = client.get("/admin/break-glass")
             csrf = _extract_csrf(bg_page.text)
@@ -736,7 +784,7 @@ def test_remote_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
                 follow_redirects=False,
             )
             assert resp.status_code == 400
-            assert "remote backends are a v1.1 seam" in resp.text
+            assert "writable secret backend" in resp.text
     finally:
         monkeypatch.delenv("DOSSIER_ADMIN_IDS", raising=False)
         _configure_admin_ids()

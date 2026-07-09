@@ -1,6 +1,6 @@
 # Plan 015 — Key-management UX (the human face of per-actor signing)
 
-**Status:** In Progress 2026-07-03 — Phase 1 (WI-1.1 through WI-2.3) implemented; key generation uses v1 test stubs pending Plan 026 secret-backend integration
+**Status:** In Progress 2026-07-09 — Phase 1 (WI-1.1 through WI-2.3) implemented with real regista principal ops; v1 test stubs replaced with `regista._custody.store_private_key` (Plan 029 backend-aware custody); private key never enters dossier's memory
 **Author:** Claude (Fable 5), from the 2026-07-02 suite-gaps review
 **Strategic role:** Per-actor Ed25519 signing (regista Plan 026) makes every write
 cryptographically attributable — but keys are useless if a team can't *see and
