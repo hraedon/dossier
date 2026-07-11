@@ -61,6 +61,20 @@ author was an agent), when, and what they found. Review is structural, not a fla
 and its outcome is provenance — "this was independently challenged, by this person,
 and here's the finding" is exactly the audit claim the regulated setting needs.
 
+### Project disclosure boundary
+
+Provenance integrity does not imply that every authenticated person may read every
+record. Dossier has one project-authorization seam covering direct routes,
+cross-project dashboards/search/activity, provenance/session views, signing
+history, and mutations. The compatibility posture is explicitly `open` and is a
+doctor warning. `audit` evaluates a strict default-deny ACL while permitting and
+logging would-be denials; `enforce` applies it. Authorization identity is derived
+only from the authenticated principal: stable actor ID plus immutable LDAP group
+GUIDs (or case-folded local-development group names). Group identities are
+domain-separated HMAC claims in the signed client-side session, so membership
+names/GUIDs are not disclosed by the cookie. Policy is a deployment input; it
+never mutates regista work state or weakens regista's transition gates.
+
 ## 3. Explicitly deferred (seams left open, not redesigned)
 
 regista already supports these; the MVP does not wire them, but nothing in dossier

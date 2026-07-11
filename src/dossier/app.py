@@ -24,7 +24,7 @@ from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
 from .auth.throttle import LoginThrottler, _normalize_identifier
-from .authz import can_read_project
+from .authz import ProjectAccessPolicy, can_read_project, load_project_access_policy
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
 from .keys import _validate_principal_id
@@ -146,6 +146,34 @@ def create_app(
     app.state.registry = registry
     app.state.backend = backend
 
+    access_policy: ProjectAccessPolicy | None = None
+    if settings.project_access_mode != "open":
+        access_policy = load_project_access_policy(
+            settings.project_acl_path,
+            group_claim_key=settings.session_secret.encode("utf-8"),
+        )
+    app.state.project_access_policy = access_policy
+
+    def _can_read_project(actor: Actor, project: str) -> bool:
+        # Preserve the named seam as the first and final compatibility gate;
+        # existing integrations/tests may deliberately override it.
+        if not can_read_project(actor, project):
+            return False
+        if settings.project_access_mode == "open":
+            return True
+        assert access_policy is not None
+        decision = access_policy.decide(actor, project)
+        if settings.project_access_mode == "audit":
+            if not decision.allowed:
+                logging.getLogger("dossier.authz").warning(
+                    "project access would be denied actor=%s project=%s reason=%s",
+                    actor.actor_id,
+                    project,
+                    decision.reason,
+                )
+            return True
+        return decision.allowed
+
     from .secrets import resolve_secret_bytes
 
     notification_secret = (
@@ -246,7 +274,7 @@ def create_app(
         return {
             "actor": actor,
             "csrf_token": issue_csrf_token(request.session),
-            "projects": [p for p in registry.list_projects() if can_read_project(actor, p)],
+            "projects": [p for p in registry.list_projects() if _can_read_project(actor, p)],
             "is_admin": _is_admin(actor),
         }
 
@@ -255,7 +283,7 @@ def create_app(
             project = slug_to_project(project_slug)
         except ValueError:
             raise HTTPException(status.HTTP_404_NOT_FOUND, f"unknown project {project_slug!r}")
-        if not can_read_project(actor, project):
+        if not _can_read_project(actor, project):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "access denied")
         try:
             return registry.get(project)
@@ -354,7 +382,11 @@ def create_app(
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
 
         throttler.record_success(throttle_key)
-        actor = principal_to_actor(principal)
+        actor = principal_to_actor(
+            principal,
+            backend.fetch_groups(principal),
+            settings.session_secret.encode("utf-8"),
+        )
         request.session.clear()
         new_csrf = issue_csrf_token(request.session)
         request.session[_ACTOR_SESSION_KEY] = asdict(actor)
@@ -376,7 +408,16 @@ def create_app(
 
     @app.get("/me")
     def me(actor: Actor = Depends(current_actor)) -> dict[str, Any]:
-        return asdict(actor)
+        # Authorization group claims are server-trusted session state, not a
+        # public identity field. In particular, do not disclose directory
+        # membership identifiers through this convenience endpoint.
+        return {
+            "actor_id": actor.actor_id,
+            "actor_kind": actor.actor_kind,
+            "display_name": actor.display_name,
+            "on_behalf_of": actor.on_behalf_of,
+            "model_lineage": actor.model_lineage,
+        }
 
     # ---- cross-project dashboard (Plan 014 WI-1.2) ----
 
@@ -400,7 +441,7 @@ def create_app(
         states_filter = [filter_status] if filter_status else _OPEN_STATES
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -478,7 +519,7 @@ def create_app(
 
         if query:
             for project in registry.list_projects():
-                if not can_read_project(actor, project):
+                if not _can_read_project(actor, project):
                     continue
                 try:
                     gw = registry.get(project)
@@ -531,7 +572,7 @@ def create_app(
         all_sessions: list[SessionSummary] = []
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             if filter_project:
                 slug = project_to_slug(project)
@@ -596,7 +637,7 @@ def create_app(
         all_entries: list[ReviewQueueEntry] = []
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -636,7 +677,7 @@ def create_app(
         all_entries: list[MyWorkEntry] = []
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -689,7 +730,7 @@ def create_app(
         all_entries: list[ActivityEntry] = []
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             if filter_project:
                 slug = project_to_slug(project)
@@ -1043,7 +1084,7 @@ def create_app(
         key_events: list[dict[str, Any]] = []
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -1087,7 +1128,7 @@ def create_app(
         success_count = 0
         errors: list[str] = []
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -1140,7 +1181,7 @@ def create_app(
         signed_events: list[dict[str, Any]] = []
 
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -1195,7 +1236,7 @@ def create_app(
         all_principals: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -1238,7 +1279,7 @@ def create_app(
         success_count = 0
         errors: list[str] = []
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -1289,7 +1330,7 @@ def create_app(
         success_count = 0
         errors: list[str] = []
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
@@ -1363,7 +1404,7 @@ def create_app(
         success_count = 0
         errors: list[str] = []
         for project in registry.list_projects():
-            if not can_read_project(actor, project):
+            if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)

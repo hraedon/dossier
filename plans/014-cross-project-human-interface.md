@@ -4,6 +4,9 @@
 WI-1.5 (team deploy) implemented (TLS seam + reproducible compose + doctor
 tls/ldap/suite_env checks); the live cross-machine TLS login is operator-gated
 validation (real LDAP + real certs + the work network), like the public flip.
+Project ACL audit/enforcement milestones implemented 2026-07-11 through the
+deployment-policy provider; a future regista membership provider can replace the
+file without changing route enforcement.
 **Author:** Claude (Fable 5), from the 2026-07-02 agent-suite deployment review
 **Strategic role:** Make dossier the interface a team member logs into and reads
 the *whole estate's* work through — every project's work-items, their signed
@@ -133,12 +136,12 @@ milestone (v1.1 seam, v1.5 enforcement — §Milestones), not an open-ended "som
 
 - **v1 (this plan):** no per-project permissions. Any authenticated team member reads
   all projects. The `can_read_project` seam (WI-1.1) exists and returns allow-all.
-- **v1.1:** the **permission model seam is made real but still open** — introduce the
+- **v1.1 — implemented 2026-07-11:** the **permission model seam is made real but still open** — introduce the
   project↔team/role mapping data (leaning on Plan 012's catalog + ownership) and have
   `can_read_project` *consult* it while defaulting open, plus the admin UI to view
   (not yet enforce) per-project membership. This is the "explicitly part of 1.1"
   hook: the structure ships, enforcement is one flag away.
-- **v1.5:** **enforcement on** — `can_read_project` denies a team member a project
+- **v1.5 — implemented 2026-07-11:** **enforcement on** — `can_read_project` denies a team member a project
   they're not mapped to; the dashboard and item views filter accordingly; project
   owners (Plan 012) manage their project's readers. This is the "explicitly part of
   1.5" deliverable.
@@ -146,6 +149,13 @@ milestone (v1.1 seam, v1.5 enforcement — §Milestones), not an open-ended "som
 Naming these as scheduled milestones (not deferred vagueness) is deliberate: v1
 ships flat-open *knowingly*, with the enforcement path already designed and the seam
 already in the code, so turning it on is a planned increment, not a retrofit.
+
+The implemented provider is a strict operator-owned ACL file with `open`, `audit`,
+and `enforce` modes. It keys grants on stable principal IDs and immutable LDAP
+group GUIDs, denies undeclared projects, refuses unsafe/ambiguous policy files,
+and reports posture through doctor. This lands enforcement without creating
+dossier-owned work state. When regista grows authoritative project membership,
+it can become a second policy provider behind the same decision contract.
 
 ## Sequencing & notes
 

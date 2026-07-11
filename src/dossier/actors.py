@@ -26,6 +26,7 @@ class Actor:
     display_name: str
     on_behalf_of: dict[str, Any] | None = None
     model_lineage: str | None = None
+    groups: tuple[str, ...] = ()
 
 
 SYSTEM_ACTOR = Actor(

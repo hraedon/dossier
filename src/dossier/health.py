@@ -92,6 +92,7 @@ def build_health(
     checks.append(_suite_env_check())
     checks.extend(_secrets_backend_checks(settings))
     checks.append(_notification_sink_check(settings))
+    checks.append(_project_access_check(settings))
 
     has_fail = any(c["status"] == "fail" for c in checks)
     has_warn = any(c["status"] == "warn" for c in checks)
@@ -289,3 +290,38 @@ def _notification_sink_check(settings: Settings) -> dict[str, Any]:
             ),
         }
     return posture
+
+
+def _project_access_check(settings: Settings) -> dict[str, Any]:
+    """Report the effective cross-project disclosure posture."""
+    if settings.project_access_mode == "open":
+        return {
+            "name": "project_access",
+            "status": "warn",
+            "detail": "open: every authenticated principal can read every project",
+        }
+
+    from .authz import load_project_access_policy
+
+    try:
+        load_project_access_policy(
+            settings.project_acl_path,
+            group_claim_key=settings.session_secret.encode("utf-8"),
+        )
+    except Exception as exc:
+        return {
+            "name": "project_access",
+            "status": "fail",
+            "detail": f"ACL invalid or unreadable: {type(exc).__name__}",
+        }
+    if settings.project_access_mode == "audit":
+        return {
+            "name": "project_access",
+            "status": "warn",
+            "detail": "audit: default-deny ACL loaded; denials not enforced",
+        }
+    return {
+        "name": "project_access",
+        "status": "ok",
+        "detail": "enforce: default-deny ACL loaded",
+    }

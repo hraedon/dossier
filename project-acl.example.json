@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "administrators": {
+    "principals": [
+      "principal-security-admin"
+    ],
+    "groups": []
+  },
+  "projects": {
+    "project_example": {
+      "principals": [
+        "principal-project-owner"
+      ],
+      "groups": [
+        "guid:00000000-0000-0000-0000-000000000001"
+      ]
+    },
+    "shared_reference": {
+      "public": true
+    }
+  }
+}

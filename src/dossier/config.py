@@ -185,6 +185,8 @@ class Settings:
     notification_secret_ref: str = ""
     notification_source: str = "dossier"
     notification_identity: str = ""
+    project_access_mode: Literal["open", "audit", "enforce"] = "open"
+    project_acl_path: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,6 +264,9 @@ def load_settings(strict: bool = True) -> Settings:
     session_max_age_raw = os.environ.get("DOSSIER_SESSION_MAX_AGE_SECONDS", "43200")
     secure_cookies_raw = os.environ.get("DOSSIER_SECURE_COOKIES", "true")
     require_ssl_raw = os.environ.get("DOSSIER_REQUIRE_SSL", "false")
+    project_access_mode_raw = os.environ.get(
+        "DOSSIER_PROJECT_ACCESS_MODE", "open"
+    )
     users_path = os.environ.get("DOSSIER_USERS_PATH", "")
     auth_backend = os.environ.get("DOSSIER_AUTH_BACKEND", "local")
     if auth_backend not in ("local", "ldap"):
@@ -311,6 +316,15 @@ def load_settings(strict: bool = True) -> Settings:
 
     secure_cookies = _parse_bool("DOSSIER_SECURE_COOKIES", secure_cookies_raw)
     require_ssl = _parse_bool("DOSSIER_REQUIRE_SSL", require_ssl_raw)
+    from .authz import parse_access_mode
+
+    project_access_mode = parse_access_mode(project_access_mode_raw)
+    project_acl_path = os.environ.get("DOSSIER_PROJECT_ACL_PATH", "")
+    if project_access_mode != "open" and not project_acl_path:
+        raise RuntimeError(
+            "DOSSIER_PROJECT_ACL_PATH is required when project access mode "
+            f"is {project_access_mode}"
+        )
 
     return Settings(
         database_url=database_url,
@@ -334,6 +348,8 @@ def load_settings(strict: bool = True) -> Settings:
         notification_identity=os.environ.get(
             "DOSSIER_NOTIFICATION_IDENTITY", ""
         ),
+        project_access_mode=project_access_mode,
+        project_acl_path=project_acl_path,
     )
 
 

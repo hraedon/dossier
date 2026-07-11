@@ -140,6 +140,8 @@ Copy `.env.example` to `.env` (`.env` is gitignored) and fill in real values.
 | `DOSSIER_NOTIFICATION_SOURCE` | no | `dossier` | agent-wake source name used in the signed envelope and header |
 | `DOSSIER_NOTIFICATION_IDENTITY` | no | — | sender principal for agent-wake source identity gating |
 | `DOSSIER_BASE_URL` | no | `http://localhost:8000` | public origin used for notification deep links |
+| `DOSSIER_PROJECT_ACCESS_MODE` | no | `open` | cross-project disclosure posture: `open`, `audit`, or `enforce` |
+| `DOSSIER_PROJECT_ACL_PATH` | audit/enforce | — | operator-owned project ACL JSON; symlinks and writable files are refused |
 
 For authenticated human notifications through agent-wake, configure the same
 32-byte-or-longer HMAC secret on both sides. Dossier accepts the suite secret-ref
@@ -160,6 +162,43 @@ target principal. Dossier signs the exact v0 body and sends
 optional `X-AgentWake-Identity`. An unsigned sink remains available for a generic
 test receiver, but doctor reports that posture as degraded and it is not
 agent-wake compatible.
+
+### Project access control
+
+The compatibility default is `open`: every authenticated principal can read
+every configured or discovered project, and doctor reports a warning. A team
+deployment should progress through `audit` to `enforce`:
+
+```dotenv
+DOSSIER_PROJECT_ACCESS_MODE=audit
+DOSSIER_PROJECT_ACL_PATH=/etc/dossier/project-acl.json
+```
+
+Start from [`project-acl.example.json`](project-acl.example.json). The policy is
+strict JSON with version `1`:
+
+- undeclared projects are denied;
+- a project is readable through an explicit principal, authenticated group, or
+  `public: true` grant (`public` means every authenticated dossier user, never
+  anonymous access);
+- administrative bypass is explicit in `administrators` and is never inferred
+  from `DOSSIER_ADMIN_IDS`;
+- LDAP groups are matched by immutable `guid:<objectGUID>` claims; local-test
+  groups use case-folded `name:<group>` claims; dossier blinds those identities
+  with a domain-separated HMAC before storing them in its signed client-side
+  session cookie;
+- public projects cannot also carry membership grants;
+- duplicate identifiers, duplicate/unknown JSON keys, empty grants, control
+  characters, oversized files, symlinks, and group/world-writable policy files
+  are rejected.
+
+`audit` loads and evaluates the same policy but permits requests while logging
+would-be denials. Once those logs match the intended audience, switch to
+`enforce`; direct URLs, cross-project views, activity, provenance, search,
+signing history, and mutations all use the same authorization seam. Policy is
+loaded once at process startup, so deploy changes atomically and restart dossier.
+Doctor reparses the on-disk policy and reports invalid/unreadable configuration
+as a failure.
 
 ### External PostgreSQL
 
