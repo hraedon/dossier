@@ -10,10 +10,13 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from regista.testing import InMemoryRegista
 
@@ -490,6 +493,75 @@ def test_notification_emitter_configured():
     assert emitter.configured is True
 
 
+def test_notification_emitter_builds_authenticated_agent_wake_envelope(monkeypatch):
+    received: list[Any] = []
+
+    def _mock_urlopen(req: Any, timeout: int = 5) -> _MockResponse:
+        received.append(req)
+        return _MockResponse()
+
+    import dossier.notifications as _notif_mod
+
+    monkeypatch.setattr(_notif_mod.urllib.request, "urlopen", _mock_urlopen)
+    secret = b"n" * 32
+    emitter = NotificationEmitter(
+        sink_url="http://localhost:8788/",
+        base_url="https://dossier.example",
+        signing_secret=secret,
+        source="dossier",
+        sender_identity="service:dossier",
+    )
+    event = NotificationEvent(
+        event_type="awaiting_your_accept",
+        principal_id="human:alice",
+        project="project-example",
+        item_id="item-1",
+        item_key="ITEM-1",
+        item_title="Review the change",
+        deep_link="https://dossier.example/p/project-example/issues/item-1",
+        timestamp="2026-07-11T00:00:00Z",
+        detail="item submitted for review — awaiting your accept",
+        event_id="event-1",
+    )
+
+    assert emitter.emit(event) is True
+    assert len(received) == 1
+    req = received[0]
+    body = bytes(req.data)
+    envelope = json.loads(body)
+    assert envelope == {
+        "v": 0,
+        "event_id": "event-1",
+        "source": "dossier",
+        "kind": "awaiting_your_accept",
+        "content": "item submitted for review — awaiting your accept",
+        "wake": False,
+        "meta": {
+            "target": "human:alice",
+            "deep_link": "https://dossier.example/p/project-example/issues/item-1",
+            "project": "project-example",
+            "item_id": "item-1",
+            "item_key": "ITEM-1",
+            "item_title": "Review the change",
+            "notification": event.to_dict(),
+        },
+    }
+    expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+    assert req.get_header("X-agentwake-source") == "dossier"
+    assert req.get_header("X-agentwake-signature") == f"sha256={expected}"
+    assert req.get_header("X-agentwake-event-id") == "event-1"
+    assert req.get_header("X-agentwake-identity") == "service:dossier"
+
+
+def test_notification_emitter_rejects_header_injection():
+    with pytest.raises(ValueError, match="invalid characters"):
+        NotificationEmitter(
+            sink_url="http://localhost:8788/",
+            signing_secret=b"n" * 32,
+            source="dossier\r\nX-Evil: yes",
+        )
+
+
 def test_notification_emitter_deep_link():
     emitter = NotificationEmitter(sink_url=None, base_url="http://dossier.example.com")
     link = emitter.deep_link("dossier-test", "abc-123")
@@ -590,6 +662,14 @@ def test_notification_health_check_no_sink():
 
 def test_notification_health_check_with_sink():
     result = notification_health_check("http://localhost:9999/ingest")
+    assert result["status"] == "warn"
+    assert "unsigned" in result["detail"]
+
+
+def test_notification_health_check_with_authenticated_sink():
+    result = notification_health_check(
+        "http://localhost:9999/ingest", "env:DOSSIER_WAKE_SECRET"
+    )
     assert result["status"] == "ok"
 
 
@@ -681,12 +761,35 @@ def test_doctor_notification_sink_ok(tmp_path):
     from dossier.health import build_health
     from dossier.multi import GatewayRegistry
 
-    settings = _settings(tmp_path, notification_sink="http://localhost:9999/ingest")
+    secret_path = tmp_path / "wake-secret"
+    secret_path.write_bytes(b"w" * 32)
+    settings = _settings(
+        tmp_path,
+        notification_sink="http://localhost:9999/ingest",
+        notification_secret_ref=f"file:{secret_path}",
+    )
     registry = GatewayRegistry(known_projects=[_PROJECT])
     health = build_health(settings, registry)
     notif_check = [c for c in health["checks"] if c["name"] == "notification_sink"]
     assert len(notif_check) == 1
     assert notif_check[0]["status"] == "ok"
+
+
+def test_doctor_notification_sink_fails_for_unresolvable_secret(tmp_path):
+    from dossier.health import build_health
+    from dossier.multi import GatewayRegistry
+
+    settings = _settings(
+        tmp_path,
+        notification_sink="http://localhost:9999/ingest",
+        notification_secret_ref="file:/missing/wake-secret",
+    )
+    registry = GatewayRegistry(known_projects=[_PROJECT])
+    health = build_health(settings, registry)
+    notif_check = [c for c in health["checks"] if c["name"] == "notification_sink"]
+    assert len(notif_check) == 1
+    assert notif_check[0]["status"] == "fail"
+    assert "unresolvable" in notif_check[0]["detail"]
 
 
 # ── Pure-function tests ─────────────────────────────────────────────────

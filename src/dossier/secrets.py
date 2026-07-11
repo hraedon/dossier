@@ -184,6 +184,46 @@ def resolve_dsn(value: Optional[str]) -> Optional[str]:
     return str(result)
 
 
+def resolve_secret_bytes(value: Optional[str]) -> Optional[bytes]:
+    """Resolve a required-ref secret without permitting an implicit literal.
+
+    Notification signing keys cross a process boundary and must not be stored
+    directly in ``suite.env``.  Unlike :func:`resolve_dsn`, a bare value is
+    therefore rejected: callers must name an explicit ``env:``, ``file:``,
+    ``vault:``, or ``azure:`` provider. ``literal:`` is also refused because it
+    would place the HMAC key directly in process configuration.
+    """
+    if not value:
+        return None
+    prefix = _provider_prefix(value)
+    if prefix is None:
+        raise RuntimeError(
+            "notification secret must be a backend ref "
+            "(env:/file:/vault:/azure:), not a plaintext value"
+        )
+    if prefix == "literal":
+        raise RuntimeError(
+            "literal: is not permitted for notification signing secrets; "
+            "use env:/file:/vault:/azure: custody"
+        )
+    normalized = _normalize_for_regista(value)
+    try:
+        result: Any = _resolver().resolve(normalized)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to resolve notification secret: {type(exc).__name__}"
+        ) from None
+    if prefix in _REMOTE_PROVIDERS and result == normalized.encode("utf-8"):
+        raise RuntimeError(
+            f"notification secret ref did not resolve — provider '{prefix}' "
+            "may be missing its SDK or the backend is unreachable"
+        )
+    secret = bytes(result)
+    if len(secret) < 32:
+        raise RuntimeError("notification signing secret must be at least 32 bytes")
+    return secret
+
+
 # ---------------------------------------------------------------------------
 # key-set manifest resolution
 # ---------------------------------------------------------------------------

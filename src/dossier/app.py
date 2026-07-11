@@ -146,9 +146,19 @@ def create_app(
     app.state.registry = registry
     app.state.backend = backend
 
+    from .secrets import resolve_secret_bytes
+
+    notification_secret = (
+        resolve_secret_bytes(settings.notification_secret_ref)
+        if settings.notification_sink and settings.notification_secret_ref
+        else None
+    )
     notifier = NotificationEmitter(
         sink_url=settings.notification_sink,
         base_url=settings.base_url,
+        signing_secret=notification_secret,
+        source=settings.notification_source,
+        sender_identity=settings.notification_identity,
     )
     app.state.notifier = notifier
 

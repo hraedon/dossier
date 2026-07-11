@@ -23,6 +23,32 @@ import pytest
 
 from dossier import secrets as suite_secrets
 
+
+def test_resolve_secret_bytes_requires_explicit_backend_ref():
+    with pytest.raises(RuntimeError, match="backend ref"):
+        suite_secrets.resolve_secret_bytes(
+            "plaintext-secret-that-must-not-be-accepted"
+        )
+
+
+def test_resolve_secret_bytes_refuses_literal_provider():
+    with pytest.raises(RuntimeError, match="not permitted"):
+        suite_secrets.resolve_secret_bytes("literal:" + "s" * 32)
+
+
+def test_resolve_secret_bytes_from_env(monkeypatch):
+    monkeypatch.setenv("DOSSIER_TEST_WAKE_SECRET", "s" * 32)
+    assert (
+        suite_secrets.resolve_secret_bytes("env:DOSSIER_TEST_WAKE_SECRET")
+        == b"s" * 32
+    )
+
+
+def test_resolve_secret_bytes_rejects_short_secret(monkeypatch):
+    monkeypatch.setenv("DOSSIER_TEST_WAKE_SECRET", "short")
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        suite_secrets.resolve_secret_bytes("env:DOSSIER_TEST_WAKE_SECRET")
+
 # ---------------------------------------------------------------------------
 # resolve_dsn
 # ---------------------------------------------------------------------------

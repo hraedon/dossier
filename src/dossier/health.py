@@ -268,4 +268,24 @@ def _notification_sink_check(settings: Settings) -> dict[str, Any]:
     """
     from .notifications import notification_health_check
 
-    return notification_health_check(settings.notification_sink)
+    posture = notification_health_check(
+        settings.notification_sink,
+        settings.notification_secret_ref,
+    )
+    if posture["status"] != "ok":
+        return posture
+
+    from .secrets import resolve_secret_bytes
+
+    try:
+        resolve_secret_bytes(settings.notification_secret_ref)
+    except Exception as exc:
+        return {
+            "name": "notification_sink",
+            "status": "fail",
+            "detail": (
+                "notification signing secret unresolvable: "
+                f"{type(exc).__name__}"
+            ),
+        }
+    return posture

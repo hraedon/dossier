@@ -182,6 +182,9 @@ class Settings:
     principal_key_dir: str
     notification_sink: str = ""
     base_url: str = "http://localhost:8000"
+    notification_secret_ref: str = ""
+    notification_source: str = "dossier"
+    notification_identity: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +325,15 @@ def load_settings(strict: bool = True) -> Settings:
         principal_key_dir=principal_key_dir,
         notification_sink=os.environ.get("DOSSIER_NOTIFICATION_SINK", ""),
         base_url=os.environ.get("DOSSIER_BASE_URL", "http://localhost:8000"),
+        notification_secret_ref=os.environ.get(
+            "DOSSIER_NOTIFICATION_SECRET_REF", ""
+        ),
+        notification_source=os.environ.get(
+            "DOSSIER_NOTIFICATION_SOURCE", "dossier"
+        ),
+        notification_identity=os.environ.get(
+            "DOSSIER_NOTIFICATION_IDENTITY", ""
+        ),
     )
 
 

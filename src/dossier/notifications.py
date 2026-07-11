@@ -27,9 +27,12 @@ Event classes (immediate vs digest routing is config, not code):
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
 import logging
 import urllib.error
 import urllib.request
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -63,6 +66,7 @@ class NotificationEvent:
     deep_link: str
     timestamp: str
     detail: str | None = None
+    event_id: str = ""
 
     @property
     def is_immediate(self) -> bool:
@@ -88,9 +92,18 @@ class NotificationEmitter:
         self,
         sink_url: str | None,
         base_url: str = "http://localhost:8000",
+        *,
+        signing_secret: bytes | None = None,
+        source: str = "dossier",
+        sender_identity: str = "",
     ) -> None:
         self._sink_url = sink_url or ""
         self._base_url = base_url.rstrip("/")
+        self._signing_secret = signing_secret
+        self._source = _safe_header_value(source, "source")
+        self._sender_identity = _safe_header_value(
+            sender_identity, "sender identity", allow_empty=True
+        )
 
     @property
     def configured(self) -> bool:
@@ -110,11 +123,31 @@ class NotificationEmitter:
         if not self._sink_url:
             return True
 
-        payload = json.dumps(event.to_dict()).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self._signing_secret is None:
+            # Backward-compatible generic webhook mode. This is intentionally
+            # not described as agent-wake compatible: wake rejects unsigned
+            # ingress, and doctor reports this posture as a warning.
+            payload = json.dumps(event.to_dict()).encode("utf-8")
+        else:
+            envelope = self._wake_envelope(event)
+            payload = json.dumps(
+                envelope, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+            signature = hmac.new(
+                self._signing_secret, payload, hashlib.sha256
+            ).hexdigest()
+            headers.update({
+                "X-AgentWake-Source": self._source,
+                "X-AgentWake-Signature": f"sha256={signature}",
+                "X-AgentWake-Event-Id": envelope["event_id"],
+            })
+            if self._sender_identity:
+                headers["X-AgentWake-Identity"] = self._sender_identity
         req = urllib.request.Request(
             self._sink_url,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
             method="POST",
         )
         try:
@@ -140,6 +173,27 @@ class NotificationEmitter:
                 },
             )
             return False
+
+    def _wake_envelope(self, event: NotificationEvent) -> dict[str, Any]:
+        event_id = event.event_id or str(uuid.uuid4())
+        content = event.detail or f"{event.item_key}: {event.item_title}"
+        return {
+            "v": 0,
+            "event_id": event_id,
+            "source": self._source,
+            "kind": event.event_type,
+            "content": content,
+            "wake": False,
+            "meta": {
+                "target": event.principal_id,
+                "deep_link": event.deep_link,
+                "project": event.project,
+                "item_id": event.item_id,
+                "item_key": event.item_key,
+                "item_title": event.item_title,
+                "notification": event.to_dict(),
+            },
+        }
 
     def emit_for_transition(
         self,
@@ -201,18 +255,23 @@ class NotificationEmitter:
             deep_link=self.deep_link(project_slug, work_item_id),
             timestamp=datetime.now(timezone.utc).isoformat(),
             detail=detail,
+            event_id=str(uuid.uuid4()),
         )
         self.emit(event)
         return event
 
 
-def notification_health_check(sink_url: str | None) -> dict[str, Any]:
+def notification_health_check(
+    sink_url: str | None,
+    secret_ref: str | None = None,
+) -> dict[str, Any]:
     """Health-check entry for the notification sink (Plan 018 WI-2.1 AC).
 
-    Returns a ``warn`` when no sink is configured (notifications not
-    being delivered), and ``ok`` when a sink URL is set. This is not a
-    connectivity probe — the sink may be temporarily unreachable; the
-    emitter handles POST failures gracefully without blocking transitions.
+    Returns a ``warn`` when no sink is configured or when the configured sink
+    has no signing-secret ref. An authenticated sink posture is ``ok``; the
+    caller separately resolves the ref. This is not a connectivity probe — the
+    sink may be temporarily unreachable, and emission remains best-effort so a
+    notification failure cannot roll back an already-signed transition.
     """
     if not sink_url:
         return {
@@ -220,8 +279,26 @@ def notification_health_check(sink_url: str | None) -> dict[str, Any]:
             "status": "warn",
             "detail": "no sink configured (DOSSIER_NOTIFICATION_SINK) — notifications not delivered",
         }
+    if not secret_ref:
+        return {
+            "name": "notification_sink",
+            "status": "warn",
+            "detail": (
+                "sink configured without DOSSIER_NOTIFICATION_SECRET_REF "
+                "(unsigned generic webhook; not agent-wake compatible)"
+            ),
+        }
     return {
         "name": "notification_sink",
         "status": "ok",
-        "detail": "sink configured",
+        "detail": "authenticated agent-wake sink configured",
     }
+
+
+def _safe_header_value(value: str, label: str, *, allow_empty: bool = False) -> str:
+    normalized = value.strip()
+    if not normalized and not allow_empty:
+        raise ValueError(f"notification {label} must not be empty")
+    if "\r" in normalized or "\n" in normalized:
+        raise ValueError(f"notification {label} contains invalid characters")
+    return normalized

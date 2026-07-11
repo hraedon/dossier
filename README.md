@@ -135,6 +135,31 @@ Copy `.env.example` to `.env` (`.env` is gitignored) and fill in real values.
 | `DOSSIER_REQUIRE_SSL` | no | `false` | pass `true` to regista to require an SSL Postgres connection |
 | `DOSSIER_USERS_PATH` | to serve | — | path to the local users JSON file (LocalBackend) |
 | `DOSSIER_AUTH_BACKEND` | no | `local` | auth backend selector (`local`; `ldap` is Plan 003) |
+| `DOSSIER_NOTIFICATION_SINK` | no | — | webhook target; agent-wake ingress is the supported authenticated path |
+| `DOSSIER_NOTIFICATION_SECRET_REF` | with agent-wake | — | HMAC secret backend ref shared with the configured wake source |
+| `DOSSIER_NOTIFICATION_SOURCE` | no | `dossier` | agent-wake source name used in the signed envelope and header |
+| `DOSSIER_NOTIFICATION_IDENTITY` | no | — | sender principal for agent-wake source identity gating |
+| `DOSSIER_BASE_URL` | no | `http://localhost:8000` | public origin used for notification deep links |
+
+For authenticated human notifications through agent-wake, configure the same
+32-byte-or-longer HMAC secret on both sides. Dossier accepts the suite secret-ref
+syntax while wake uses its source secret URI:
+
+```dotenv
+DOSSIER_NOTIFICATION_SINK=http://127.0.0.1:8788/
+DOSSIER_NOTIFICATION_SECRET_REF=env:DOSSIER_WAKE_SECRET
+DOSSIER_NOTIFICATION_SOURCE=dossier
+DOSSIER_NOTIFICATION_IDENTITY=service:dossier
+DOSSIER_BASE_URL=https://dossier.example.com
+```
+
+The matching wake source must be named `dossier`, resolve the same secret, allow
+`service:dossier` as a trigger identity, and explicitly allow every intended
+target principal. Dossier signs the exact v0 body and sends
+`X-AgentWake-Source`, `X-AgentWake-Signature`, `X-AgentWake-Event-Id`, and the
+optional `X-AgentWake-Identity`. An unsigned sink remains available for a generic
+test receiver, but doctor reports that posture as degraded and it is not
+agent-wake compatible.
 
 ### External PostgreSQL
 

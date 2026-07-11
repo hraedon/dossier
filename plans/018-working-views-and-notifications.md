@@ -1,6 +1,6 @@
 # Plan 018 — Working views and notifications: dossier as a daily surface
 
-**Status:** Proposed 2026-07-07.
+**Status:** In Progress — Phase 1 and WI-2.1 implemented; WI-2.2 remains.
 **Author:** Claude (Fable 5), from the 2026-07-07 suite v2 gaps review
 **Strategic role:** Plans 011/014 made dossier a deployable cross-project
 *window*; Plan 017 adds the provenance record. What's still missing is the part
@@ -99,3 +99,15 @@ depend on Plan 017 or cairn). Phase 2 lands the seam first (WI-2.1), then
 pairs with agent-wake Plan 005 for real delivery; until wake's delivery leg
 exists, the webhook sink is validated with a test receiver. Absorbing Plan 004:
 mark 004 superseded-in-part by this plan when WI-1.1/1.2 land.
+
+## Implementation note — 2026-07-11
+
+Phase 1 and the WI-2.1 emitting seam are present. The dossier → agent-wake
+boundary is now a real authenticated contract: dossier emits a canonical v0
+envelope, signs the exact body with a secret resolved from the suite backend,
+binds an idempotency event ID, declares its source/service identity, and places
+the human principal in `meta.target`. Unsigned generic webhooks remain available
+for test receivers but report a degraded doctor posture and are explicitly not
+described as agent-wake compatible. Cross-repository contract tests prove wake
+accepts an allowed target and rejects an unapproved one. WI-2.2 still lacks its
+scheduled delivery path, so this plan remains In Progress.
