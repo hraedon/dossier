@@ -59,6 +59,8 @@ human face lands on the same migrated data.
   aggregation, cross-project link rendering.
 - **WI-7 — deploy.** Point dossier at the `regista` DB (the multi-schema store),
   not a single `DOSSIER_PROJECT`; stand up the web service (its own infra step).
+  **Superseded 2026-07-11 by [Plan 023](023-central-service-deployment.md)**
+  (central k8s service deployment); tracked there as WI-2/WI-3.
 
 ## Out of scope / later
 
