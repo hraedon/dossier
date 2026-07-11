@@ -120,3 +120,6 @@ Cross-references:
   plan's WI-1.1 (session detail).
 - agent-provenance Plan 010 WI-4.3 (content-encryption stance banner) is
   additive to this plan's WI-2.2 (verified-history stamp).
+- dossier Plan 021 turns these ordinary activity views into a case-bound evidence
+  review workspace and owns accessibility/reviewer qualification. It may not
+  bypass this plan's live-capture and verification dependencies.

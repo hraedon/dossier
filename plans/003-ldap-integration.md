@@ -88,6 +88,10 @@ redirect, PKCE, JWKS/token validation, the `/auth/callback` route. The guardrail
 below mean it slots in as a new backend family + one new route, touching neither
 the LDAP nor the local credential path.
 
+**Promotion note (2026-07-11):** Plan 020 promotes that deferred seam into a
+concrete Entra/OIDC + step-up implementation plan. This plan remains the LDAP
+contract and historical rationale; Plan 020 owns all federated-auth work.
+
 ## Work items
 
 - **WI-1 — `LdapBackend.authenticate()`** via search-then-bind; reject empty

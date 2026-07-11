@@ -111,3 +111,8 @@ for test receivers but report a degraded doctor posture and are explicitly not
 described as agent-wake compatible. Cross-repository contract tests prove wake
 accepts an allowed target and rejects an unapproved one. WI-2.2 still lacks its
 scheduled delivery path, so this plan remains In Progress.
+
+**Promotion note (2026-07-11):** Plan 019 owns durable post-commit notification
+intent, retries/dead-letter, scheduled digest execution, watermarks, and outage
+qualification. WI-2.2 here remains the user-facing product requirement; Plan 019
+is its implementation and operations plan.
