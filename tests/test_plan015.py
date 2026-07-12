@@ -119,7 +119,7 @@ def test_rotate_key_produces_valid_ed25519_public_key(client, principal_store, t
 
     import nacl.signing
 
-    verify_key = nacl.signing.VerifyKey(public_key_bytes)
+    nacl.signing.VerifyKey(public_key_bytes)
     priv_path = tmp_path / "principals" / f"{_ALICE_ID}_ed25519.key"
     assert not priv_path.exists()
 

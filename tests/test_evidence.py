@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import uuid
-
-import pytest
-
 from conftest import login as _login
-from helpers import ALICE
 
 _PROJECT_SLUG = "dossier-test"
 

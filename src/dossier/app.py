@@ -62,11 +62,6 @@ from .knowledge import (
     search_notes,
     verify_note,
 )
-from .knowledge_verify import (
-    VerificationResult,
-    verify_all_notes,
-    verify_note_chain,
-)
 from .shell import build_shell
 from .views import (
     ActivityEntry,

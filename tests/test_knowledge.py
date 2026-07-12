@@ -8,8 +8,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from dossier.knowledge import (
-    NoteDetail,
-    NoteSummary,
     create_note,
     get_note,
     list_notes,
