@@ -9,8 +9,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
-from regista import RegistaError, WorkItem
-from regista._errors import ErrorCode
+from regista import ErrorCode, RegistaError, WorkItem
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -36,6 +35,39 @@ from .provenance import (
     read_session_summaries,
 )
 from .notifications import NotificationEmitter
+from .evidence import (
+    EvidenceSummary,
+    EventVerification,
+    read_evidence_summary,
+    read_event_verifications,
+    read_integrity_report,
+)
+from .operations import (
+    EstateSummary,
+    read_estate_summary,
+    read_operations_findings,
+)
+from .administration import (
+    AdminSummary,
+    read_admin_summary,
+    read_project_list,
+    read_access_policy,
+)
+from .knowledge import (
+    NoteDetail,
+    NoteSummary,
+    create_note,
+    get_note,
+    list_notes,
+    search_notes,
+    verify_note,
+)
+from .knowledge_verify import (
+    VerificationResult,
+    verify_all_notes,
+    verify_note_chain,
+)
+from .shell import build_shell
 from .views import (
     ActivityEntry,
     MyWorkEntry,
@@ -271,11 +303,13 @@ def create_app(
             raise LoginRequired()
 
     def actor_context(request: Request, actor: Actor) -> dict[str, Any]:
+        admin = _is_admin(actor)
         return {
             "actor": actor,
             "csrf_token": issue_csrf_token(request.session),
             "projects": [p for p in registry.list_projects() if _can_read_project(actor, p)],
-            "is_admin": _is_admin(actor),
+            "is_admin": admin,
+            "shell": build_shell(request.url.path, actor, is_admin=admin),
         }
 
     def resolve_gateway(project_slug: str, actor: Actor) -> RegistaGateway:
@@ -1471,5 +1505,444 @@ def create_app(
         )
 
         return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
+
+    # ---- evidence area (Plan 024 Phase 2) ----
+
+    @app.get("/evidence")
+    def evidence_index(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.evidence")
+        all_summaries: list[EvidenceSummary] = []
+        all_verifications: list[EventVerification] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                slug = project_to_slug(project)
+                summary = read_evidence_summary(gw, slug)
+                all_summaries.append(summary)
+                verifications = read_event_verifications(gw, limit=50)
+                all_verifications.extend(verifications)
+            except Exception:
+                logger.warning("evidence: project %s unreachable", project, exc_info=True)
+
+        all_verifications.sort(key=lambda v: v.timestamp, reverse=True)
+        all_verifications = all_verifications[:100]
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "evidence_index.html",
+            {
+                **ctx,
+                "summaries": all_summaries,
+                "verifications": all_verifications,
+            },
+        )
+
+    @app.get("/evidence/integrity")
+    def evidence_integrity_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.evidence")
+        all_reports: list[dict[str, Any]] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                report = read_integrity_report(gw)
+                report["project_slug"] = project_to_slug(project)
+                all_reports.append(report)
+            except Exception:
+                logger.warning("evidence/integrity: project %s unreachable", project, exc_info=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "evidence_integrity.html",
+            {
+                **ctx,
+                "reports": all_reports,
+            },
+        )
+
+    @app.get("/evidence/events")
+    def evidence_events_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.evidence")
+        all_verifications: list[EventVerification] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                verifications = read_event_verifications(gw, limit=100)
+                all_verifications.extend(verifications)
+            except Exception:
+                logger.warning("evidence/events: project %s unreachable", project, exc_info=True)
+
+        all_verifications.sort(key=lambda v: v.timestamp, reverse=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "evidence_events.html",
+            {
+                **ctx,
+                "verifications": all_verifications,
+            },
+        )
+
+    # ---- operations area (Plan 024 Phase 4) ----
+
+    @app.get("/operations")
+    def operations_index(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.operations")
+        all_estates: list[EstateSummary] = []
+        all_findings: list[Any] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                slug = project_to_slug(project)
+                estate = read_estate_summary(gw, slug)
+                all_estates.append(estate)
+                findings = read_operations_findings(gw)
+                all_findings.extend(findings)
+            except Exception:
+                logger.warning("operations: project %s unreachable", project, exc_info=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "operations_index.html",
+            {
+                **ctx,
+                "estates": all_estates,
+                "findings": all_findings,
+            },
+        )
+
+    # ---- administration area (Plan 024 Phase 3) ----
+
+    @app.get("/admin")
+    def admin_index(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        require_admin(actor)
+        import logging
+
+        logger = logging.getLogger("dossier.admin")
+        all_summaries: list[AdminSummary] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                slug = project_to_slug(project)
+                summary = read_admin_summary(
+                    gw,
+                    actor,
+                    _is_admin(actor),
+                    project_slug=slug,
+                )
+                all_summaries.append(summary)
+            except Exception:
+                logger.warning("admin: project %s unreachable", project, exc_info=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "admin_index.html",
+            {
+                **ctx,
+                "summaries": all_summaries,
+            },
+        )
+
+    @app.get("/admin/projects")
+    def admin_projects_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        require_admin(actor)
+        import logging
+
+        logger = logging.getLogger("dossier.admin")
+        all_projects: list[Any] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                projects = read_project_list(gw)
+                for p in projects:
+                    all_projects.append((project_to_slug(project), p))
+            except Exception:
+                logger.warning("admin/projects: project %s unreachable", project, exc_info=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "admin_projects.html",
+            {
+                **ctx,
+                "project_rows": all_projects,
+            },
+        )
+
+    @app.get("/admin/access")
+    def admin_access_route(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        require_admin(actor)
+        import logging
+
+        logger = logging.getLogger("dossier.admin")
+        all_policies: list[Any] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                slug = project_to_slug(project)
+                policy = read_access_policy(
+                    gw,
+                    slug,
+                    actor=actor,
+                    is_admin=_is_admin(actor),
+                    admin_ids=tuple(sorted(_ADMIN_ACTOR_IDS)),
+                )
+                all_policies.append(policy)
+            except Exception:
+                logger.warning("admin/access: project %s unreachable", project, exc_info=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "admin_access.html",
+            {
+                **ctx,
+                "policies": all_policies,
+            },
+        )
+
+    # ---- activity area (Plan 024 Phase 2 — enhanced index) ----
+
+    @app.get("/activity")
+    def activity_index(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.activity")
+        all_sessions: list[SessionSummary] = []
+        all_entries: list[ActivityEntry] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                slug = project_to_slug(project)
+                sessions = read_session_summaries(gw, slug)
+                all_sessions.extend(sessions)
+                entries = read_activity_feed(gw, slug, limit=50)
+                all_entries.extend(entries)
+            except Exception:
+                logger.warning("activity: project %s unreachable", project, exc_info=True)
+
+        all_sessions.sort(key=lambda s: s.attested_at or datetime.min, reverse=True)
+        all_entries.sort(key=lambda e: e.timestamp, reverse=True)
+        all_entries = all_entries[:100]
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "activity_index.html",
+            {
+                **ctx,
+                "sessions": all_sessions,
+                "entries": all_entries,
+                "session_count": len(all_sessions),
+                "entry_count": len(all_entries),
+            },
+        )
+
+    # ---- knowledge area (Plan 024 Phase 1 + Plan 009) ----
+
+    @app.get("/knowledge")
+    def knowledge_index(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.knowledge")
+        all_notes: list[NoteSummary] = []
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                notes = list_notes(gw, limit=100)
+                all_notes.extend(notes)
+            except Exception:
+                logger.warning("knowledge: project %s unreachable", project, exc_info=True)
+
+        all_notes.sort(key=lambda n: n.updated_at, reverse=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "knowledge_index.html",
+            {
+                **ctx,
+                "notes": all_notes,
+                "note_count": len(all_notes),
+            },
+        )
+
+    @app.get("/knowledge/search")
+    def knowledge_search(
+        request: Request,
+        q: str = Query("", alias="q"),
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.knowledge")
+        all_results: list[NoteSummary] = []
+
+        if q.strip():
+            for project in registry.list_projects():
+                if not _can_read_project(actor, project):
+                    continue
+                try:
+                    gw = registry.get(project)
+                    results = search_notes(gw, q, limit=50)
+                    all_results.extend(results)
+                except Exception:
+                    logger.warning("knowledge/search: project %s unreachable", project, exc_info=True)
+
+        all_results.sort(key=lambda n: n.updated_at, reverse=True)
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "knowledge_search.html",
+            {
+                **ctx,
+                "results": all_results,
+                "query": q,
+                "result_count": len(all_results),
+            },
+        )
+
+    @app.get("/knowledge/{note_id}")
+    def knowledge_detail(
+        request: Request,
+        note_id: str,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.knowledge")
+        detail: NoteDetail | None = None
+        verification: dict[str, Any] = {}
+
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                detail = get_note(gw, note_id)
+                if detail is not None:
+                    verification = verify_note(gw, note_id)
+                    break
+            except Exception:
+                logger.warning("knowledge/detail: project %s unreachable", project, exc_info=True)
+
+        if detail is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "note not found")
+
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "knowledge_detail.html",
+            {
+                **ctx,
+                "note": detail,
+                "verification": verification,
+            },
+        )
+
+    @app.get("/knowledge/new")
+    def knowledge_new(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "knowledge_new.html",
+            {**ctx},
+        )
+
+    @app.post("/knowledge/create", response_model=None)
+    async def knowledge_create(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        form = await request.form()
+        title = str(form.get("title", "")).strip()[:200]
+        body = str(form.get("body", "")).strip()[:10000]
+        if not title:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "title is required")
+
+        gw: RegistaGateway | None = None
+        for project in registry.list_projects():
+            if _can_read_project(actor, project):
+                gw = registry.get(project)
+                break
+        if gw is None:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no accessible project available")
+
+        note_id = create_note(gw, actor=actor, title=title, body=body)
+        return RedirectResponse(
+            url=f"/knowledge/{note_id}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
 
     return app

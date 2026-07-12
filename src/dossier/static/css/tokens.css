@@ -188,6 +188,14 @@ a:hover { text-decoration: underline; }
 /* app shell */
 .ds-app { display: flex; flex-direction: column; min-height: 100vh; background: var(--bg); }
 
+.ds-skip-link {
+  position: fixed; top: var(--space-2); left: var(--space-2); z-index: 1000;
+  padding: var(--space-2) var(--space-3); background: var(--btn-strong-bg);
+  color: var(--btn-strong-text); border-radius: var(--radius-sm);
+  transform: translateY(-160%);
+}
+.ds-skip-link:focus { transform: translateY(0); }
+
 .ds-topbar {
   display: flex; align-items: center; gap: var(--space-3);
   height: 52px; padding: 0 var(--space-5);
@@ -199,15 +207,51 @@ a:hover { text-decoration: underline; }
   color: var(--accent); text-decoration: none; flex-shrink: 0;
 }
 .ds-topbar__wordmark:hover { text-decoration: none; opacity: 0.85; }
-.ds-topbar__nav { display: flex; gap: 2px; }
-.ds-topbar__nav a {
+.ds-primary-nav { display: flex; gap: 2px; }
+.ds-primary-nav__item {
   padding: 5px 10px; border-radius: var(--radius-sm);
   font-size: var(--fs-sm); color: var(--text-2); text-decoration: none;
 }
-.ds-topbar__nav a:hover { background: var(--panel-2); color: var(--text); }
+.ds-primary-nav__item:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
+.ds-primary-nav__item.is-active { background: var(--accent-soft); color: var(--accent); }
+.ds-primary-nav__item.is-disabled { color: var(--text-3); cursor: not-allowed; }
 .ds-topbar__spacer { flex: 1; }
 .ds-topbar__actor { font-size: var(--fs-sm); color: var(--text-2); }
 .ds-topbar__logout { display: inline; }
+
+.ds-subbar {
+  min-height: 38px; padding: 4px var(--space-5); display: flex;
+  align-items: center; gap: var(--space-3); background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+}
+.ds-context-nav { display: flex; gap: 2px; overflow-x: auto; }
+.ds-context-nav a {
+  padding: 4px 8px; border-radius: var(--radius-sm); color: var(--text-2);
+  font-size: var(--fs-sm); white-space: nowrap;
+}
+
+.ds-user-menu { position: relative; }
+.ds-user-menu__trigger {
+  cursor: pointer; list-style: none; display: flex; align-items: center;
+  gap: var(--space-2); padding: 4px 7px; border-radius: var(--radius-sm);
+}
+.ds-user-menu__trigger::-webkit-details-marker { display: none; }
+.ds-user-menu__trigger::after { content: "▾"; font-size: 10px; color: var(--text-3); }
+.ds-user-menu__trigger:hover { background: var(--panel-2); }
+.ds-user-menu__menu {
+  position: absolute; right: 0; top: calc(100% + 4px); min-width: 180px;
+  z-index: 200; display: flex; flex-direction: column; padding: 4px;
+  background: var(--panel); border: 1px solid var(--border-2);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.ds-user-menu__menu a, .ds-user-menu__action {
+  display: block; width: 100%; padding: 7px 10px; border: 0;
+  border-radius: var(--radius-sm); background: transparent; color: var(--text-2);
+  font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer;
+}
+.ds-user-menu__menu a:hover, .ds-user-menu__action:hover {
+  background: var(--panel-2); color: var(--text); text-decoration: none;
+}
 
 .ds-iconbtn {
   width: 34px; height: 34px; display: flex; align-items: center; justify-content: center;
@@ -425,6 +469,21 @@ a:hover { text-decoration: underline; }
 }
 .ds-projswitch__item:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
 .ds-projswitch__item.is-active { color: var(--accent); font-weight: 500; }
+
+@media (max-width: 860px) {
+  .ds-topbar { height: auto; min-height: 52px; padding: var(--space-2) var(--space-3); flex-wrap: wrap; }
+  .ds-primary-nav { order: 3; width: 100%; overflow-x: auto; padding-bottom: 2px; }
+  .ds-primary-nav__item { white-space: nowrap; }
+  .ds-subbar { padding-inline: var(--space-3); overflow-x: auto; }
+  .ds-wrap { padding: var(--space-4) var(--space-3); }
+}
+
+@media (max-width: 520px) {
+  .ds-primary-nav__item.is-disabled { display: none; }
+  .ds-topbar__actor { max-width: 9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ds-pagehead, .ds-field-row, .ds-filters { flex-direction: column; align-items: stretch; }
+  .ds-table-wrap { overflow-x: auto; }
+}
 
 /* — agent-activity window (Plan 017) — */
 

@@ -1,0 +1,54 @@
+{% macro primary_navigation(shell) -%}
+<nav class="ds-primary-nav" aria-label="Suite areas">
+  {% for item in shell.navigation %}
+    {% if item.href %}
+    <a href="{{ item.href }}" class="ds-primary-nav__item{% if item.active %} is-active{% endif %}"
+       {% if item.active %}aria-current="page"{% endif %}>{{ item.label }}</a>
+    {% else %}
+    <span class="ds-primary-nav__item is-disabled" aria-disabled="true"
+          title="This area is not available yet">{{ item.label }}</span>
+    {% endif %}
+  {% endfor %}
+</nav>
+{%- endmacro %}
+
+{% macro work_navigation() -%}
+<nav class="ds-context-nav" aria-label="Work views">
+  <a href="/">dashboard</a>
+  <a href="/review">review</a>
+  <a href="/my-work">my work</a>
+  <a href="/feed">feed</a>
+  <a href="/search">search</a>
+</nav>
+{%- endmacro %}
+
+{% macro project_switcher(projects, current_project) -%}
+{% if projects %}
+<details class="ds-projswitch">
+  <summary class="ds-projswitch__trigger">{% if current_project %}{{ project_to_slug(current_project) }}{% else %}projects{% endif %}</summary>
+  <div class="ds-projswitch__menu">
+    {% for p in projects %}
+    <a href="/p/{{ project_to_slug(p) }}" class="ds-projswitch__item{% if current_project == p %} is-active{% endif %}"
+       {% if current_project == p %}aria-current="page"{% endif %}>{{ project_to_slug(p) }}</a>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
+{%- endmacro %}
+
+{% macro user_menu(actor, csrf_token) -%}
+<details class="ds-user-menu">
+  <summary class="ds-user-menu__trigger" aria-label="User menu for {{ actor.display_name }}">
+    <span class="ds-topbar__actor">{{ actor.display_name }}</span>
+    <span class="ds-badge ds-badge--{{ actor.actor_kind }}">{{ kind_badge(actor) }}</span>
+  </summary>
+  <div class="ds-user-menu__menu">
+    <a href="/me/identity">my identity</a>
+    <a href="/me/signing-history">signing history</a>
+    <form method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="ds-user-menu__action">logout</button>
+    </form>
+  </div>
+</details>
+{%- endmacro %}

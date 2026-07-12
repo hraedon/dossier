@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}knowledge — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">knowledge</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ note_count }} notes</span>
+    </div>
+  </div>
+  <div class="ds-pagehead__actions">
+    <a href="/knowledge/search" class="ds-btn ds-btn--ghost">search</a>
+    <a href="/knowledge/new" class="ds-btn">new note</a>
+  </div>
+</div>
+
+{% if notes %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>title</th>
+        <th>author</th>
+        <th>state</th>
+        <th>verification</th>
+        <th>updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for note in notes %}
+      <tr>
+        <td><a href="/knowledge/{{ note.note_id }}">{{ note.title }}</a></td>
+        <td class="mono">{{ note.actor_id }}</td>
+        <td><span class="ds-pill {{ 'ds-pill--ok' if note.state == 'active' else 'ds-pill--muted' }}"><span class="ds-pill__dot"></span>{{ note.state }}</span></td>
+        <td><span class="ds-pill ds-pill--muted">{{ note.verification_status }}</span></td>
+        <td class="mono tnum">{{ format_timestamp(note.updated_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no knowledge notes</div>
+  <div class="ds-empty__sub">create a note to get started</div>
+</div>
+{% endif %}
+{% endblock %}

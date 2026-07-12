@@ -121,13 +121,7 @@ def test_rotate_key_produces_valid_ed25519_public_key(client, principal_store, t
 
     verify_key = nacl.signing.VerifyKey(public_key_bytes)
     priv_path = tmp_path / "principals" / f"{_ALICE_ID}_ed25519.key"
-    assert priv_path.exists()
-    signing_key = nacl.signing.SigningKey(priv_path.read_bytes())
-    assert bytes(signing_key.verify_key) == public_key_bytes
-
-    test_msg = b"provenance verification"
-    sig = signing_key.sign(test_msg).signature
-    verify_key.verify(test_msg, sig)
+    assert not priv_path.exists()
 
 
 def test_rotate_key_updates_fingerprint(client, principal_store):
@@ -377,15 +371,9 @@ def test_break_glass_generates_valid_ed25519_key(client, principal_store, admin_
 
     import nacl.signing
 
-    verify_key = nacl.signing.VerifyKey(public_key)
+    nacl.signing.VerifyKey(public_key)
     priv_path = tmp_path / "principals" / f"{_NEW_PRINCIPAL_ID}_ed25519.key"
-    assert priv_path.exists()
-    signing_key = nacl.signing.SigningKey(priv_path.read_bytes())
-    assert bytes(signing_key.verify_key) == public_key
-
-    test_msg = b"break-glass provenance"
-    sig = signing_key.sign(test_msg).signature
-    verify_key.verify(test_msg, sig)
+    assert not priv_path.exists()
 
 
 # ---- auth required ----
@@ -476,9 +464,7 @@ def test_enrollment_produces_valid_ed25519_key(client, principal_store, admin_en
 
     nacl.signing.VerifyKey(public_key_bytes)
     priv_path = tmp_path / "principals" / f"{_NEW_PRINCIPAL_ID}_ed25519.key"
-    assert priv_path.exists()
-    signing_key = nacl.signing.SigningKey(priv_path.read_bytes())
-    assert bytes(signing_key.verify_key) == public_key_bytes
+    assert not priv_path.exists()
 
 
 def test_gateway_custody_never_returns_private_key(gateway, principal_store, tmp_path):
@@ -552,7 +538,7 @@ def test_principal_key_manager_rejects_invalid_principal_id(tmp_path):
         mgr.generate_and_store("")
 
 
-def test_break_glass_stores_private_key(client, principal_store, admin_env_dual, tmp_path):
+def test_break_glass_does_not_store_private_key(client, principal_store, admin_env_dual, tmp_path):
     _login(client)
     bg_page = client.get("/admin/break-glass")
     csrf = _extract_csrf(bg_page.text)
@@ -568,7 +554,7 @@ def test_break_glass_stores_private_key(client, principal_store, admin_env_dual,
     )
 
     key_path = tmp_path / "principals" / f"{_NEW_PRINCIPAL_ID}_ed25519.key"
-    assert key_path.exists()
+    assert not key_path.exists()
 
 
 # ---- adversarial review fixes (Plan 015 follow-up) ----
@@ -611,14 +597,17 @@ def test_key_manifest_written_with_owner_only_permissions(tmp_path):
     assert mode == 0o600
 
 
-def test_rotate_rolls_back_on_custody_failure(client, principal_store, admin_env, monkeypatch):
+def test_rotate_rolls_back_on_registration_failure(client, principal_store, admin_env, monkeypatch):
     entry = _enroll(principal_store, _ALICE_ID)
     _login(client)
 
     def _fail(*args, **kwargs):
-        raise RuntimeError("disk full")
+        raise RuntimeError("registration failed")
 
-    monkeypatch.setattr("regista._custody.store_private_key", _fail)
+    monkeypatch.setattr(
+        "dossier.gateway.RegistaGateway._generate_and_register",
+        _fail,
+    )
 
     identity_page = client.get("/me/identity")
     csrf = _extract_csrf(identity_page.text)
@@ -629,7 +618,7 @@ def test_rotate_rolls_back_on_custody_failure(client, principal_store, admin_env
     assert active["public_key"] == entry["public_key"]
 
 
-def test_break_glass_rolls_back_on_custody_failure(
+def test_break_glass_rolls_back_on_registration_failure(
     client, principal_store, admin_env_dual, monkeypatch
 ):
     entry = _enroll(principal_store, _NEW_PRINCIPAL_ID)
@@ -637,9 +626,12 @@ def test_break_glass_rolls_back_on_custody_failure(
     _login(client)
 
     def _fail(*args, **kwargs):
-        raise RuntimeError("disk full")
+        raise RuntimeError("registration failed")
 
-    monkeypatch.setattr("regista._custody.store_private_key", _fail)
+    monkeypatch.setattr(
+        "dossier.gateway.RegistaGateway._generate_and_register",
+        _fail,
+    )
 
     bg_page = client.get("/admin/break-glass")
     csrf = _extract_csrf(bg_page.text)
@@ -663,8 +655,7 @@ def test_enroll_principal_failure_logs_warning(caplog):
     from unittest.mock import MagicMock
 
     from helpers import ALICE
-    from regista import RegistaError
-    from regista._errors import ErrorCode
+    from regista import ErrorCode, RegistaError
 
     from dossier.gateway import RegistaGateway
 
@@ -719,9 +710,7 @@ def test_gateway_test_store_guard_requires_testing_flag(gateway):
         gw_module._TESTING = prev
 
 
-def test_readonly_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch):
-    from regista import RegistaError
-    from regista._errors import ErrorCode
+def test_inmemory_rotation_works_without_custody(tmp_path, monkeypatch):
     from regista.testing import InMemoryRegista
     from fastapi.testclient import TestClient
 
@@ -734,15 +723,6 @@ def test_readonly_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch)
 
     monkeypatch.setenv("DOSSIER_ADMIN_IDS", f"{_ALICE_ID},{_SECOND_ADMIN_ID}")
     _configure_admin_ids()
-
-    def _readonly_fail(*args, **kwargs):
-        raise RegistaError(
-            ErrorCode.SECRET_WRITE_UNSUPPORTED,
-            "env: cannot custody a generated secret into a read-only "
-            "environment variable",
-        )
-
-    monkeypatch.setattr("regista._custody.store_private_key", _readonly_fail)
 
     try:
         key_path = tmp_path / "keys.json"
@@ -772,6 +752,12 @@ def test_readonly_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch)
         with TestClient(app) as client:
             _login(client)
 
+            from _doubles import InMemoryPrincipalKeyStore, inject_test_store
+
+            store = InMemoryPrincipalKeyStore()
+            inject_test_store(gw, store)
+            store.register(_ALICE_ID, b"\x01" * 32)
+
             identity_page = client.get("/me/identity")
             csrf = _extract_csrf(identity_page.text)
             resp = client.post(
@@ -779,23 +765,12 @@ def test_readonly_backend_blocks_rotation_and_break_glass(tmp_path, monkeypatch)
                 data={"csrf_token": csrf},
                 follow_redirects=False,
             )
-            assert resp.status_code == 400
-            assert "writable secret backend" in resp.text
+            assert resp.status_code == 303
 
-            bg_page = client.get("/admin/break-glass")
-            csrf = _extract_csrf(bg_page.text)
-            resp = client.post(
-                "/admin/break-glass",
-                data={
-                    "principal_id": _NEW_PRINCIPAL_ID,
-                    "reason": "emergency",
-                    "confirmer_id": _SECOND_ADMIN_ID,
-                    "csrf_token": csrf,
-                },
-                follow_redirects=False,
-            )
-            assert resp.status_code == 400
-            assert "writable secret backend" in resp.text
+            new_entry = store.get_active(_ALICE_ID)
+            assert new_entry["status"] == "active"
+            assert new_entry["public_key"] != b"\x01" * 32
     finally:
+        _configure_admin_ids()
         monkeypatch.delenv("DOSSIER_ADMIN_IDS", raising=False)
         _configure_admin_ids()

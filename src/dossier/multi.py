@@ -22,9 +22,24 @@ def slug_to_project(slug: str) -> str:
     (``face_factory.regista_project_name``) so the two faces address the
     same schema for the same software-project.
     """
-    from regista._connection import validate_project_name
+    import re
 
-    return str(validate_project_name(slug.replace("-", "_")))
+    _SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+    _RESERVED_SCHEMAS = frozenset(
+        {"public", "information_schema", "pg_catalog", "pg_toast"}
+    )
+
+    name = slug.replace("-", "_")
+    if not _SCHEMA_RE.match(name):
+        raise ValueError(
+            f"Invalid project name {name!r}: must be 1-63 chars, lowercase "
+            "alphanumeric/underscore, start with letter or underscore"
+        )
+    if name in _RESERVED_SCHEMAS or name.startswith("pg_"):
+        raise ValueError(
+            f"Invalid project name {name!r}: reserved schema name"
+        )
+    return str(name)
 
 
 def project_to_slug(project: str) -> str:

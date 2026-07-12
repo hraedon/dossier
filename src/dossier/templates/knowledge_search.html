@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}search knowledge — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">search knowledge</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ result_count }} results for "{{ query }}"</span>
+    </div>
+  </div>
+</div>
+
+<form method="get" action="/knowledge/search" class="ds-filters">
+  <div class="ds-field ds-field--inline">
+    <label class="ds-label" for="f-query">search</label>
+    <input class="ds-input" type="text" id="f-query" name="q" value="{{ query }}" placeholder="search notes...">
+  </div>
+  <button type="submit" class="ds-btn ds-btn--ghost">search</button>
+</form>
+
+{% if results %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>title</th>
+        <th>author</th>
+        <th>state</th>
+        <th>updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for note in results %}
+      <tr>
+        <td><a href="/knowledge/{{ note.note_id }}">{{ note.title }}</a></td>
+        <td class="mono">{{ note.actor_id }}</td>
+        <td><span class="ds-pill {{ 'ds-pill--ok' if note.state == 'active' else 'ds-pill--muted' }}"><span class="ds-pill__dot"></span>{{ note.state }}</span></td>
+        <td class="mono tnum">{{ format_timestamp(note.updated_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+{% if query %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no results for "{{ query }}"</div>
+  <div class="ds-empty__sub">try a different search term</div>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">enter a search query</div>
+  <div class="ds-empty__sub">search across all knowledge notes</div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

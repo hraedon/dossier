@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}operations — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">operations</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ estates | length }} projects</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Estate health composed from regista's pool, maintenance, and chain checks.
+    Deployment operations are owned by agent-suite — this view is read-only.
+  </p>
+</div>
+
+{% for estate in estates %}
+<div class="ds-section">
+  <h2 class="ds-section__title">{{ estate.project_name }}</h2>
+  <div class="ds-card-row">
+    {% for comp in estate.components %}
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">{{ comp.name }}</div>
+      <div class="ds-card__value">
+        {% if comp.healthy %}
+        <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>healthy</span>
+        {% else %}
+        <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>unhealthy</span>
+        {% endif %}
+        {% if comp.version %}
+        <span class="ds-chip mono">{{ comp.version }}</span>
+        {% endif %}
+      </div>
+      {% if comp.detail %}
+      <div class="ds-card__detail mono">{{ comp.detail }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="ds-card-row">
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">overall</div>
+      <div class="ds-card__value">
+        {% if estate.overall_healthy %}
+        <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>healthy</span>
+        {% else %}
+        <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>degraded</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if estate.findings %}
+  <ul class="ds-findings">
+    {% for finding in estate.findings %}
+    <li class="ds-finding ds-finding--warn">{{ finding }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% if findings %}
+<div class="ds-section">
+  <h2 class="ds-section__title">operational findings</h2>
+  <ul class="ds-findings">
+    {% for finding in findings %}
+    <li class="ds-finding ds-finding--{% if finding.status.value == 'ok' %}ok{% elif finding.status.value == 'warning' %}warn{% elif finding.status.value == 'failed' %}crit{% else %}muted{% endif %}">
+      <span class="mono">{{ finding.code }}</span> — {{ finding.label }}
+      {% if finding.detail %}
+      <span class="ds-chip">{{ finding.detail }}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if not estates %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no estate data</div>
+  <div class="ds-empty__sub">connected project health will appear here</div>
+</div>
+{% endif %}
+{% endblock %}

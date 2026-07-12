@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}administration — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">administration</h1>
+</div>
+
+<div class="ds-callout">Admin only — project metadata, access policy, and principal roster.</div>
+
+<div class="ds-card-row">
+  {% for summary in summaries %}
+  <div class="ds-card ds-card--compact">
+    <div class="ds-card__label">{{ summary.access.project_slug if summary.access else '—' }}</div>
+    <div class="ds-card__value">
+      <span class="ds-chip mono">{{ summary.projects | length }} projects</span>
+      <span class="ds-chip mono">{{ summary.principal_count }} principals</span>
+    </div>
+    {% if summary.findings %}
+    <div class="ds-card__detail">
+      {% for finding in summary.findings %}
+      <div class="ds-chip">{{ finding }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="ds-section">
+  <a href="/admin/projects" class="ds-btn ds-btn--ghost">projects</a>
+  <a href="/admin/access" class="ds-btn ds-btn--ghost">access policy</a>
+  <a href="/admin/principals" class="ds-btn ds-btn--ghost">principal roster</a>
+</div>
+{% endblock %}

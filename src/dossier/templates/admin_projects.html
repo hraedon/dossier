@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}projects — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">projects</h1>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Project catalog entries from regista. Owner and display name are set via
+    the project metadata API.
+  </p>
+</div>
+
+{% if project_rows %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>project slug</th>
+        <th>schema name</th>
+        <th>display name</th>
+        <th>owner</th>
+        <th>created</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for slug, info in project_rows %}
+      <tr>
+        <td class="mono"><a href="/p/{{ slug }}">{{ slug }}</a></td>
+        <td class="mono">{{ info.schema_name }}</td>
+        <td>{{ info.display_name or '—' }}</td>
+        <td class="mono">{{ info.owner or 'unassigned' }}</td>
+        <td class="mono tnum">{{ format_timestamp(info.created_at) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no projects</div>
+  <div class="ds-empty__sub">configure DOSSIER_PROJECTS to get started</div>
+</div>
+{% endif %}
+
+<div class="ds-section">
+  <a href="/admin" class="ds-btn ds-btn--ghost">back to administration</a>
+</div>
+{% endblock %}

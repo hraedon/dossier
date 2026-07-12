@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}access policy — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">access policy</h1>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Effective cross-project disclosure posture. Readable projects are those the
+    current actor can access. Admin IDs are configured via DOSSIER_ADMIN_IDS.
+  </p>
+</div>
+
+{% if policies %}
+{% for policy in policies %}
+<div class="ds-section">
+  <h2 class="ds-section__title">{{ policy.project_slug }}</h2>
+  <div class="ds-card-row">
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">access level</div>
+      <div class="ds-card__value">
+        {% if policy.is_admin %}
+        <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>administrator</span>
+        {% else %}
+        <span class="ds-pill ds-pill--muted"><span class="ds-pill__dot"></span>standard</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">readable projects</div>
+      <div class="ds-card__value mono tnum">{{ policy.readable_projects | length }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">admin ids</div>
+      <div class="ds-card__value mono tnum">{{ policy.admin_ids | length }}</div>
+    </div>
+  </div>
+
+  {% if policy.readable_projects %}
+  <div class="ds-section">
+    <h3 class="ds-section__subtitle">readable projects</h3>
+    <ul class="ds-list">
+      {% for proj in policy.readable_projects %}
+      <li class="mono"><a href="/p/{{ proj }}">{{ proj }}</a></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if policy.admin_ids %}
+  <div class="ds-section">
+    <h3 class="ds-section__subtitle">configured admin ids</h3>
+    <ul class="ds-list">
+      {% for aid in policy.admin_ids %}
+      <li class="mono">{{ aid }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no access policy data</div>
+  <div class="ds-empty__sub">access policy from connected projects will appear here</div>
+</div>
+{% endif %}
+
+<div class="ds-section">
+  <a href="/admin" class="ds-btn ds-btn--ghost">back to administration</a>
+</div>
+{% endblock %}

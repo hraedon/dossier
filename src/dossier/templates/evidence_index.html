@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}evidence — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">evidence</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ summaries | length }} projects</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Integrity and verification data from regista's signed event log. The UI
+    renders verdicts from regista's replay — it does not recompute cryptographic
+    results.
+  </p>
+</div>
+
+{% for summary in summaries %}
+<div class="ds-section">
+  <h2 class="ds-section__title">{{ summary.project_slug }}</h2>
+  <div class="ds-card-row">
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">chain integrity</div>
+      <div class="ds-card__value">
+        {% if summary.chain_intact %}
+        <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>intact</span>
+        {% else %}
+        <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>broken</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">verified events</div>
+      <div class="ds-card__value mono tnum">{{ summary.verified_events }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">unverified events</div>
+      <div class="ds-card__value mono tnum">
+        {% if summary.unverified_events > 0 %}
+        <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>{{ summary.unverified_events }}</span>
+        {% else %}
+        <span class="mono">0</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">total events</div>
+      <div class="ds-card__value mono tnum">{{ summary.total_events }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">last verified</div>
+      <div class="ds-card__value mono tnum">{{ format_timestamp(summary.last_verified_at) }}</div>
+    </div>
+  </div>
+
+  {% if summary.findings %}
+  <ul class="ds-findings">
+    {% for finding in summary.findings %}
+    <li class="ds-finding ds-finding--warn">{{ finding }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="ds-section">
+  <h2 class="ds-section__title">recent event verifications</h2>
+  {% if verifications %}
+  <div class="ds-table-wrap">
+    <table class="ds-table">
+      <thead>
+        <tr>
+          <th>when</th>
+          <th>transition</th>
+          <th>work item</th>
+          <th>actor</th>
+          <th>verified</th>
+          <th>principal</th>
+          <th>scheme</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in verifications %}
+        <tr>
+          <td class="mono tnum">{{ format_timestamp(v.timestamp) }}</td>
+          <td class="mono">{{ v.transition or '—' }}</td>
+          <td class="mono">{{ v.work_item_id[:8] }}…</td>
+          <td class="mono">{{ v.actor_id }}</td>
+          <td>
+            {% if v.verified %}
+            <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>verified</span>
+            {% else %}
+            <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>unverified</span>
+            {% endif %}
+          </td>
+          <td class="mono">{{ v.principal_id or '—' }}</td>
+          <td class="mono">{{ v.scheme or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="ds-empty">
+    <div class="ds-empty__title">no events to verify</div>
+    <div class="ds-empty__sub">recent events with verification status will appear here</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="ds-section">
+  <a href="/evidence/integrity" class="ds-btn ds-btn--ghost">full integrity report</a>
+  <a href="/evidence/events" class="ds-btn ds-btn--ghost">event verification list</a>
+</div>
+{% endblock %}

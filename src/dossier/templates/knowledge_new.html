@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}new note — knowledge — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">new note</h1>
+  </div>
+</div>
+
+<form method="post" action="/knowledge/create" class="ds-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="ds-field">
+    <label class="ds-label" for="f-title">title</label>
+    <input class="ds-input" type="text" id="f-title" name="title" required placeholder="note title">
+  </div>
+  <div class="ds-field">
+    <label class="ds-label" for="f-body">body</label>
+    <textarea class="ds-textarea" id="f-body" name="body" rows="10" placeholder="note content..."></textarea>
+  </div>
+  <button type="submit" class="ds-btn">create note</button>
+  <a href="/knowledge" class="ds-btn ds-btn--ghost">cancel</a>
+</form>
+{% endblock %}

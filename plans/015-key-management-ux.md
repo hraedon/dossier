@@ -1,6 +1,9 @@
 # Plan 015 — Key-management UX (the human face of per-actor signing)
 
-**Status:** In Progress 2026-07-09 — Phase 1 (WI-1.1 through WI-2.3) implemented with real regista principal ops; v1 test stubs replaced with `regista._custody.store_private_key` (Plan 029 backend-aware custody); private key never enters dossier's memory
+**Status:** In Progress — Phase 1 (WI-1.1 through WI-2.3) is a functional
+prototype over real regista principal ops; the 2026-07-12 amendment below adds
+the public custody, approval, effective-use, and Windows hardening required for
+the supported v1 path.
 **Author:** Claude (Fable 5), from the 2026-07-02 suite-gaps review
 **Strategic role:** Per-actor Ed25519 signing (regista Plan 026) makes every write
 cryptographically attributable — but keys are useless if a team can't *see and
@@ -42,6 +45,28 @@ where a face signs on the authenticated human's behalf; the UX surfaces
   break-glass is an elevated action behind the admin role, dual-controlled where
   Plan 026 requires it, and prominently recorded. The UX never lets a sensitive
   action happen quietly.
+
+## 2026-07-12 v1 hardening amendment
+
+The implemented Phase 1/2 routes are a functional prototype, not yet the
+supported full-v1 custody boundary. In particular, importing
+`regista._custody.store_private_key` inside the dossier process means generated
+private bytes exist in the web process address space even though dossier never
+receives or returns them as an application value. The stronger phrase “private
+key never enters dossier's memory” is therefore a target for the provider
+boundary below, not a current guarantee.
+
+Full v1 uses the public principal-lifecycle provider from regista Plan 031.
+Dossier owns authentication, authorization, preview, step-up, approval, and
+status. Regista owns lifecycle validation and signed events. A custody provider
+or signed Windows helper owns private-key generation and storage. The browser
+receives public metadata and receipts only.
+
+The current routes also fan enrollment/rotation/revocation across readable
+projects and may partially succeed. Full v1 replaces this implicit fan-out with
+an explicit operation listing every target project and a durable per-project
+result. “My signing identity” becomes a project-by-project matrix rather than
+stopping at the first active key.
 
 ---
 
@@ -121,3 +146,90 @@ where a face signs on the authenticated human's behalf; the UX surfaces
   makes per-actor signing usable by a non-cryptographer team and safe in a
   regulated setting. A test that fails if any key-management API can return private
   material is worth more here than almost anywhere.
+
+## Phase 3 — Supported public lifecycle provider
+
+### WI-3.1 — Replace private imports
+
+Consume only regista Plan 031's versioned public operations for describe,
+prepare, prove possession, commit, effective status, and reconcile. Remove
+dossier imports of `regista._custody`, `regista._provision`, and direct manifest
+mutation from production paths.
+
+**AC:** an architecture test fails on any dossier production import from a
+regista private module; provider contract fixtures cover every returned status
+and error.
+
+### WI-3.2 — Custody modes
+
+Support three explicit modes:
+
+- remote organizational custody (AKV/HSM or a narrow signing service);
+- Windows local custody through Agent Suite Setup, generating in the target
+  user's DPAPI context and returning public key + proof of possession;
+- file custody for development/recovery, marked non-team and unsupported for the
+  normal workplace profile.
+
+The UI explains who can sign, where the key is usable, and what happens if the
+host/backend is unavailable. It never claims non-repudiation against a
+compromised signing service unless the custody authorization actually provides
+that property.
+
+### WI-3.3 — Project-scoped operation and reconciliation
+
+Enrollment, rotation, and revocation show an exact target-project set. The
+operation record holds a per-project state (`pending`, `prepared`, `committed`,
+`effective`, `failed`, `repair required`) and supports idempotent retry.
+
+**AC:** inject failure after one project commits; dossier shows the partial state,
+does not summarize success, and safely converges on retry without issuing an
+extra active key.
+
+## Phase 4 — Workplace identity and protected approval
+
+### WI-4.1 — Entra-bound human enrollment
+
+Human enrollment selects a validated Entra identity and binds the immutable
+`tid`/`oid`-derived principal identifier. Names and email addresses are display
+only. Manual free-form IDs remain available only for explicitly typed agent or
+service identities and require a reason.
+
+### WI-4.2 — Step-up and immutable action digest
+
+Enrollment outside policy, rotation, revocation, custody changes, and
+break-glass bind approval to an exact digest containing actor, subject,
+projects, key/custody metadata, reason, expiry, and policy version. Protected
+operations require recent Plan 020 step-up.
+
+### WI-4.3 — Genuine dual control
+
+Replace the break-glass confirmer text field with a pending approval. A second
+administrator signs in separately, performs step-up, reviews the frozen action,
+and approves its digest. The initiator cannot approve, change, or execute it
+after approval without invalidating that approval.
+
+**AC:** typing another admin ID, replaying an approval, changing scope after
+approval, using the same Entra identity in two sessions, and approving after
+expiry all fail.
+
+## Phase 5 — Effective-use and offboarding closure
+
+### WI-5.1 — Prove effective signing
+
+Registration is not “done” until the intended dossier or Windows harness client
+proves it can sign a challenge with the new key and regista verifies possession.
+Rotation retains old verification material and reports unreconciled clients.
+
+### WI-5.2 — Composed offboarding
+
+Revocation coordinates future signing denial with dossier sessions/access,
+delegations, ACB capability grants, agent-wake routes, and harness overlays while
+preserving historical verification. Each component returns an independent
+receipt; partial offboarding is a visible repair state.
+
+### WI-5.3 — Qualification
+
+Qualify self-enrollment, sponsored enrollment, rotation, revocation, key loss,
+backend outage, partial project failure, concurrent requests, disabled Entra
+user, Windows DPAPI locality, AKV permission denial, break-glass, historical
+verification, and support-bundle/page-source secret scans.

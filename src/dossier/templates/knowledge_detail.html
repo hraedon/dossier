@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}{{ note.title }} — knowledge — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">{{ note.title }}</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ note.actor_id }}</span>
+      <span class="ds-pill {{ 'ds-pill--ok' if note.state == 'active' else 'ds-pill--muted' }}"><span class="ds-pill__dot"></span>{{ note.state }}</span>
+      {% if verification.verified %}
+      <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>verified</span>
+      {% else %}
+      <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>unverified</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="ds-pagehead__actions">
+    <a href="/knowledge" class="ds-btn ds-btn--ghost">back to knowledge</a>
+  </div>
+</div>
+
+{% if verification.findings %}
+<div class="ds-callout ds-callout--warn">
+  <strong>verification findings:</strong>
+  <ul>
+    {% for finding in verification.findings %}
+    <li>{{ finding }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<div class="ds-card">
+  <div class="ds-card__body">
+    <pre class="ds-note-body">{{ note.body }}</pre>
+  </div>
+</div>
+
+<h2>event history</h2>
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>transition</th>
+        <th>actor</th>
+        <th>timestamp</th>
+        <th>verified</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for ev in note.events %}
+      <tr>
+        <td class="mono">{{ ev.transition or '—' }}</td>
+        <td class="mono">{{ actor_display(ev) }}</td>
+        <td class="mono tnum">{{ format_timestamp(ev.timestamp) }}</td>
+        <td>
+          {% if ev.transition == 'created' and verification.verified %}
+          <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>verified</span>
+          {% elif ev.transition == 'created' and not verification.verified %}
+          <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>unverified</span>
+          {% else %}
+          <span class="ds-pill ds-pill--muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="ds-card ds-card--meta">
+  <dl class="ds-dl">
+    <dt>note id</dt>
+    <dd class="mono">{{ note.note_id }}</dd>
+    <dt>created</dt>
+    <dd class="mono">{{ format_timestamp(note.created_at) }}</dd>
+    <dt>updated</dt>
+    <dd class="mono">{{ format_timestamp(note.updated_at) }}</dd>
+    {% if verification.principal_id %}
+    <dt>signer</dt>
+    <dd class="mono">{{ verification.principal_id }}</dd>
+    {% endif %}
+    {% if verification.fingerprint %}
+    <dt>fingerprint</dt>
+    <dd class="mono">{{ verification.fingerprint }}</dd>
+    {% endif %}
+    {% if verification.scheme %}
+    <dt>scheme</dt>
+    <dd class="mono">{{ verification.scheme }}</dd>
+    {% endif %}
+    <dt>chain intact</dt>
+    <dd>{{ verification.chain_intact if verification.chain_intact is defined else 'unknown' }}</dd>
+  </dl>
+</div>
+{% endblock %}

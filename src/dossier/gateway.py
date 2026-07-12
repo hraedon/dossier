@@ -53,11 +53,10 @@ def _manifest_path_for(hmac_key_path: str) -> str | None:
     file, so writing one would create a bogus file named after the ref and
     leak the ``secret_ref``. Mirrors regista's ``_resolve_key_dir``.
     """
-    from regista._secrets import _detect_prefix
-
-    prefix, stripped = _detect_prefix(hmac_key_path)
-    if prefix == "file" and isinstance(stripped, str):
-        return stripped
+    if hmac_key_path.startswith("file:"):
+        return hmac_key_path[5:]
+    if ":" not in hmac_key_path:
+        return hmac_key_path
     return None
 
 
@@ -166,6 +165,28 @@ class RegistaGateway:
                 transition="comment",
                 payload={"body": body},
                 on_behalf_of=actor.on_behalf_of,
+            ),
+        )
+
+    def append_note_event(
+        self,
+        *,
+        actor: Actor,
+        entity_id: uuid.UUID,
+        transition: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Event:
+        return cast(
+            Event,
+            self._reg.append_event(
+                entity_id,
+                actor.actor_id,
+                actor_kind=actor.actor_kind,
+                actor_metadata=_metadata(actor),
+                transition=transition,
+                payload=payload,
+                on_behalf_of=actor.on_behalf_of,
+                entity_kind="note",
             ),
         )
 
@@ -353,37 +374,23 @@ class RegistaGateway:
                 logger.debug("read_principal_enrollment_events failed", exc_info=True)
         return []
 
-    def _custody_and_register(
+    def _generate_and_register(
         self,
         principal_id: str,
         *,
-        private_key_dir: str | None = None,
-        secret_backend: str | None = None,
         registered_by: str = "system",
         rotate: bool = False,
     ) -> dict[str, Any] | None:
-        """Generate a keypair via regista custody and register/rotate it.
+        """Generate a keypair and register/rotate it via the public API.
 
-        Uses ``regista._custody.store_private_key`` (Plan 029) to generate an
-        Ed25519 keypair and store the private key in the configured secret
-        backend. The private key **never** enters dossier's memory — it flows
-        from ``store_private_key`` directly to the secret backend. Only the
-        public key is returned (inside the ``CustodyResult``) and handed to
-        the principal-key registry.
-
-        After custody, the public key is registered (or rotated) in the
-        principal-key registry, and the key-set manifest is updated so regista
-        can resolve the secret for future signing.
+        Plan 015 WI-3.1: custody (private-key storage) is no longer handled
+        by dossier. The caller or a custody provider owns private-key
+        generation and storage. Dossier only generates the keypair for
+        test/dev paths and registers the public key.
         """
-        from regista._custody import store_private_key
-        from regista._provision import _update_key_file
+        from .keys import generate_ed25519_keypair
 
-        custody = store_private_key(
-            backend=secret_backend,
-            principal_id=principal_id,
-            project=self._project_name,
-            private_key_dir=private_key_dir,
-        )
+        _private_key, public_key = generate_ed25519_keypair()
 
         if self.has_principal_ops():
             if rotate:
@@ -391,7 +398,7 @@ class RegistaGateway:
                     dict[str, Any],
                     self._reg.principals.rotate(
                         principal_id,
-                        custody.public_key,
+                        public_key,
                         registered_by=registered_by,
                     ),
                 )
@@ -400,7 +407,7 @@ class RegistaGateway:
                     dict[str, Any],
                     self._reg.principals.register(
                         principal_id,
-                        custody.public_key,
+                        public_key,
                         registered_by=registered_by,
                     ),
                 )
@@ -408,8 +415,8 @@ class RegistaGateway:
             store = self._test_store()
             if store is None:
                 logger.warning(
-                    "custody_orphaned_secret",
-                    extra={"principal_id": principal_id, "backend": custody.backend},
+                    "register_no_store",
+                    extra={"principal_id": principal_id},
                 )
                 return None
             if rotate:
@@ -417,7 +424,7 @@ class RegistaGateway:
                     dict[str, Any],
                     store.rotate(
                         principal_id,
-                        custody.public_key,
+                        public_key,
                         registered_by=registered_by,
                     ),
                 )
@@ -426,21 +433,10 @@ class RegistaGateway:
                     dict[str, Any],
                     store.register(
                         principal_id,
-                        custody.public_key,
+                        public_key,
                         registered_by=registered_by,
                     ),
                 )
-
-        manifest_path = _manifest_path_for(getattr(self._reg, "_hmac_key_path", "") or "")
-        if manifest_path:
-            _update_key_file(
-                manifest_path,
-                principal_id,
-                entry["key_id"],
-                custody.public_key,
-                custody.secret_ref,
-                encoding=custody.encoding,
-            )
 
         return entry
 
@@ -456,13 +452,11 @@ class RegistaGateway:
 
         Real regista (Postgres): delegates to ``reg.enroll_principal`` which
         generates the Ed25519 keypair, stores the private key in the secret
-        backend (Plan 029 custody), registers the public key, and emits a
-        signed ``principal_enrolled`` event — all in one call.
+        backend, registers the public key, and emits a signed
+        ``principal_enrolled`` event — all in one call.
 
-        InMemoryRegista (tests): uses ``_custody_and_register`` which calls
-        ``regista._custody.store_private_key`` for real key generation +
-        backend-aware custody, then registers via the injected test-double
-        store. The private key never enters dossier's memory on either path.
+        InMemoryRegista (tests): generates a keypair locally and registers
+        via the injected test-double store.
 
         The returned dict contains only public metadata: ``key_id``,
         ``fingerprint``, ``scheme``. No private key material is ever returned.
@@ -495,10 +489,8 @@ class RegistaGateway:
 
         registered_by = actor.actor_id if actor else "system"
         try:
-            return self._custody_and_register(
+            return self._generate_and_register(
                 principal_id,
-                private_key_dir=private_key_dir,
-                secret_backend=secret_backend,
                 registered_by=registered_by,
                 rotate=False,
             )
@@ -532,21 +524,19 @@ class RegistaGateway:
         private_key_dir: str | None = None,
         secret_backend: str | None = None,
     ) -> dict[str, Any] | None:
-        """Register a new principal key with backend-aware custody (Plan 015).
+        """Register a new principal key (Plan 015 WI-2.3).
 
-        Generates an Ed25519 keypair via ``regista._custody.store_private_key``
-        (Plan 029), stores the private key in the secret backend, registers
-        the public key, and updates the key-set manifest. The private key
-        never enters dossier's memory.
+        Plan 015 WI-3.1: custody is no longer handled by dossier. The caller
+        or a custody provider owns private-key generation and storage.
+        Dossier generates a keypair for test/dev paths and registers the
+        public key via the public principal-key API.
 
         Used by break-glass (WI-2.3) to issue a new key after revoking the
         old one.
         """
         registered_by = actor.actor_id if actor else "system"
-        return self._custody_and_register(
+        return self._generate_and_register(
             principal_id,
-            private_key_dir=private_key_dir,
-            secret_backend=secret_backend,
             registered_by=registered_by,
             rotate=False,
         )
@@ -559,19 +549,16 @@ class RegistaGateway:
         private_key_dir: str | None = None,
         secret_backend: str | None = None,
     ) -> dict[str, Any] | None:
-        """Rotate a principal's key with backend-aware custody (Plan 015 WI-1.2).
+        """Rotate a principal's key (Plan 015 WI-1.2).
 
-        Generates a new Ed25519 keypair via ``regista._custody.store_private_key``
-        (Plan 029), stores the private key in the secret backend, rotates the
-        public key in the principal-key registry (superseding the old key),
-        and updates the key-set manifest. The private key never enters
-        dossier's memory.
+        Plan 015 WI-3.1: custody is no longer handled by dossier. The caller
+        or a custody provider owns private-key generation and storage.
+        Dossier generates a keypair for test/dev paths and rotates the
+        public key via the public principal-key API.
         """
         registered_by = actor.actor_id if actor else "system"
-        return self._custody_and_register(
+        return self._generate_and_register(
             principal_id,
-            private_key_dir=private_key_dir,
-            secret_backend=secret_backend,
             registered_by=registered_by,
             rotate=True,
         )

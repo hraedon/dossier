@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}integrity report — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">integrity report</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ reports | length }} projects</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Full replay results from regista's integrity check. The chain is intact
+    when replayed drift is zero.
+  </p>
+</div>
+
+{% if reports %}
+{% for report in reports %}
+<div class="ds-section">
+  <h2 class="ds-section__title">{{ report.project_slug }}</h2>
+  <div class="ds-card-row">
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">chain status</div>
+      <div class="ds-card__value">
+        {% if report.chain_intact %}
+        <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>intact</span>
+        {% else %}
+        <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>drift detected</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">replayed ok</div>
+      <div class="ds-card__value mono tnum">{{ report.replayed_ok }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">replayed drift</div>
+      <div class="ds-card__value mono tnum">
+        {% if report.replayed_drift > 0 %}
+        <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>{{ report.replayed_drift }}</span>
+        {% else %}
+        <span class="mono">0</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">halted</div>
+      <div class="ds-card__value mono tnum">{{ report.halted }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">warnings</div>
+      <div class="ds-card__value mono tnum">{{ report.warnings }}</div>
+    </div>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no integrity data</div>
+  <div class="ds-empty__sub">replay results from connected projects will appear here</div>
+</div>
+{% endif %}
+
+<div class="ds-section">
+  <a href="/evidence" class="ds-btn ds-btn--ghost">back to evidence</a>
+</div>
+{% endblock %}

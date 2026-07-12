@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}event verification — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <div>
+    <h1 class="ds-pagehead__title">event verification</h1>
+    <div class="ds-pagehead__meta">
+      <span class="ds-chip mono">{{ verifications | length }} events</span>
+    </div>
+  </div>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose" style="font-size: var(--fs-sm);">
+    Each event's signature is verified via regista's cryptographic verification.
+    Unverified events may indicate a missing or revoked signing key.
+  </p>
+</div>
+
+{% if verifications %}
+<div class="ds-table-wrap">
+  <table class="ds-table">
+    <thead>
+      <tr>
+        <th>when</th>
+        <th>transition</th>
+        <th>work item</th>
+        <th>actor</th>
+        <th>status</th>
+        <th>principal</th>
+        <th>fingerprint</th>
+        <th>scheme</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for v in verifications %}
+      <tr>
+        <td class="mono tnum">{{ format_timestamp(v.timestamp) }}</td>
+        <td class="mono">{{ v.transition or '—' }}</td>
+        <td class="mono">{{ v.work_item_id[:8] }}…</td>
+        <td class="mono">{{ v.actor_id }}</td>
+        <td>
+          {% if v.verified %}
+          <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>verified</span>
+          {% else %}
+          <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>unverified</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ v.principal_id or '—' }}</td>
+        <td class="mono">{{ v.fingerprint[:32] if v.fingerprint else '—' }}{% if v.fingerprint %}…{% endif %}</td>
+        <td class="mono">{{ v.scheme or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no events</div>
+  <div class="ds-empty__sub">recent events with verification status will appear here</div>
+</div>
+{% endif %}
+
+<div class="ds-section">
+  <a href="/evidence" class="ds-btn ds-btn--ghost">back to evidence</a>
+</div>
+{% endblock %}
