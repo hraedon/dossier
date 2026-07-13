@@ -10,10 +10,13 @@ The assurance level is a pure function of the signed event log — dossier
   verified, so it must not over-claim.
 - ``independently reviewed``: a cross-lineage adversarial review passed
   (reviewer lineage declared and different from the author's), but no
-  human has accepted it.
+  human has accepted it. Only ``adversarial_pass`` establishes cross-lineage
+  independence — ``accept`` is a final gate, not an adversarial review.
 - ``human-accepted``: a human has explicitly accepted the work (the
   ``accept`` transition by a ``human`` actor).
-- ``unreviewed``: no review verdict has been issued.
+- ``unreviewed``: no adversarial review has been issued. An agent ``accept``
+  without a prior ``adversarial_pass`` leaves the item unreviewed because
+  ``accept`` is a gate, not a review verdict.
 
 Under the strict deployment gate, a same-lineage-reviewed item that reached
 ``done`` must have done so via human accept — so it reads ``human-accepted``,
@@ -56,7 +59,7 @@ def compute_assurance_level(events: list[Event]) -> str:
 
         if event.transition == "accept" and actor_kind == "human":
             has_human_accept = True
-        elif event.transition in ("adversarial_pass", "accept"):
+        elif event.transition == "adversarial_pass":
             # Normalize to str for comparison — author lineages are stored
             # as str() above, so the reviewer side must match.
             reviewer_lineage_str = str(reviewer_lineage) if reviewer_lineage else None
@@ -64,8 +67,9 @@ def compute_assurance_level(events: list[Event]) -> str:
                 has_cross_lineage_review = True
             else:
                 has_same_lineage_review = True
-        # reject / request_changes are review verdicts but not positive
-        # reviews — they don't contribute to the assurance level.
+        # accept (by agent), reject, and request_changes are review-related
+        # transitions but not adversarial reviews — they don't contribute
+        # to the lineage-based assurance level. Only adversarial_pass does.
 
     if has_human_accept:
         return "human-accepted"

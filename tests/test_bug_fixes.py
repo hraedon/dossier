@@ -240,9 +240,10 @@ def test_assurance_request_changes_does_not_set_review_flags():
     assert level == "unreviewed"
 
 
-def test_assurance_agent_accept_cross_lineage_is_independently_reviewed():
-    """An agent 'accept' with a cross-lineage lineage sets cross-lineage
-    review. This is existing behavior (accept is in the elif branch)."""
+def test_assurance_agent_accept_alone_is_unreviewed():
+    """An agent 'accept' without a prior adversarial_pass does not establish
+    a review — 'accept' is a final gate, not an adversarial review. The item
+    should be 'unreviewed' (no adversarial review was performed)."""
     events = [
         _make_event(
             transition="created",
@@ -257,7 +258,7 @@ def test_assurance_agent_accept_cross_lineage_is_independently_reviewed():
         ),
     ]
     level = compute_assurance_level(events)
-    assert level == "independently-reviewed"
+    assert level == "unreviewed"
 
 
 def test_assurance_model_lineage_type_coercion():
