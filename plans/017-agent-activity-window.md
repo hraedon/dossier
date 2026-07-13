@@ -1,6 +1,6 @@
 # Plan 017 — The agent-activity window: provenance in the human face
 
-**Status:** Proposed 2026-07-07.
+**Status:** Implemented — Phase 1 (session list/detail + tool-call trail) landed.
 **Author:** Claude (Fable 5), from the 2026-07-07 suite v2 gaps review
 **Strategic role:** The suite's value proposition is "a human can see and verify
 what the agents did." Today dossier renders work items, transitions, and

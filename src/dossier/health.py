@@ -60,7 +60,7 @@ def build_health(
         checks.append({
             "name": "regista",
             "status": "fail",
-            "detail": str(exc)[:200],
+            "detail": f"unreachable ({type(exc).__name__})",
         })
 
     if settings.session_secret and len(settings.session_secret) >= 32:

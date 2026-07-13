@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
 from typing import Any, cast
 
@@ -73,18 +74,20 @@ class RegistaGateway:
     (WI-006). The prefix is the project name uppercased and sanitized to
     ``[A-Z0-9_]`` (e.g. ``dossier`` → ``DOSSIER``, ``agent-notes`` →
     ``AGENT_NOTES``).
-    The sequence number is derived from a paginated count of existing work items
-    (a read) — dossier owns no counter table. The minted key is stored as a
-    ``display_key`` custom field in the regista create event, so the write goes
-    through regista, not a side-channel. Two concurrent creates could mint the
-    same number; this is acceptable for MVP (single-user, low concurrency) and
-    documented here. A regista-side sequence or advisory lock would close the
-    race for production.
+    The sequence number is derived from the maximum existing sequence among
+    all work items' ``display_key`` custom fields (a read) — dossier owns no
+    counter table. The minted key is stored as a ``display_key`` custom field
+    in the regista create event, so the write goes through regista, not a
+    side-channel. A process-level ``threading.Lock`` serializes the
+    mint-then-create operation so two concurrent creates in the same process
+    cannot produce the same key (WI-011). Multi-process deployments still
+    require a regista-side sequence or advisory lock for full correctness.
     """
 
     def __init__(self, regista: Regista, project_name: str = "dossier") -> None:
         self._reg = regista
         self._project_name = project_name
+        self._mint_lock = threading.Lock()
 
     def register_workflow(self, yaml_text: str | None = None) -> None:
         self._reg.register_workflow(yaml_text or packaged_workflow_yaml())
@@ -112,7 +115,19 @@ class RegistaGateway:
         """
         cf = dict(custom_fields) if custom_fields else {}
         if "display_key" not in cf:
-            cf["display_key"] = self._mint_display_key()
+            with self._mint_lock:
+                cf["display_key"] = self._mint_display_key()
+                return cast(
+                    tuple[WorkItem, Event],
+                    self._reg.create_work_item(
+                        workflow_name=WORKFLOW_NAME,
+                        work_item_type=work_item_type,
+                        actor_id=actor.actor_id,
+                        actor_kind=actor.actor_kind,
+                        actor_metadata=_metadata(actor),
+                        custom_fields=cf,
+                    ),
+                )
         return cast(
             tuple[WorkItem, Event],
             self._reg.create_work_item(
@@ -586,13 +601,13 @@ class RegistaGateway:
         wf = self._reg.get_workflow(WORKFLOW_NAME, workflow_version)
         return [t for t in wf.transitions if t.from_state == state]
 
-    def _count_work_items(self) -> int:
-        """Count all work items in this project via paginated reads.
+    def _existing_display_keys(self) -> list[str]:
+        """Collect all existing display_key custom fields via paginated reads.
 
         Used to derive the next display-key sequence number. This is a read —
         dossier owns no counter table (WI-006 sequence-ownership decision).
         """
-        count = 0
+        keys: list[str] = []
         cursor: uuid.UUID | None = None
         while True:
             page: QueryPage[WorkItem] = self._reg.query_work_items(
@@ -600,21 +615,46 @@ class RegistaGateway:
                 cursor=cursor,
                 page_size=1000,
             )
-            count += len(page.items)
+            for wi in page.items:
+                cf = getattr(wi, "custom_fields", None)
+                if isinstance(cf, dict):
+                    dk = cf.get("display_key")
+                    if isinstance(dk, str) and dk:
+                        keys.append(dk)
             if not page.has_more:
                 break
             cursor = page.cursor
-        return count
+        return keys
 
     def _mint_display_key(self) -> str:
         """Mint a ``<PREFIX>-<N>`` display key for a new work item.
 
-        ``N`` is ``count + 1``. The prefix is the project name uppercased and
-        sanitized to ``[A-Z0-9_]`` (spaces and hyphens become underscores;
-        other characters are stripped). See :class:`RegistaGateway` docstring
-        for the race-condition caveat.
+        ``N`` is ``max(existing sequences) + 1``, where existing sequences are
+        parsed from all work items' ``display_key`` custom fields that share
+        this project's prefix. Using max (not count) ensures deleted items
+        don't cause sequence reuse. The prefix is the project name uppercased
+        and sanitized to ``[A-Z0-9_]`` (spaces and hyphens become underscores;
+        other characters are stripped).
+
+        Must be called under ``self._mint_lock`` to prevent a TOCTOU race
+        between the scan and the create.
         """
-        n = self._count_work_items() + 1
+        prefix = self._display_prefix()
+        existing = self._existing_display_keys()
+        max_n = 0
+        pfx = f"{prefix}-"
+        for key in existing:
+            if key.startswith(pfx):
+                suffix = key[len(pfx):]
+                try:
+                    n = int(suffix)
+                    if n > max_n:
+                        max_n = n
+                except ValueError:
+                    pass
+        return f"{prefix}-{max_n + 1}"
+
+    def _display_prefix(self) -> str:
+        """Return the sanitized uppercase prefix for display keys."""
         raw = self._project_name.upper().replace("-", "_").replace(" ", "_")
-        prefix = re.sub(r"[^A-Z0-9_]", "", raw) or "PROJECT"
-        return f"{prefix}-{n}"
+        return re.sub(r"[^A-Z0-9_]", "", raw) or "PROJECT"

@@ -4,9 +4,13 @@ The assurance level is a pure function of the signed event log — dossier
 *surfaces* it, it does not recompute it. The levels are:
 
 - ``self-reviewed``: the review verdict shares a model lineage with the
-  author's events, and no human has accepted it.
-- ``independently reviewed``: a cross-lineage adversarial review passed,
-  but no human has accepted it.
+  author's events, and no human has accepted it. When the reviewer's
+  lineage is undeclared (no ``model_lineage`` in ``actor_metadata``), the
+  verdict is treated as same-lineage (fail-safe) — independence cannot be
+  verified, so it must not over-claim.
+- ``independently reviewed``: a cross-lineage adversarial review passed
+  (reviewer lineage declared and different from the author's), but no
+  human has accepted it.
 - ``human-accepted``: a human has explicitly accepted the work (the
   ``accept`` transition by a ``human`` actor).
 - ``unreviewed``: no review verdict has been issued.
@@ -53,10 +57,15 @@ def compute_assurance_level(events: list[Event]) -> str:
         if event.transition == "accept" and actor_kind == "human":
             has_human_accept = True
         elif event.transition in ("adversarial_pass", "accept"):
-            if reviewer_lineage and reviewer_lineage in author_lineages:
-                has_same_lineage_review = True
-            else:
+            # Normalize to str for comparison — author lineages are stored
+            # as str() above, so the reviewer side must match.
+            reviewer_lineage_str = str(reviewer_lineage) if reviewer_lineage else None
+            if reviewer_lineage_str and reviewer_lineage_str not in author_lineages:
                 has_cross_lineage_review = True
+            else:
+                has_same_lineage_review = True
+        # reject / request_changes are review verdicts but not positive
+        # reviews — they don't contribute to the assurance level.
 
     if has_human_accept:
         return "human-accepted"
