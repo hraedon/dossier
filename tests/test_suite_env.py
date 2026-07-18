@@ -81,7 +81,7 @@ def test_strip_value_quoted_then_inline_comment():
 
 # ── _inject_env_file tests ──────────────────────────────────────────────────
 
-def test_inject_env_file_basic(tmp_path):
+def test_inject_env_file_basic(clean_env, tmp_path):
     f = tmp_path / "suite.env"
     f.write_text('REGISTA_DSN=postgresql://localhost/db\nKEY_PATH="/tmp/key.json"\n')
     _inject_env_file(str(f))
