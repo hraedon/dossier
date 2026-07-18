@@ -88,12 +88,16 @@ keep their `DOSSIER_*` names.
 
 | Variable | Purpose |
 |---|---|
+| `DOSSIER_ENV` | `dev` (default) or `prod` — promotes safe defaults and escalates doctor posture gaps (Plan 015 WI-1.1) |
+| `DOSSIER_ALLOWED_HOSTS` | comma-separated allowed Host headers; wires `TrustedHostMiddleware` when set |
 | `REGISTA_DSN` | Postgres DSN (canonical; alias `DOSSIER_DATABASE_URL`) |
 | `REGISTA_KEY_PATH` | HMAC keyset path (canonical; alias `DOSSIER_HMAC_KEY_PATH`) |
 | `DOSSIER_PROJECT` / `DOSSIER_PROJECTS` | regista project(s) to front |
 | `DOSSIER_SESSION_SECRET` | signed-cookie secret (>= 32 bytes; never committed) |
 | `DOSSIER_SECURE_COOKIES` | `true` for TLS deploys, `false` for dev |
 | `DOSSIER_AUTH_BACKEND` | `local` (JSON users) or `ldap` (the workplace directory) |
+| `DOSSIER_PROJECT_ACCESS_MODE` | `open` (dev default), `audit`, or `enforce` (prod default when ACL set) |
+| `DOSSIER_PROJECT_ACL_PATH` | project ACL JSON (required for `audit`/`enforce`) |
 | `DOSSIER_TLS_CERT_PATH` | TLS cert path — set both to serve HTTPS, unset for HTTP |
 | `DOSSIER_TLS_KEY_PATH` | TLS key path — set both to serve HTTPS, unset for HTTP |
 | `DOSSIER_LDAP_SERVER` | comma-separated `ldaps://` URLs (multi-DC failover) |
@@ -132,6 +136,34 @@ file missing). The `suite_env` check reports which config file is active. The
 `auth_backend` check reports LDAP config completeness (the live bind is
 operator-gated and not exercised by a health probe). An unreachable regista or
 LDAP is a named `fail`, never a 500.
+
+## Production posture (`DOSSIER_ENV=prod`, Plan 015 WI-1.1)
+
+The dev defaults (the historical behavior) are deliberately permissive so a
+fresh checkout runs without ceremony: `require_ssl=false`,
+`project_access_mode=open`, no TLS, no host allowlist. **Set
+`DOSSIER_ENV=prod` for every team deploy** to promote the safe defaults:
+
+- `require_ssl` defaults to `true` (the operator may still override via
+  `DOSSIER_REQUIRE_SSL`).
+- `project_access_mode` defaults to `enforce` when `DOSSIER_PROJECT_ACL_PATH`
+  is set — pair `DOSSIER_ENV=prod` with an ACL so cross-project disclosure is
+  default-deny. When no ACL is set in prod, the mode falls back to `open` so
+  the doctor can **report** the posture gap as a `fail` rather than crash
+  `load_settings`; an explicit `DOSSIER_PROJECT_ACCESS_MODE=enforce` without
+  an ACL is still a hard `RuntimeError` (you cannot enforce without a policy).
+- The doctor escalates posture gaps from `warn` to `fail` in prod: open
+  access, missing TLS, missing/short session secret, missing `users_path` for
+  the local backend. In dev these remain `warn`/informational.
+
+`DOSSIER_ALLOWED_HOSTS` wires Starlette's `TrustedHostMiddleware` (only when
+set, so dev is unaffected). In prod, pin it to the host(s) the team reaches
+dossier through; the doctor warns when prod lacks it. dossier is expected
+behind a TLS-terminating proxy in prod — the app does not silently redirect
+to HTTPS (that would break health probes), but the TLS seam must be evident.
+
+`dev` (the default) preserves every historical default for backwards
+compatibility — the promotion is opt-in via `DOSSIER_ENV=prod`.
 
 ## Operator-gated validation (not delivered here)
 

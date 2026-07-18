@@ -187,6 +187,11 @@ class Settings:
     notification_identity: str = ""
     project_access_mode: Literal["open", "audit", "enforce"] = "open"
     project_acl_path: str = ""
+    # Deployment posture (Plan 015 WI-1.1). ``dev`` preserves the historical
+    # defaults (backwards compat); ``prod`` promotes safe defaults and the
+    # doctor escalates posture gaps from ``warn`` to ``fail``.
+    env_mode: Literal["dev", "prod"] = "dev"
+    allowed_hosts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -257,16 +262,38 @@ def _require(name: str, value: str) -> str:
 
 
 def load_settings(strict: bool = True) -> Settings:
+    # Deployment posture (Plan 015 WI-1.1). ``dev`` (default) preserves the
+    # historical defaults for backwards compat; ``prod`` promotes safe
+    # defaults: require_ssl on, project_access_mode enforce. The doctor
+    # escalates posture gaps from warn to fail in prod (see health.py).
+    env_mode = os.environ.get("DOSSIER_ENV", "dev")
+    if env_mode not in ("dev", "prod"):
+        raise ValueError(
+            f"DOSSIER_ENV must be 'dev' or 'prod', got {env_mode!r}"
+        )
+
     database_url = _resolve_env("REGISTA_DSN", "DOSSIER_DATABASE_URL")
     project = os.environ.get("DOSSIER_PROJECT", "dossier")
     hmac_key_path = _resolve_env("REGISTA_KEY_PATH", "DOSSIER_HMAC_KEY_PATH")
     session_secret = os.environ.get("DOSSIER_SESSION_SECRET", "")
     session_max_age_raw = os.environ.get("DOSSIER_SESSION_MAX_AGE_SECONDS", "43200")
     secure_cookies_raw = os.environ.get("DOSSIER_SECURE_COOKIES", "true")
-    require_ssl_raw = os.environ.get("DOSSIER_REQUIRE_SSL", "false")
-    project_access_mode_raw = os.environ.get(
-        "DOSSIER_PROJECT_ACCESS_MODE", "open"
-    )
+    # In prod, require_ssl defaults on (the operator may still override).
+    require_ssl_default = "true" if env_mode == "prod" else "false"
+    require_ssl_raw = os.environ.get("DOSSIER_REQUIRE_SSL", require_ssl_default)
+    # In prod, project_access_mode defaults to enforce — but only if an ACL
+    # path is configured. enforce requires an ACL; defaulting to enforce
+    # without one would crash load_settings (and the doctor with it), defeating
+    # honest-health reporting. When no ACL is set in prod, fall back to open
+    # so the doctor can report ``project_access_mode=open`` as a fail posture
+    # gap. An explicit DOSSIER_PROJECT_ACCESS_MODE always wins.
+    project_acl_path = os.environ.get("DOSSIER_PROJECT_ACL_PATH", "")
+    if "DOSSIER_PROJECT_ACCESS_MODE" in os.environ:
+        project_access_mode_raw = os.environ["DOSSIER_PROJECT_ACCESS_MODE"]
+    elif env_mode == "prod" and project_acl_path:
+        project_access_mode_raw = "enforce"
+    else:
+        project_access_mode_raw = "open"
     users_path = os.environ.get("DOSSIER_USERS_PATH", "")
     auth_backend = os.environ.get("DOSSIER_AUTH_BACKEND", "local")
     if auth_backend not in ("local", "ldap"):
@@ -319,12 +346,18 @@ def load_settings(strict: bool = True) -> Settings:
     from .authz import parse_access_mode
 
     project_access_mode = parse_access_mode(project_access_mode_raw)
-    project_acl_path = os.environ.get("DOSSIER_PROJECT_ACL_PATH", "")
     if project_access_mode != "open" and not project_acl_path:
         raise RuntimeError(
             "DOSSIER_PROJECT_ACL_PATH is required when project access mode "
             f"is {project_access_mode}"
         )
+
+    # TrustedHostMiddleware (Plan 015 WI-1.1) — only wired when set, so dev
+    # (unset) keeps the current behavior. Comma-separated hostnames.
+    raw_allowed_hosts = os.environ.get("DOSSIER_ALLOWED_HOSTS", "")
+    allowed_hosts = tuple(
+        h.strip() for h in raw_allowed_hosts.split(",") if h.strip()
+    )
 
     return Settings(
         database_url=database_url,
@@ -350,6 +383,8 @@ def load_settings(strict: bool = True) -> Settings:
         ),
         project_access_mode=project_access_mode,
         project_acl_path=project_acl_path,
+        env_mode=cast(Literal["dev", "prod"], env_mode),
+        allowed_hosts=allowed_hosts,
     )
 
 

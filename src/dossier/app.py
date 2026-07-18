@@ -271,6 +271,16 @@ def create_app(
 
     app.add_middleware(session_middleware(settings))  # type: ignore[arg-type]
 
+    # TrustedHostMiddleware (Plan 015 WI-1.1) — only wired when
+    # DOSSIER_ALLOWED_HOSTS is set, so dev (unset) keeps the current behavior.
+    # In prod the operator should set it; the doctor warns when prod lacks it.
+    if settings.allowed_hosts:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+        app.add_middleware(
+            TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts)
+        )
+
     @app.exception_handler(LoginRequired)
     async def _login_required_handler(request: Request, exc: LoginRequired) -> RedirectResponse:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
