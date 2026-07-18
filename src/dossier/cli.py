@@ -7,8 +7,34 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, assert_never
 
+import structlog
+
 from . import __version__
 from .keys import generate_keyset
+
+
+class _StderrLoggerFactory:
+    """Route structlog output to stderr (Plan 004 WI-1.4).
+
+    regista is imported as a library by ``multi.py``; its module-level
+    ``log = structlog.get_logger()`` resolves to a stdout ``PrintLogger`` when
+    ``structlog.configure()`` has never been called. regista's own CLI redirects
+    via ``_cli._configure_structlog_stderr`` but only when its CLI runs — not
+    when imported as a library. Without this call, regista's structlog lines
+    (``keys.loaded``, ``regista.connected``, ...) contaminate
+    ``dossier doctor --json`` stdout and break the suite umbrella's
+    ``json.loads(stdout)`` parser (agent-suite ``doctor.py``).
+    """
+
+    def __call__(self, *args: object) -> structlog.PrintLogger:
+        return structlog.PrintLogger(file=sys.stderr)
+
+
+def _configure_structlog_stderr() -> None:
+    structlog.configure(
+        wrapper_class=structlog.make_filtering_bound_logger(20),
+        logger_factory=_StderrLoggerFactory(),
+    )
 
 
 def _cmd_keys_generate(args: argparse.Namespace) -> int:
@@ -264,6 +290,9 @@ def main(argv: list[str] | None = None) -> int:
     from .config import load_suite_env
 
     load_suite_env()
+    # Route regista's structlog output to stderr before any subcommand runs,
+    # so ``doctor --json`` stdout stays a clean JSON blob (Plan 004 WI-1.4).
+    _configure_structlog_stderr()
 
     args = sys.argv[1:] if argv is None else argv
     if args and args[0] in {"-V", "--version", "version"}:

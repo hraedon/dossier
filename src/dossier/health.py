@@ -36,6 +36,11 @@ def build_health(
     """
     checks: list[dict[str, Any]] = []
 
+    # In prod, posture gaps that are merely ``warn`` in dev escalate to
+    # ``fail`` (Plan 015 WI-1.1) — a production deploy must not silently run
+    # open-access, without TLS, or without a session secret.
+    prod = settings.env_mode == "prod"
+
     regista_reachable = False
     chain_ok: bool | None = None
 
@@ -88,11 +93,12 @@ def build_health(
     elif settings.auth_backend == "ldap":
         checks.append(_ldap_config_check())
 
-    checks.extend(_tls_checks())
+    checks.extend(_tls_checks(prod=prod))
     checks.append(_suite_env_check())
     checks.extend(_secrets_backend_checks(settings))
     checks.append(_notification_sink_check(settings))
-    checks.append(_project_access_check(settings))
+    checks.append(_project_access_check(settings, prod=prod))
+    checks.append(_allowed_hosts_check(settings, prod=prod))
 
     has_fail = any(c["status"] == "fail" for c in checks)
     has_warn = any(c["status"] == "warn" for c in checks)
@@ -118,14 +124,17 @@ def has_failures(health: dict[str, Any]) -> bool:
     return any(c["status"] == "fail" for c in health.get("checks", []))
 
 
-def _tls_checks() -> list[dict[str, Any]]:
+def _tls_checks(*, prod: bool = False) -> list[dict[str, Any]]:
     """Report TLS termination config status (Plan 014 WI-1.5).
 
     ``warn`` when TLS is not configured (plain HTTP — acceptable for dev,
     a posture flag for production). ``ok`` when both the cert and key paths
     resolve to readable files. ``fail`` when TLS is configured but a path is
     missing or unreadable — a half-configured TLS deploy must not silently
-    fall back to plaintext.
+    fall back to plaintext. In ``prod`` (Plan 015 WI-1.1), a missing TLS
+    config escalates from ``warn`` to ``fail``: production must terminate TLS
+    (the operator may put dossier behind a TLS-terminating proxy, but the
+    ``DOSSIER_TLS_*`` seam or the proxy must be evident).
     """
     from .config import load_tls_config
 
@@ -133,7 +142,7 @@ def _tls_checks() -> list[dict[str, Any]]:
     if tls is None:
         return [{
             "name": "tls",
-            "status": "warn",
+            "status": "fail" if prod else "warn",
             "detail": "not configured (plain HTTP — dev only)",
         }]
     problems: list[str] = []
@@ -292,12 +301,21 @@ def _notification_sink_check(settings: Settings) -> dict[str, Any]:
     return posture
 
 
-def _project_access_check(settings: Settings) -> dict[str, Any]:
-    """Report the effective cross-project disclosure posture."""
+def _project_access_check(
+    settings: Settings, *, prod: bool = False
+) -> dict[str, Any]:
+    """Report the effective cross-project disclosure posture.
+
+    In ``prod`` (Plan 015 WI-1.1), ``open`` escalates from ``warn`` to
+    ``fail``: a production deploy must not let every authenticated principal
+    read every project. The operator opts into prod posture via
+    ``DOSSIER_ENV=prod`` and should pair it with
+    ``DOSSIER_PROJECT_ACCESS_MODE=enforce`` + an ACL.
+    """
     if settings.project_access_mode == "open":
         return {
             "name": "project_access",
-            "status": "warn",
+            "status": "fail" if prod else "warn",
             "detail": "open: every authenticated principal can read every project",
         }
 
@@ -324,4 +342,36 @@ def _project_access_check(settings: Settings) -> dict[str, Any]:
         "name": "project_access",
         "status": "ok",
         "detail": "enforce: default-deny ACL loaded",
+    }
+
+
+def _allowed_hosts_check(
+    settings: Settings, *, prod: bool = False
+) -> dict[str, Any]:
+    """Report the TrustedHostMiddleware posture (Plan 015 WI-1.1).
+
+    ``ok`` when ``DOSSIER_ALLOWED_HOSTS`` is set (the middleware is wired).
+    ``skip`` in dev when unset (no middleware — current behavior). ``warn`` in
+    prod when unset: production should pin the allowed Host header set so a
+    host-header-injection cannot bypass same-origin assumptions. This is a
+    ``warn`` (not ``fail``) because dossier is expected behind a
+    TLS-terminating proxy that can also enforce the host allowlist — the gap
+    is a posture flag, not a hard block.
+    """
+    if settings.allowed_hosts:
+        return {
+            "name": "allowed_hosts",
+            "status": "ok",
+            "detail": f"trusted-host allowlist: {', '.join(settings.allowed_hosts)}",
+        }
+    if prod:
+        return {
+            "name": "allowed_hosts",
+            "status": "warn",
+            "detail": "DOSSIER_ALLOWED_HOSTS unset in prod; pin the host allowlist",
+        }
+    return {
+        "name": "allowed_hosts",
+        "status": "skip",
+        "detail": "not configured (dev — no TrustedHostMiddleware)",
     }
