@@ -26,10 +26,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # regista is a public sibling repo, not on PyPI — install from git.
-          # Pinned to a SHA (Plan 013 WI-2.1); update SUITE.lock when bumping.
-          REGISTA_REF=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')
-          pip install "regista @ git+https://github.com/hraedon/regista.git@${REGISTA_REF}"
+          # regista-hraedon is published on PyPI (renamed distribution; the
+          # import name is still `regista`). Pinned to 0.5.1; SUITE.lock still
+          # records the source SHA for revision-drift detection. The docker
+          # build-arg REGISTA_REF below is used only by the image build job.
+          pip install "regista-hraedon==0.5.1"
           pip install -e ".[dev]"
 
       - name: Lint
@@ -125,12 +126,14 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install regista (pinned to SUITE.lock)
+      - name: Install regista
         shell: bash
         run: |
           python -m pip install --upgrade pip
-          REGISTA_REF=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')
-          pip install "regista @ git+https://github.com/hraedon/regista.git@${REGISTA_REF}"
+          # regista-hraedon is published on PyPI (renamed distribution; the
+          # import name is still `regista`). Pinned to 0.5.1; SUITE.lock
+          # continues to pin the source SHA for revision-drift detection.
+          pip install "regista-hraedon==0.5.1"
 
       - name: Install dependencies
         run: pip install -e ".[dev]"
