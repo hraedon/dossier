@@ -312,6 +312,49 @@ def test_prod_ok_when_all_posture_satisfied(tmp_path, monkeypatch, empty_registr
     assert health["ok"] is True
 
 
+# ── health: env_mode check (H1) ───────────────────────────────────────────
+
+
+def test_env_mode_check_warns_when_unset(tmp_path, monkeypatch, empty_registry):
+    """When DOSSIER_ENV is unset (default 'dev'), the env_mode check warns
+    so the suite umbrella surfaces the dev-defaults footgun — the gap is a
+    named state, not silence."""
+    monkeypatch.delenv("DOSSIER_ENV", raising=False)
+    monkeypatch.delenv("DOSSIER_REQUIRE_SSL", raising=False)
+    monkeypatch.delenv("DOSSIER_PROJECT_ACCESS_MODE", raising=False)
+    monkeypatch.delenv("DOSSIER_PROJECT_ACL_PATH", raising=False)
+    monkeypatch.delenv("DOSSIER_ALLOWED_HOSTS", raising=False)
+    settings = load_settings(strict=False)
+    assert settings.env_mode == "dev"
+    health = build_health(settings, empty_registry)
+    check = next(c for c in health["checks"] if c["name"] == "env_mode")
+    assert check["status"] == "warn"
+    assert "DOSSIER_ENV" in check["detail"]
+    # The check is informational (warn, not fail) — only fail checks flip
+    # ``ok``, so env_mode alone cannot make the suite umbrella report
+    # suite_ok=false.
+    assert check["status"] != "fail"
+
+
+def test_env_mode_check_warns_in_dev(tmp_path, empty_registry):
+    """An explicit DOSSIER_ENV=dev still warns — the operator opted into dev
+    and the suite umbrella should surface that fact."""
+    settings = _settings(tmp_path, env_mode="dev")
+    health = build_health(settings, empty_registry)
+    check = next(c for c in health["checks"] if c["name"] == "env_mode")
+    assert check["status"] == "warn"
+    assert "dev" in check["detail"]
+
+
+def test_env_mode_check_ok_in_prod(tmp_path, empty_registry):
+    """DOSSIER_ENV=prod reports ok — production posture enforced."""
+    settings = _settings(tmp_path, env_mode="prod")
+    health = build_health(settings, empty_registry)
+    check = next(c for c in health["checks"] if c["name"] == "env_mode")
+    assert check["status"] == "ok"
+    assert "prod" in check["detail"]
+
+
 # ── TrustedHostMiddleware wiring ───────────────────────────────────────────
 
 

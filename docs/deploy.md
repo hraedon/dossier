@@ -145,7 +145,12 @@ fresh checkout runs without ceremony: `require_ssl=false`,
 `DOSSIER_ENV=prod` for every team deploy** to promote the safe defaults:
 
 - `require_ssl` defaults to `true` (the operator may still override via
-  `DOSSIER_REQUIRE_SSL`).
+  `DOSSIER_REQUIRE_SSL`). Note: `require_ssl` governs the **Postgres
+  connection's** SSL requirement (passed to `regista.Regista(require_ssl=...)`),
+  not the HTTP listener's TLS. An operator behind a TLS-terminating proxy with
+  a local plaintext database connection should set `DOSSIER_REQUIRE_SSL=false`.
+  The HTTP listener's TLS is controlled independently by
+  `DOSSIER_TLS_CERT_PATH` / `DOSSIER_TLS_KEY_PATH`.
 - `project_access_mode` defaults to `enforce` when `DOSSIER_PROJECT_ACL_PATH`
   is set — pair `DOSSIER_ENV=prod` with an ACL so cross-project disclosure is
   default-deny. When no ACL is set in prod, the mode falls back to `open` so
