@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, assert_never
 
 from . import __version__
 from .config import Settings
@@ -40,6 +40,11 @@ def build_health(
     # ``fail`` (Plan 015 WI-1.1) — a production deploy must not silently run
     # open-access, without TLS, or without a session secret.
     prod = settings.env_mode == "prod"
+
+    # Surface the active env mode first so the operator sees the deployment
+    # posture before its consequences (H1: a silent dev default in production
+    # is a named state, not silence).
+    checks.append(_env_mode_check(settings))
 
     regista_reachable = False
     chain_ok: bool | None = None
@@ -170,6 +175,34 @@ def _suite_env_check() -> dict[str, Any]:
         "name": "suite_env",
         "status": "skip",
         "detail": "no suite.env found (process env only)",
+    }
+
+
+def _env_mode_check(settings: Settings) -> dict[str, Any]:
+    """Report the active deployment posture mode (H1).
+
+    ``DOSSIER_ENV`` defaults to ``dev`` — an operator who deploys to production
+    without setting ``DOSSIER_ENV=prod`` silently gets dev defaults (open
+    access, no SSL required, TLS unset is ``warn`` not ``fail``). This check
+    makes the active mode visible in the doctor output so the gap is named,
+    not silent. It is informational (``warn`` in dev, ``ok`` in prod) and does
+    not affect the suite umbrella's ``ok`` on its own — only ``fail`` checks
+    flip ``ok`` to false.
+    """
+    if settings.env_mode == "prod":
+        return {
+            "name": "env_mode",
+            "status": "ok",
+            "detail": "DOSSIER_ENV=prod — production posture enforced",
+        }
+    return {
+        "name": "env_mode",
+        "status": "warn",
+        "detail": (
+            "DOSSIER_ENV unset/dev — running with dev defaults "
+            "(open access, no SSL required). "
+            "Set DOSSIER_ENV=prod for team deploys."
+        ),
     }
 
 
@@ -312,37 +345,46 @@ def _project_access_check(
     ``DOSSIER_ENV=prod`` and should pair it with
     ``DOSSIER_PROJECT_ACCESS_MODE=enforce`` + an ACL.
     """
-    if settings.project_access_mode == "open":
-        return {
-            "name": "project_access",
-            "status": "fail" if prod else "warn",
-            "detail": "open: every authenticated principal can read every project",
-        }
+    mode = settings.project_access_mode
 
-    from .authz import load_project_access_policy
+    # ``open`` needs no ACL; ``audit`` and ``enforce`` both require a loadable
+    # policy before the mode-specific status is reported.
+    if mode != "open":
+        from .authz import load_project_access_policy
 
-    try:
-        load_project_access_policy(
-            settings.project_acl_path,
-            group_claim_key=settings.session_secret.encode("utf-8"),
-        )
-    except Exception as exc:
-        return {
-            "name": "project_access",
-            "status": "fail",
-            "detail": f"ACL invalid or unreadable: {type(exc).__name__}",
-        }
-    if settings.project_access_mode == "audit":
-        return {
-            "name": "project_access",
-            "status": "warn",
-            "detail": "audit: default-deny ACL loaded; denials not enforced",
-        }
-    return {
-        "name": "project_access",
-        "status": "ok",
-        "detail": "enforce: default-deny ACL loaded",
-    }
+        try:
+            load_project_access_policy(
+                settings.project_acl_path,
+                group_claim_key=settings.session_secret.encode("utf-8"),
+            )
+        except Exception as exc:
+            return {
+                "name": "project_access",
+                "status": "fail",
+                "detail": f"ACL invalid or unreadable: {type(exc).__name__}",
+            }
+
+    match mode:
+        case "open":
+            return {
+                "name": "project_access",
+                "status": "fail" if prod else "warn",
+                "detail": "open: every authenticated principal can read every project",
+            }
+        case "audit":
+            return {
+                "name": "project_access",
+                "status": "warn",
+                "detail": "audit: default-deny ACL loaded; denials not enforced",
+            }
+        case "enforce":
+            return {
+                "name": "project_access",
+                "status": "ok",
+                "detail": "enforce: default-deny ACL loaded",
+            }
+        case other:
+            assert_never(other)
 
 
 def _allowed_hosts_check(
