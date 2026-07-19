@@ -6,9 +6,10 @@ requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
     # Backend: regista provides durable state, validated transitions, the event
-    # log, actors, and signing. Sibling library — install editable for dev:
+    # log, actors, and signing. Distribution name is `regista-hraedon` on PyPI
+    # (import name remains `regista`). For dev, install editable from sibling:
     #   uv pip install -e ../regista
-    "regista>=0.4.0",
+    "regista-hraedon>=0.5.1",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
