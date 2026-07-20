@@ -42,7 +42,7 @@ Plan 004 WI-1.6 (shared-service locality in the doctor umbrella).
   adopted with legacy aliases (WI-1.1); secrets-through-backend (WI-4.1).
 - The prod HMAC signing key exists **only** at
   `~/.config/regista/keys.json` on the operator box (key_id
-  `regista-prod-001`). Both faces must share it. It is not in Vault and has no
+  `<KEY_ID>`). Both faces must share it. It is not in Vault and has no
   second copy — loss means the chain can't be verified. This plan fixes that
   independently of the deployment (WI-1 stands alone).
 - The store: `regista` DB on the production Postgres host, 23 per-project
@@ -60,26 +60,48 @@ Plan 004 WI-1.6 (shared-service locality in the doctor umbrella).
 
 ## WI-1 — Signing-key custody: the key leaves the laptop
 
-Move the prod HMAC key into Vault (KV v2, e.g. `kv/homelab/suite/regista-hmac`,
-aligned with regista's backend-aware custody — see regista Plan 029 / dossier
-Plan 015 usage) so it is (a) injectable into the dossier pod and (b) durably
-backed up. Keep the operator-box file as documented break-glass copy. Record
-the custody change + recovery procedure in agent-suite `docs/key-operations.md`.
+**Original plan (2026-07-11):** Move the prod HMAC key into Vault (KV v2)
+so it is (a) injectable into the dossier pod and (b) durably backed up.
 
-- **AC:** both faces resolve the key through their existing resolution path
-  with the Vault-sourced value; a chain `verify` passes before and after the
-  switch on at least two project schemas; the recovery procedure is written
-  and names both copies; the laptop file is no longer the only copy.
+**Amended 2026-07-19 (operator-ratified):** Vault is running on the cluster
+but has no k8s integration (no Agent Injector, no Secrets Operator, no CSI
+Secret Store driver). Installing the injector is a cluster-infrastructure
+change whose marginal security gain over k8s Secrets is negligible for this
+specific key: it is a static HMAC key (not a dynamic credential that
+benefits from Vault's auto-expiry), and Vault's storage is a Longhorn PVC
+on the same cluster (compromising the cluster compromises both etcd and
+Vault's storage).
+
+The key is now held in a **gitignored k8s Secret** (`regista-signing-keys`
+in the `dossier` namespace), mounted at `/etc/regista/keys.json` in the pod.
+The operator-box file (`~/.config/regista/keys.json`) remains as the
+documented break-glass copy. The custody change is recorded in agent-suite
+`docs/key-operations.md` §7.
+
+**Not precluded:** The `REGISTA_KEY_PATH=/etc/regista/keys.json` contract
+is source-agnostic — a future Vault Agent Injector deployment would write
+the key to the same path, and the deployment would swap the Secret volume
+for the injector annotation. No code change required in dossier or regista.
+
+**Follow-up WIs filed:** (1) enable etcd encryption at rest on the k3s
+cluster (benefits all k8s Secrets, not just this one); (2) evaluate Vault
+for dynamic Postgres credentials (where Vault's real value is — short-lived
+`regista_app` roles with auto-expiry instead of a long-lived password).
+
+- **AC:** the pod resolves the key through its existing file-path
+  resolution (`REGISTA_KEY_PATH`); a chain `verify` passes before and
+  after the switch on at least two project schemas; the recovery procedure
+  is written and names both copies (k8s Secret + laptop file); the laptop
+  file is no longer the only copy.
 
 ## WI-2 — Kubernetes manifests
 
 `deploy/k8s/`: Namespace, Deployment (image pinned to the SUITE.lock pair, not
 `:latest`), Service, Ingress with TLS via the cluster's existing cert story,
-liveness/readiness probes on `/healthz`, resource requests/limits, and secrets
-delivered via the cluster's established Vault integration — **verify which
-pattern the cluster already uses** (agent injector / CSI / ExternalSecrets)
-and follow it rather than introducing a second mechanism. Private-image pull
-needs an imagePullSecret for ghcr.
+liveness/readiness probes split from posture reporting (`/livez` for process
+liveness, `/healthz` for the doctor's full posture report), resource
+requests/limits, and secrets delivered via gitignored k8s Secrets (WI-1
+amended). Private-image pull needs an imagePullSecret for ghcr.
 
 - **AC:** `kubectl apply` from a clean checkout converges; pod healthy;
   `/healthz` returns ok from a machine that is not the operator box; no

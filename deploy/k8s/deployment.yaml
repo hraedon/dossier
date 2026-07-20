@@ -1,0 +1,93 @@
+# dossier deployment — agent-suite dogfood Profile B
+#
+# Substrate-agnostic: same image runs under compose (deploy/docker-compose.yml)
+# or k8s. All config comes from env (the dossier-suite-env Secret + the
+# regista-signing-keys Secret); no baked secrets.
+#
+# The deployment is intentionally a single replica. Dossier holds signed-cookie
+# session state in-process; horizontal scaling requires a shared session store
+# (Gate 1 WI-1.4 work).
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dossier
+  namespace: dossier
+  labels:
+    app.kubernetes.io/name: dossier
+    app.kubernetes.io/part-of: agent-suite
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # single-replica; RollingUpdate would briefly double-bill
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dossier
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dossier
+        app.kubernetes.io/part-of: agent-suite
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532   # the 'dossier' user created in the image
+        fsGroup: 65532
+      containers:
+        - name: dossier
+          image: ghcr.io/hraedon/dossier:0.0.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: dossier-suite-env
+          volumeMounts:
+            - name: regista-keys
+              mountPath: /etc/regista
+              readOnly: true
+            - name: ad-root-ca
+              mountPath: /etc/dossier/secrets
+              readOnly: true
+            - name: project-acl
+              mountPath: /etc/dossier/acl/acl.json
+              subPath: acl.json
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: http
+              host: 127.0.0.1
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+              host: 127.0.0.1
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+      volumes:
+        - name: regista-keys
+          secret:
+            secretName: regista-signing-keys
+            defaultMode: 0o400
+        - name: ad-root-ca
+          configMap:
+            name: dossier-ad-root-ca
+            defaultMode: 0o444
+        - name: project-acl
+          configMap:
+            name: dossier-project-acl
+            defaultMode: 0o444

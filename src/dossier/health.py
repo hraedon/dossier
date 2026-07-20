@@ -98,7 +98,7 @@ def build_health(
     elif settings.auth_backend == "ldap":
         checks.append(_ldap_config_check())
 
-    checks.extend(_tls_checks(prod=prod))
+    checks.extend(_tls_checks(settings, prod=prod))
     checks.append(_suite_env_check())
     checks.extend(_secrets_backend_checks(settings))
     checks.append(_notification_sink_check(settings))
@@ -129,7 +129,7 @@ def has_failures(health: dict[str, Any]) -> bool:
     return any(c["status"] == "fail" for c in health.get("checks", []))
 
 
-def _tls_checks(*, prod: bool = False) -> list[dict[str, Any]]:
+def _tls_checks(settings: Settings, *, prod: bool = False) -> list[dict[str, Any]]:
     """Report TLS termination config status (Plan 014 WI-1.5).
 
     ``warn`` when TLS is not configured (plain HTTP — acceptable for dev,
@@ -140,7 +140,18 @@ def _tls_checks(*, prod: bool = False) -> list[dict[str, Any]]:
     config escalates from ``warn`` to ``fail``: production must terminate TLS
     (the operator may put dossier behind a TLS-terminating proxy, but the
     ``DOSSIER_TLS_*`` seam or the proxy must be evident).
+
+    When ``DOSSIER_BEHIND_TLS_PROXY=true`` (Plan 023 WI-4), the check
+    reports ``ok`` with detail naming the proxy posture — TLS is terminated
+    at the ingress, not the app itself.
     """
+    if settings.behind_tls_proxy:
+        return [{
+            "name": "tls",
+            "status": "ok",
+            "detail": "TLS terminated at ingress/proxy (DOSSIER_BEHIND_TLS_PROXY=true)",
+        }]
+
     from .config import load_tls_config
 
     tls = load_tls_config()

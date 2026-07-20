@@ -1,5 +1,5 @@
 [project]
-name = "dossier"
+name = "dossier-hraedon"
 version = "0.0.1"
 description = "Lightweight human-facing work-item tracker that is also a provenance instrument, built on regista."
 requires-python = ">=3.12"

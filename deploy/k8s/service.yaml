@@ -1,0 +1,19 @@
+# dossier ClusterIP Service — exposed via the Ingress (not directly).
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: dossier
+  namespace: dossier
+  labels:
+    app.kubernetes.io/name: dossier
+    app.kubernetes.io/part-of: agent-suite
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dossier
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

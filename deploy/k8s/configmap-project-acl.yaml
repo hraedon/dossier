@@ -1,0 +1,52 @@
+# Dossier project-access ACL — initial deployment (all projects public).
+#
+# In enforce mode, every project must be explicitly declared. This ACL makes
+# all 24 fronted projects public (any authenticated user can read them) —
+# the same effective behavior as open mode, but with enforce posture so the
+# doctor's project_access check reports ok instead of fail.
+#
+# The operator should tighten individual projects by setting "public": false
+# and naming specific principals/groups. See docs in authz.py for the format.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dossier-project-acl
+  namespace: dossier
+  labels:
+    app.kubernetes.io/name: dossier
+    app.kubernetes.io/part-of: agent-suite
+data:
+  acl.json: |
+    {
+      "version": 1,
+      "administrators": {
+        "principals": [],
+        "groups": []
+      },
+      "projects": {
+        "acme_adcs_ra": { "public": true },
+        "ad_steward": { "public": true },
+        "adcs_lens": { "public": true },
+        "agent_capability_broker": { "public": true },
+        "agent_notes": { "public": true },
+        "agent_provenance": { "public": true },
+        "agent_suite": { "public": true },
+        "agent_wake": { "public": true },
+        "agentic_onboarding": { "public": true },
+        "cert_watch": { "public": true },
+        "dossier": { "public": true },
+        "frontier_lag": { "public": true },
+        "gpo_lens": { "public": true },
+        "gpo_studio": { "public": true },
+        "openbia": { "public": true },
+        "patina": { "public": true },
+        "sf2": { "public": true },
+        "sluice": { "public": true },
+        "substrate": { "public": true },
+        "switchboard": { "public": true },
+        "sysadmin_competence_evaluation": { "public": true },
+        "usage_dashboard": { "public": true },
+        "vitrine": { "public": true },
+        "windows_evidence_lab": { "public": true }
+      }
+    }
