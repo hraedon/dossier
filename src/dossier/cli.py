@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from collections.abc import Callable
@@ -11,6 +12,47 @@ import structlog
 
 from . import __version__
 from .keys import generate_keyset
+
+
+def emit_error(
+    code: str,
+    message: str,
+    *,
+    use_json: bool,
+    detail: str | None = None,
+    retryable: bool = False,
+    exit_code: int = 1,
+) -> int:
+    """Report an operational error per suite CLI contract v1 §3 and return the code.
+
+    Under ``--json`` the common error envelope is the single stdout document;
+    otherwise the human message goes to *stderr*. No path prints an error and
+    exits 0. ``exit_code`` defaults to 1 — the operational-error slot in the
+    taxonomy (0 success, 2 usage). The envelope shape is validated by
+    ``agent_suite.conformance`` in the tests; it is reproduced here so runtime
+    code never imports the dev-only kit.
+    """
+    if use_json:
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": code,
+                        "message": message,
+                        "detail": detail,
+                        "retryable": retryable,
+                        "partial": None,
+                    },
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(f"error: {message}", file=sys.stderr)
+        if detail:
+            print(f"  {detail}", file=sys.stderr)
+    return exit_code
 
 
 class _StderrLoggerFactory:
@@ -166,8 +208,6 @@ def _cmd_users_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
-    import json
-
     from .config import load_settings
     from .health import build_health
     from .multi import GatewayRegistry
@@ -286,7 +326,7 @@ def _charter(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def _run(argv: list[str] | None) -> int:
     from .config import load_suite_env
 
     load_suite_env()
@@ -347,6 +387,39 @@ def main(argv: list[str] | None = None) -> int:
     if func is None:
         return _charter(parsed)
     return func(parsed)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Top-level entry point and last-resort error boundary (CLI contract §3/§4).
+
+    argparse's usage errors raise ``SystemExit`` (exit 2) straight through — a
+    ``BaseException``, not caught here, so the usage taxonomy is preserved. A
+    misconfigured suite-env path (``FileNotFoundError`` from ``load_suite_env``)
+    becomes a ``CONFIG_NOT_FOUND`` envelope; any other uncaught exception becomes
+    ``INTERNAL_ERROR`` instead of a traceback (§4). A closed downstream pipe is
+    swallowed the CPython way so the interpreter's final flush can't re-raise.
+    """
+    raw = sys.argv[1:] if argv is None else argv
+    json_mode = "--json" in raw
+    try:
+        return _run(argv)
+    except BrokenPipeError:
+        # A downstream reader closed the pipe (e.g. `dossier ... | head`).
+        # Redirect stdout to devnull so the final flush at exit can't raise (§4).
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+        except (OSError, ValueError):
+            pass
+        return 1
+    except FileNotFoundError as exc:
+        return emit_error("CONFIG_NOT_FOUND", str(exc), use_json=json_mode)
+    except Exception as exc:  # last-resort boundary: never surface a traceback
+        return emit_error(
+            "INTERNAL_ERROR",
+            f"unexpected {exc.__class__.__name__}: {exc}",
+            use_json=json_mode,
+        )
 
 
 if __name__ == "__main__":
