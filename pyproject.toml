@@ -27,6 +27,10 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.10",
     "ldap3>=2.9",              # LDAP/AD auth tests (mocked + integration)
+    # CLI contract v1 conformance kit (Plan 018 WI-2 / Plan 019 B1). A published
+    # PyPI wheel; consumed only by tests/test_cli_conformance.py, never imported
+    # by runtime code.
+    "agent-suite-conformance==1.0.0",
 ]
 
 [project.scripts]
