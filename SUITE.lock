@@ -1,23 +1,53 @@
-# SUITE.lock — the known-good version matrix for the dossier container image.
+# SUITE.lock — dossier face compatibility manifest.
 #
-# Update the regista_ref and Dockerfile ARG together. The CI image-build job
-# reads this file to verify the pin matches.
+# Records the exact released version of the suite spine (regista) this release
+# of dossier was tested against, plus the container-image coordinates. A suite
+# release is green when every component's SUITE.lock agrees with the umbrella
+# agent-suite/SUITE.lock.
+#
+# This is the in-repo *single source of truth for what to develop against*
+# (Plan 019 B2). It must AGREE with the umbrella agent-suite/SUITE.lock
+# ([components.regista] version + revision there); the umbrella is the generated
+# authority and this face-local copy is vendored so dossier dev + CI resolve the
+# spine WITHOUT cloning agent-suite. `scripts/dev-install.py` reads
+# `[spine].version` and installs `regista-hraedon==<version>` from PyPI by
+# default; `scripts/suite_lock.py` is the resolver. See docs/develop-against-lock.md.
+#
+# The CI image-build job reads `[spine].version` for the Dockerfile's
+# REGISTA_VERSION build-arg and `[component].version` / `[container]` for tags.
+#
+# Regista is published to PyPI as `regista-hraedon` (import name stays `regista`).
+# The pinned SHA/`describe` records the exact commit for the local sibling
+# workflow (`DEV_AGAINST=sibling`).
+#
+# (Shape note: this file was YAML `regista.ref` through Plan 013; Plan 019 B2
+# converts it to the uniform TOML `[spine]` shape the resolver reads directly,
+# folds the container coordinates into [container], and fixes the drift — the
+# old YAML pinned regista SHA dd22197 while CI installed 0.5.1.)
 
-component: dossier
-version: "0.0.1"
-python: "3.13"
+[component]
+name = "dossier"
+version = "0.0.1"
 
-regista:
-  ref: dd22197eaafe11afabdae488b6908a5729b3b343
-  source: github.com/hraedon/regista
-  # Pin to a commit SHA, never a branch. The face and the spine version
-  # are a known-good pair recorded here.
-  # Bumped 2026-07-09: Plan 015 adopts regista Plan 029's backend-aware
-  # custody (regista._custody.store_private_key), which postdates the
-  # previous pin (11c82b1, Plan 026).
+[spine]
+name = "regista"
+# PyPI distribution (renamed from `regista`; import name is still `regista`).
+distribution = "regista-hraedon"
+repo = "hraedon/regista"
+# The released PyPI version this dossier release develops + tests against.
+# Must equal agent-suite/SUITE.lock [components.regista].version.
+version = "0.5.3"
+# The git SHA of regista this dossier release was tested against == the umbrella's
+# [components.regista].revision == the v0.5.3 tag commit.
+# Resolve the local sibling with: git -C ../regista checkout <sha>
+sha = "9718b941939884fee94c260f19efe3e4040c456b"
+describe = "v0.5.3"
+# Mirrors the floor declared in pyproject.toml (the published lower bound); the
+# exact version to develop against is `version` above, not this floor.
+pyproject_floor = "regista-hraedon>=0.5.1"
 
-container:
-  registry: ghcr.io
-  image: hraedon/dossier
-  # Tag strategy: :latest for the tip, :<dossier-version> for releases,
-  # :<dossier-version>-<regista-short-sha> for reproducible pinning.
+[container]
+registry = "ghcr.io"
+image = "hraedon/dossier"
+# Tag strategy: :latest for the tip, :<component.version> for releases,
+# :<component.version>-<spine.version> for reproducible pinning.

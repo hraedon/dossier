@@ -45,11 +45,24 @@ plans/                       numbered plans, status line at top
 
 ## Backend dependency
 
-regista is a sibling library (`/projects/regista`). For dev, install it editable
-(`uv pip install -e ../regista`) or pin a version. dossier targets regista
-`0.4.0`'s workflow schema and facade API; the workflow YAML declares its
-`regista_version`. regista needs Postgres 15+; its in-memory backend is for tests
-only, never for a real multi-user instance.
+regista is the spine (a sibling library, `/projects/regista`; published to PyPI
+as `regista-hraedon`, import name still `regista`). regista needs Postgres 15+;
+its in-memory backend is for tests only, never for a real multi-user instance.
+
+**Develop against the locked substrate (Plan 019 B2).** `SUITE.lock` is the
+single source of truth for *what regista to develop against*:
+
+```bash
+make dev            # install deps against the SUITE.lock-locked substrate
+make test           # pytest (Postgres-dependent tests skip without a DSN)
+make lint typecheck # ruff + mypy
+```
+
+`make dev` (and both CI test lanes, and the container image) install regista at
+the released version `SUITE.lock` `[spine]` pins — today `0.5.3` — not `main` or
+an editable checkout, so integration skew surfaces before interop time. For
+deliberate cross-member work, set `DEV_AGAINST=main|<ref>|sibling`. See
+`docs/develop-against-lock.md`.
 
 ## Workflow
 
