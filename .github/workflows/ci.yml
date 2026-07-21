@@ -23,15 +23,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install dependencies
+      - name: Install dependencies (develop-against-lock, Plan 019 B2)
         run: |
-          python -m pip install --upgrade pip
-          # regista-hraedon is published on PyPI (renamed distribution; the
-          # import name is still `regista`). Pinned to 0.5.1; SUITE.lock still
-          # records the source SHA for revision-drift detection. The docker
-          # build-arg REGISTA_REF below is used only by the image build job.
-          pip install "regista-hraedon==0.5.1"
-          pip install -e ".[dev]"
+          # The paved installer reads SUITE.lock [spine].version and installs
+          # regista-hraedon at that locked release from PyPI (today 0.5.3), then
+          # `-e .[dev]`. Same install shape as local `make dev`, so CI and a
+          # developer's machine develop against the same shipped substrate. No
+          # hardcoded version pin here — it drifts from SUITE.lock silently
+          # (this lane was stuck on 0.5.1 while the lock said 0.5.3).
+          # tests/test_develop_against_lock.py is the mechanical control.
+          python scripts/dev-install.py
 
       - name: Lint
         run: ruff check src/ tests/
@@ -88,26 +89,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read regista pin from SUITE.lock
+      - name: Read pins from SUITE.lock (TOML)
         id: pin
         run: |
-          echo "ref=$(grep 'ref:' SUITE.lock | head -1 | awk '{print $2}')" >> "$GITHUB_OUTPUT"
-          echo "version=$(grep 'version:' SUITE.lock | head -1 | awk '{print $2}' | tr -d '"')" >> "$GITHUB_OUTPUT"
+          # SUITE.lock is the TOML [spine] shape (Plan 019 B2). The image installs
+          # regista-hraedon from PyPI at [spine].version — no git+SHA build-arg.
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib, pathlib
+          lock = tomllib.loads(pathlib.Path("SUITE.lock").read_text())
+          print(f"regista_version={lock['spine']['version']}")
+          print(f"dossier_version={lock['component']['version']}")
+          c = lock["container"]
+          print(f"image={c['registry']}/{c['image']}")
+          PY
 
       - name: Build image
         run: |
           docker build \
-            --build-arg REGISTA_REF=${{ steps.pin.outputs.ref }} \
-            -t ghcr.io/hraedon/dossier:latest \
-            -t ghcr.io/hraedon/dossier:${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.ref }} \
+            --build-arg REGISTA_VERSION=${{ steps.pin.outputs.regista_version }} \
+            -t ${{ steps.pin.outputs.image }}:latest \
+            -t ${{ steps.pin.outputs.image }}:${{ steps.pin.outputs.dossier_version }}-${{ steps.pin.outputs.regista_version }} \
             .
 
       - name: Push image
         if: github.ref == 'refs/heads/main'
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker push ghcr.io/hraedon/dossier:latest
-          docker push ghcr.io/hraedon/dossier:${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.ref }}
+          docker push ${{ steps.pin.outputs.image }}:latest
+          docker push ${{ steps.pin.outputs.image }}:${{ steps.pin.outputs.dossier_version }}-${{ steps.pin.outputs.regista_version }}
 
   # Plan 003 WI-5.1 — prove dossier imports, lints, and runs unit tests on
   # native Windows. Phase 1 (WI-1.1) eliminated the bare os.O_NOFOLLOW crash
@@ -126,17 +135,12 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install regista
-        shell: bash
+      - name: Install dependencies (develop-against-lock, Plan 019 B2)
         run: |
-          python -m pip install --upgrade pip
-          # regista-hraedon is published on PyPI (renamed distribution; the
-          # import name is still `regista`). Pinned to 0.5.1; SUITE.lock
-          # continues to pin the source SHA for revision-drift detection.
-          pip install "regista-hraedon==0.5.1"
-
-      - name: Install dependencies
-        run: pip install -e ".[dev]"
+          # Same paved installer as the Linux lane: resolve the spine from
+          # SUITE.lock [spine].version, install regista-hraedon at that locked
+          # release, then `-e .[dev]`. No hardcoded pin (was stuck on 0.5.1).
+          python scripts/dev-install.py
 
       - name: Lint (ruff)
         run: ruff check src/ tests/
