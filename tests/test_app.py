@@ -13,6 +13,12 @@ def test_healthz_ok(client):
     assert "checks" in body
 
 
+def test_livez_is_process_only(client):
+    resp = client.get("/livez")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "alive"}
+
+
 def test_me_without_login_is_401(client):
     resp = client.get("/me")
     assert resp.status_code == 401

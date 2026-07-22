@@ -1,0 +1,21 @@
+# Dossier k8s deployment — apply with: kubectl apply -k deploy/k8s/
+#
+# Operator prerequisites before first apply:
+#   1. python scripts/gen-k8s-secret.py   (generates both private Secrets and ConfigMaps)
+#   2. Add cluster-specific ingress/image-pull settings in a private overlay.
+#
+# The two Secret manifests and both ConfigMaps are gitignored (operator-generated).
+# All other manifests are committed.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - configmap-project-acl.yaml
+  - configmap-ad-root-ca.yaml
+  - secret-suite-env.yaml
+  - secret-regista-keys.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml

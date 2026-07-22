@@ -192,6 +192,7 @@ class Settings:
     # doctor escalates posture gaps from ``warn`` to ``fail``.
     env_mode: Literal["dev", "prod"] = "dev"
     allowed_hosts: tuple[str, ...] = ()
+    behind_tls_proxy: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,6 +360,15 @@ def load_settings(strict: bool = True) -> Settings:
         h.strip() for h in raw_allowed_hosts.split(",") if h.strip()
     )
 
+    # TLS proxy indicator (Plan 023 WI-4): when TLS is terminated at an
+    # ingress/proxy rather than the app itself, the doctor's tls check
+    # reports ``ok`` with detail naming the proxy posture instead of
+    # escalating to ``fail`` in prod.
+    behind_tls_proxy = _parse_bool(
+        "DOSSIER_BEHIND_TLS_PROXY",
+        os.environ.get("DOSSIER_BEHIND_TLS_PROXY", "false"),
+    )
+
     return Settings(
         database_url=database_url,
         project=project,
@@ -385,6 +395,7 @@ def load_settings(strict: bool = True) -> Settings:
         project_acl_path=project_acl_path,
         env_mode=cast(Literal["dev", "prod"], env_mode),
         allowed_hosts=allowed_hosts,
+        behind_tls_proxy=behind_tls_proxy,
     )
 
 

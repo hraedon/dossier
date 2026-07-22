@@ -701,7 +701,11 @@ def test_load_ldap_config_rejects_plaintext_in_strict(monkeypatch):
 
 
 def test_load_ldap_config_non_strict_allows_empty(monkeypatch):
-    monkeypatch.delenv("DOSSIER_LDAP_SERVER", raising=False)
+    for k in (
+        "DOSSIER_LDAP_SERVER", "DOSSIER_LDAP_BASE_DN", "DOSSIER_LDAP_BIND_DN",
+        "DOSSIER_LDAP_BIND_PASSWORD", "DOSSIER_LDAP_DOMAIN",
+    ):
+        monkeypatch.delenv(k, raising=False)
     config = load_ldap_config(strict=False)
     assert config.server_urls == []
     assert config.base_dn == ""

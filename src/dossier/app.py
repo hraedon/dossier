@@ -343,6 +343,10 @@ def create_app(
             return JSONResponse(status_code=503, content=health)
         return health
 
+    @app.get("/livez")
+    def livez() -> dict[str, str]:
+        return {"status": "alive"}
+
     @app.get("/csrf")
     def get_csrf(request: Request) -> dict[str, str]:
         token = issue_csrf_token(request.session)

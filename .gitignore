@@ -39,3 +39,7 @@ htmlcov/
 
 # Vendored patina is committed; local design-system build caches are not
 .patina-cache/
+deploy/k8s/secret-suite-env.yaml
+deploy/k8s/secret-regista-keys.yaml
+deploy/k8s/configmap-ad-root-ca.yaml
+deploy/k8s/configmap-project-acl.yaml
