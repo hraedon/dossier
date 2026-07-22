@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import stat
 import tomllib
 from pathlib import Path
@@ -83,10 +84,11 @@ def test_generator_writes_private_fail_closed_manifests(
     keys_path = output / "secret-regista-keys.yaml"
     acl_path = output / "configmap-project-acl.yaml"
     ca_path = output / "configmap-ad-root-ca.yaml"
-    assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(keys_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(acl_path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(ca_path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(secret_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(keys_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(acl_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(ca_path.stat().st_mode) == 0o600
 
     secret = json.loads(secret_path.read_text())
     assert secret["stringData"]["DOSSIER_PROJECTS"] == "project_one,project_two"
@@ -117,6 +119,30 @@ def test_generator_refuses_implicit_estate_inventory(
 
     with pytest.raises(SystemExit, match="DOSSIER_PROJECTS is required"):
         module.main()
+
+
+def test_private_file_uses_windows_acl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    module = _load_generator()
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> None:
+        calls.append(command)
+
+    monkeypatch.setattr(module.sys, "platform", "win32")
+    monkeypatch.setattr(module.getpass, "getuser", lambda: "operator-example")
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    module._restrict_private_file(tmp_path / "private.json")
+
+    assert calls == [
+        [
+            "icacls",
+            str(tmp_path / "private.json"),
+            "/inheritance:r",
+            "/grant:r",
+            "operator-example:(F)",
+        ]
+    ]
 
 
 def test_generator_refuses_unresolved_secret_reference(

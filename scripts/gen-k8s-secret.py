@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import os
+import getpass
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -111,10 +113,33 @@ def _write_private_json(path: Path, document: dict[str, Any]) -> None:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary_path, 0o600)
+        _restrict_private_file(temporary_path)
         os.replace(temporary_path, path)
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _restrict_private_file(path: Path) -> None:
+    """Apply the platform-native private-file control before publication."""
+    if sys.platform == "win32":
+        account = getpass.getuser()
+        try:
+            subprocess.run(
+                [
+                    "icacls",
+                    str(path),
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"{account}:(F)",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError(f"could not restrict Windows ACL for {path}") from error
+        return
+    os.chmod(path, 0o600)
 
 
 def _key_file(env: dict[str, str]) -> Path:

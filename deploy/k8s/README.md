@@ -13,9 +13,10 @@ them:
    `DOSSIER_ADMIN_PRINCIPALS`, and the `DOSSIER_LDAP_*` launch settings.
    The LDAP CA path must exist locally; generation fails closed if it does not.
 2. Run `python scripts/gen-k8s-secret.py`. It writes two Secret manifests and
-   two ConfigMaps under this directory atomically with mode `0600`. Every output
-   is gitignored. The generated ACL is fail-closed: projects are private and the
-   declared administrators can configure access deliberately.
+   two ConfigMaps under this directory atomically with mode `0600` on POSIX or
+   a current-user-only ACL on Windows. Every output is gitignored. The generated
+   ACL is fail-closed: projects are private and the declared administrators can
+   configure access deliberately.
 3. Replace `dossier.work-domain.example` in `ingress.yaml`. Add the local
    ingress class, certificate issuer, and image-pull secret in a private
    kustomize overlay; cluster-specific identifiers do not belong in this base.
