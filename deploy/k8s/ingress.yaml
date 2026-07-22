@@ -1,0 +1,39 @@
+# dossier Ingress — exposed at the operator-supplied external hostname.
+#
+# The placeholder below must be replaced with the real hostname before applying.
+# The operator can set DOSSIER_ALLOWED_HOSTS in suite.env and run
+# scripts/gen-k8s-secret.py, then substitute the same hostname here (e.g. with
+# envsubst or a kustomize overlay). No real hostname is committed.
+#
+# TLS is terminated by the operator's ingress. Add the ingress-class and
+# certificate-provisioner annotations in a private kustomize overlay; those
+# names are cluster-specific and do not belong in the reusable base. Dossier
+# itself serves plain HTTP behind the ingress; its DOSSIER_TLS_* env vars stay unset,
+# DOSSIER_BEHIND_TLS_PROXY is set to true, and DOSSIER_ALLOWED_HOSTS pins the
+# external hostname. The doctor's tls check reports ok with the proxy posture
+# detail.
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dossier
+  namespace: dossier
+  labels:
+    app.kubernetes.io/name: dossier
+    app.kubernetes.io/part-of: agent-suite
+spec:
+  tls:
+    - hosts:
+        - dossier.work-domain.example
+      secretName: dossier-tls
+  rules:
+    - host: dossier.work-domain.example
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dossier
+                port:
+                  name: http

@@ -100,6 +100,7 @@ keep their `DOSSIER_*` names.
 | `DOSSIER_PROJECT_ACL_PATH` | project ACL JSON (required for `audit`/`enforce`) |
 | `DOSSIER_TLS_CERT_PATH` | TLS cert path — set both to serve HTTPS, unset for HTTP |
 | `DOSSIER_TLS_KEY_PATH` | TLS key path — set both to serve HTTPS, unset for HTTP |
+| `DOSSIER_BEHIND_TLS_PROXY` | `true` when an ingress/proxy terminates HTTP TLS for dossier |
 | `DOSSIER_LDAP_SERVER` | comma-separated `ldaps://` URLs (multi-DC failover) |
 | `DOSSIER_LDAP_BASE_DN` / `_BIND_DN` / `_BIND_PASSWORD` | search-then-bind creds |
 | `DOSSIER_LDAP_DOMAIN` | appears in `Principal.source` as `ldap:<domain>` |
@@ -150,7 +151,8 @@ fresh checkout runs without ceremony: `require_ssl=false`,
   not the HTTP listener's TLS. An operator behind a TLS-terminating proxy with
   a local plaintext database connection should set `DOSSIER_REQUIRE_SSL=false`.
   The HTTP listener's TLS is controlled independently by
-  `DOSSIER_TLS_CERT_PATH` / `DOSSIER_TLS_KEY_PATH`.
+  `DOSSIER_TLS_CERT_PATH` / `DOSSIER_TLS_KEY_PATH`; a proxy deployment declares
+  its equivalent posture with `DOSSIER_BEHIND_TLS_PROXY=true`.
 - `project_access_mode` defaults to `enforce` when `DOSSIER_PROJECT_ACL_PATH`
   is set — pair `DOSSIER_ENV=prod` with an ACL so cross-project disclosure is
   default-deny. When no ACL is set in prod, the mode falls back to `open` so

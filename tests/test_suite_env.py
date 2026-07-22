@@ -155,7 +155,8 @@ def test_inject_env_file_export_with_tab(tmp_path):
     assert os.environ["FOO"] == "bar"
 
 
-def test_inject_env_file_quoted_value_with_space_hash(tmp_path):
+def test_inject_env_file_quoted_value_with_space_hash(tmp_path, monkeypatch):
+    monkeypatch.delenv("DOSSIER_LDAP_BIND_PASSWORD", raising=False)
     f = tmp_path / "suite.env"
     f.write_text('DOSSIER_LDAP_BIND_PASSWORD="a pass # secret"\n')
     _inject_env_file(str(f))

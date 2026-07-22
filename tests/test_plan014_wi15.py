@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,7 @@ _TRACKED = (
     "DOSSIER_USERS_PATH", "DOSSIER_PROJECTS", "DOSSIER_PROJECT",
     "DOSSIER_LDAP_SERVER", "DOSSIER_LDAP_BASE_DN", "DOSSIER_LDAP_BIND_DN",
     "DOSSIER_LDAP_BIND_PASSWORD", "DOSSIER_LDAP_DOMAIN",
+    "DOSSIER_BEHIND_TLS_PROXY", "DOSSIER_ENV",
 )
 
 
@@ -124,6 +126,12 @@ def test_load_tls_config_partial_when_only_one_set(monkeypatch):
     assert tls is not None
     assert tls.cert_path == "/run/secrets/tls/cert.pem"
     assert tls.key_path == ""
+
+
+def test_load_settings_records_tls_proxy_posture(monkeypatch):
+    monkeypatch.setenv("DOSSIER_BEHIND_TLS_PROXY", "true")
+    settings = load_settings(strict=False)
+    assert settings.behind_tls_proxy is True
 
 
 # ── serve wires TLS into uvicorn ────────────────────────────────────────────
@@ -208,10 +216,10 @@ def test_serve_rejects_half_set_tls(monkeypatch, tmp_path, capsys):
 # ── doctor / health checks ─────────────────────────────────────────────────
 
 
-def test_tls_check_warn_when_unset(monkeypatch):
+def test_tls_check_warn_when_unset(monkeypatch, tmp_path):
     monkeypatch.delenv("DOSSIER_TLS_CERT_PATH", raising=False)
     monkeypatch.delenv("DOSSIER_TLS_KEY_PATH", raising=False)
-    [check] = _tls_checks()
+    [check] = _tls_checks(_empty_settings(tmp_path))
     assert check["status"] == "warn"
     assert "plain HTTP" in check["detail"]
 
@@ -223,18 +231,25 @@ def test_tls_check_ok_when_configured_and_present(monkeypatch, tmp_path):
     key.write_text("x")
     monkeypatch.setenv("DOSSIER_TLS_CERT_PATH", str(cert))
     monkeypatch.setenv("DOSSIER_TLS_KEY_PATH", str(key))
-    [check] = _tls_checks()
+    [check] = _tls_checks(_empty_settings(tmp_path))
     assert check["status"] == "ok"
     assert str(cert) in check["detail"]
 
 
-def test_tls_check_fail_when_configured_but_missing(monkeypatch):
+def test_tls_check_fail_when_configured_but_missing(monkeypatch, tmp_path):
     monkeypatch.setenv("DOSSIER_TLS_CERT_PATH", "/no/such/cert.pem")
     monkeypatch.setenv("DOSSIER_TLS_KEY_PATH", "/no/such/key.pem")
-    [check] = _tls_checks()
+    [check] = _tls_checks(_empty_settings(tmp_path))
     assert check["status"] == "fail"
     assert "cert not found" in check["detail"]
     assert "key not found" in check["detail"]
+
+
+def test_tls_check_ok_behind_declared_proxy(tmp_path):
+    settings = replace(_empty_settings(tmp_path), behind_tls_proxy=True)
+    [check] = _tls_checks(settings, prod=True)
+    assert check["status"] == "ok"
+    assert "ingress/proxy" in check["detail"]
 
 
 def test_suite_env_check_skip_when_none(monkeypatch):
@@ -300,6 +315,8 @@ def test_doctor_json_emits_tls_and_suite_env(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("DOSSIER_USERS_PATH", str(tmp_path / "users.json"))
     monkeypatch.delenv("DOSSIER_TLS_CERT_PATH", raising=False)
     monkeypatch.delenv("DOSSIER_TLS_KEY_PATH", raising=False)
+    monkeypatch.delenv("DOSSIER_BEHIND_TLS_PROXY", raising=False)
+    monkeypatch.setenv("DOSSIER_ENV", "dev")
 
     from dossier.cli import main
 
