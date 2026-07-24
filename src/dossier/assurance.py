@@ -1,83 +1,233 @@
-"""Review-assurance level computation (Plan 014 WI-1.4).
+"""Review-assurance rendering — **delegated to regista** (dossier WI-012).
 
-The assurance level is a pure function of the signed event log — dossier
-*surfaces* it, it does not recompute it. The levels are:
+dossier does not compute the assurance level. It asks regista, the suite's
+single authoritative store, and renders the answer. This module is the one
+seam between regista's assurance contract and dossier's display vocabulary.
 
-- ``self-reviewed``: the review verdict shares a model lineage with the
-  author's events, and no human has accepted it. When the reviewer's
-  lineage is undeclared (no ``model_lineage`` in ``actor_metadata``), the
-  verdict is treated as same-lineage (fail-safe) — independence cannot be
-  verified, so it must not over-claim.
-- ``independently reviewed``: a cross-lineage adversarial review passed
-  (reviewer lineage declared and different from the author's), but no
-  human has accepted it. Only ``adversarial_pass`` establishes cross-lineage
-  independence — ``accept`` is a final gate, not an adversarial review.
-- ``human-accepted``: a human has explicitly accepted the work (the
-  ``accept`` transition by a ``human`` actor).
-- ``unreviewed``: no adversarial review has been issued. An agent ``accept``
-  without a prior ``adversarial_pass`` leaves the item unreviewed because
-  ``accept`` is a gate, not a review verdict.
+Delegation (WI-012, closed)
+---------------------------
+The authoritative computation is :func:`regista.gate_rationale`, part of
+regista's public API since 0.5.3 (regista Plan 027). One call returns both
+the level *and* the evidence it rests on::
 
-Under the strict deployment gate, a same-lineage-reviewed item that reached
-``done`` must have done so via human accept — so it reads ``human-accepted``,
-not ``self-reviewed``.
+    {"assurance_level": AssuranceLevel, "reviewer_lineage": str | None,
+     "author_lineages": list[str], "reason": str, "profile": str}
+
+We pass the events dossier has already read rather than calling the
+store-side ``Regista.assurance.compute_assurance(work_item_id)`` facade,
+which would re-read the same event log per rendered row (an N+1 against the
+store). Both paths run the identical regista function on the identical
+events; ``gate_rationale`` additionally returns the lineage evidence, which
+the store-side ``compute_assurance`` does not.
+
+Honest degradation (dossier WI-014, preserved)
+-----------------------------------------------
+regista's ``same_lineage()`` returns ``False`` when the reviewer's lineage is
+**undeclared** — so an undeclared review is reported as *independent*. That
+is a fail-open for a UI whose entire point is not over-claiming. dossier does
+not recompute anything to fix this: it takes regista's level plus the
+evidence regista returned, and **downgrades any independence claim that has
+no lineage evidence behind it**, flagging the verdict as degraded. Rendering
+less than the engine claims is always safe; rendering more never is.
+
+Display vocabulary (unchanged, four levels):
+
+- ``unreviewed``: no adversarial review in the log.
+- ``self-reviewed``: the review shares a model lineage with the author's
+  events — or independence could not be *verified* (undeclared lineage).
+- ``independently-reviewed``: a cross-lineage adversarial review passed, with
+  both sides' lineages declared.
+- ``human-accepted``: a human accepted the reviewed work.
 """
 
 from __future__ import annotations
 
-from regista import Event
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
-_REVIEW_VERDICTS = frozenset({"adversarial_pass", "request_changes", "accept", "reject"})
+from regista import Event, gate_rationale
+
+# The gate profile dossier renders against. It affects only the ``reason``
+# field (and ``gate_permits_done``), never ``assurance_level`` — dossier is
+# deployed behind the strict two-stage review gate, so it asks strictly.
+_GATE_PROFILE = "strict"
+
+# regista's AssuranceLevel values -> dossier's display vocabulary.
+_REGISTA_TO_DISPLAY = {
+    "none": "unreviewed",
+    "self_reviewed": "self-reviewed",
+    "independently_reviewed": "independently-reviewed",
+    "human_accepted": "human-accepted",
+    "independently_and_accepted": "human-accepted",
+}
+
+# The regista levels that assert cross-lineage independence, and what each
+# degrades to when the evidence for that assertion is missing.
+_INDEPENDENCE_DOWNGRADE = {
+    "independently_reviewed": "self-reviewed",
+    "independently_and_accepted": "human-accepted",
+}
+
+_UNKNOWN_LEVEL = "unreviewed"
+
+# Mirrors ``regista._assurance._REVIEW_VERDICTS`` (regista 0.5.3). regista uses
+# it to decide which events count as *authorship* when collecting author
+# lineages; dossier needs the same partition to answer "did an agent author
+# this item without declaring a lineage?". It is mirrored rather than imported
+# because it is private to regista. If regista adds a verdict, the worst case
+# here is that dossier treats that verdict as authorship and downgrades an
+# independence claim it could have kept — i.e. it fails toward under-claiming.
+_REVIEW_VERDICTS = frozenset(
+    {"accept", "request_changes", "adversarial_pass", "reject", "comment"}
+)
 
 
-def compute_assurance_level(events: list[Event]) -> str:
-    """Compute the review-assurance level from an item's event history.
+@dataclass(frozen=True, slots=True)
+class AssuranceVerdict:
+    """What dossier renders, plus the provenance of the answer.
 
-    Returns one of: ``unreviewed``, ``self-reviewed``,
-    ``independently-reviewed``, ``human-accepted``.
+    ``level`` is what the UI shows. ``regista_level`` is what the engine
+    said. When they differ, ``degraded`` is True and ``degradation_reason``
+    says exactly why dossier claims less than regista did.
     """
-    has_human_accept = False
-    has_cross_lineage_review = False
-    has_same_lineage_review = False
 
-    author_lineages: set[str] = set()
-    for event in events:
-        if event.transition == "created":
-            meta = getattr(event, "actor_metadata", None)
-            if isinstance(meta, dict) and meta.get("model_lineage"):
-                author_lineages.add(str(meta["model_lineage"]))
+    level: str
+    regista_level: str
+    source: str
+    reviewer_lineage: str | None
+    author_lineages: tuple[str, ...]
+    degraded: bool
+    degradation_reason: str | None
+    undeclared_agent_author: bool = False
 
+    @property
+    def independence_verifiable(self) -> bool:
+        """True when the evidence for an independence claim holds up."""
+        return bool(self.reviewer_lineage) and not self.undeclared_agent_author
+
+
+def compute_assurance_verdict(events: Sequence[Event]) -> AssuranceVerdict:
+    """Ask regista for the assurance level; render it honestly.
+
+    Named ``compute_*`` for continuity with the call sites, but the level is
+    not computed here — it comes from :func:`regista.gate_rationale`. The only
+    local decision is whether regista's answer over-claims independence
+    relative to the evidence (see module docstring); that check inspects the
+    event log for *evidence*, it never derives a level of its own.
+    """
+    event_list = list(events)
+    rationale = gate_rationale(event_list, _GATE_PROFILE)
+    return _verdict_from_rationale(
+        rationale,
+        undeclared_agent_author=_has_undeclared_agent_author(event_list),
+    )
+
+
+def _has_undeclared_agent_author(events: Sequence[Event]) -> bool:
+    """Did an *agent* author this item without declaring a model lineage?
+
+    A human author with no lineage is not a problem — a human and a model are
+    trivially independent. An agent author whose lineage is undeclared is:
+    the reviewer's lineage cannot be shown to differ from it.
+    """
     for event in events:
-        if event.transition not in _REVIEW_VERDICTS:
+        if getattr(event, "transition", None) in _REVIEW_VERDICTS:
             continue
-
-        actor_kind = getattr(event, "actor_kind", "system")
+        if getattr(event, "actor_kind", None) != "agent":
+            continue
         meta = getattr(event, "actor_metadata", None)
-        reviewer_lineage = None
-        if isinstance(meta, dict):
-            reviewer_lineage = meta.get("model_lineage")
+        if not (isinstance(meta, dict) and meta.get("model_lineage")):
+            return True
+    return False
 
-        if event.transition == "accept" and actor_kind == "human":
-            has_human_accept = True
-        elif event.transition == "adversarial_pass":
-            # Normalize to str for comparison — author lineages are stored
-            # as str() above, so the reviewer side must match.
-            reviewer_lineage_str = str(reviewer_lineage) if reviewer_lineage else None
-            if reviewer_lineage_str and reviewer_lineage_str not in author_lineages:
-                has_cross_lineage_review = True
-            else:
-                has_same_lineage_review = True
-        # accept (by agent), reject, and request_changes are review-related
-        # transitions but not adversarial reviews — they don't contribute
-        # to the lineage-based assurance level. Only adversarial_pass does.
 
-    if has_human_accept:
-        return "human-accepted"
-    if has_cross_lineage_review:
-        return "independently-reviewed"
-    if has_same_lineage_review:
-        return "self-reviewed"
-    return "unreviewed"
+def _verdict_from_rationale(
+    rationale: dict[str, Any],
+    *,
+    undeclared_agent_author: bool = False,
+) -> AssuranceVerdict:
+    raw_level = rationale.get("assurance_level")
+    # AssuranceLevel is a StrEnum; str() gives the wire value either way.
+    regista_level = str(raw_level) if raw_level is not None else "none"
+
+    reviewer_lineage_raw = rationale.get("reviewer_lineage")
+    reviewer_lineage = str(reviewer_lineage_raw) if reviewer_lineage_raw else None
+    author_lineages_raw = rationale.get("author_lineages") or []
+    author_lineages = tuple(str(x) for x in author_lineages_raw if x)
+
+    display = _REGISTA_TO_DISPLAY.get(regista_level)
+    if display is None:
+        # An assurance level this dossier does not know about. Do not guess a
+        # generous reading — render the floor and say so.
+        return AssuranceVerdict(
+            level=_UNKNOWN_LEVEL,
+            regista_level=regista_level,
+            source="regista",
+            reviewer_lineage=reviewer_lineage,
+            author_lineages=author_lineages,
+            degraded=True,
+            degradation_reason=(
+                f"regista reported assurance level {regista_level!r}, which this "
+                "dossier build does not know how to render; showing the floor"
+            ),
+            undeclared_agent_author=undeclared_agent_author,
+        )
+
+    downgrade = _INDEPENDENCE_DOWNGRADE.get(regista_level)
+    if downgrade is not None:
+        missing = _missing_independence_evidence(
+            reviewer_lineage, undeclared_agent_author
+        )
+        if missing is not None:
+            return AssuranceVerdict(
+                level=downgrade,
+                regista_level=regista_level,
+                source="regista",
+                reviewer_lineage=reviewer_lineage,
+                author_lineages=author_lineages,
+                degraded=True,
+                degradation_reason=missing,
+                undeclared_agent_author=undeclared_agent_author,
+            )
+
+    return AssuranceVerdict(
+        level=display,
+        regista_level=regista_level,
+        source="regista",
+        reviewer_lineage=reviewer_lineage,
+        author_lineages=author_lineages,
+        degraded=False,
+        degradation_reason=None,
+        undeclared_agent_author=undeclared_agent_author,
+    )
+
+
+def _missing_independence_evidence(
+    reviewer_lineage: str | None,
+    undeclared_agent_author: bool,
+) -> str | None:
+    """Why an independence claim cannot be verified, or ``None`` if it can."""
+    if not reviewer_lineage:
+        return (
+            "independence not verifiable: the reviewer declared no model "
+            "lineage, so it cannot be shown to differ from the author's"
+        )
+    if undeclared_agent_author:
+        return (
+            "independence not verifiable: an agent authored this item without "
+            "declaring a model lineage"
+        )
+    return None
+
+
+def compute_assurance_level(events: Sequence[Event]) -> str:
+    """The display assurance level for an item's event history.
+
+    Thin accessor over :func:`compute_assurance_verdict` for the call sites
+    that only need the badge text.
+    """
+    return compute_assurance_verdict(events).level
 
 
 def assurance_label(level: str) -> str:

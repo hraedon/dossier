@@ -1,3 +1,6 @@
-<span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance: {{ assurance_label }}">
+<span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance: {{ assurance_label }} (computed by regista)">
   <span class="ds-pill__dot"></span>{{ assurance_label }}
 </span>
+{% if assurance_verdict is defined and assurance_verdict and assurance_verdict.degraded %}
+<span class="ds-chip mono" title="{{ assurance_verdict.degradation_reason }}">{{ assurance_verdict.degradation_reason }}</span>
+{% endif %}

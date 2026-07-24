@@ -28,6 +28,39 @@ The declared workflow lives in `src/dossier/workflows/dossier.workflow.yaml` and
 the authoritative state machine. dossier renders and drives it; regista enforces
 it.
 
+### Review assurance is regista's too (WI-012, closed)
+
+The review-assurance level — "was this self-reviewed, independently reviewed, or
+human-accepted?" — is a **provenance judgment**, so it belongs to the engine, not
+the face. dossier calls `regista.gate_rationale(events, "strict")` (regista's
+public API since 0.5.3, regista Plan 027) and renders the answer. `SUITE.lock`'s
+spine version and `pyproject.toml`'s floor are both `0.5.3` for this reason.
+
+`src/dossier/assurance.py` is the only seam. It does two things and nothing else:
+
+1. **Maps** regista's five `AssuranceLevel` values onto dossier's four-level
+   display vocabulary.
+2. **Downgrades an independence claim that has no evidence behind it.** regista's
+   `same_lineage()` returns `False` when a lineage is *undeclared*, so an
+   undeclared review is reported as `independently_reviewed`. For a UI whose whole
+   purpose is not over-claiming, that is a fail-open. dossier therefore renders
+   `self-reviewed` when the reviewer declared no model lineage, or when an agent
+   authored the item without declaring one — and flags the verdict `degraded` with
+   the reason, shown in the UI. (This preserves WI-014's fail-safe; regista's
+   *write-side* `adversarial_review` validator already refuses these reviews unless
+   `same_lineage_acknowledged` is set, so the two agree on the risk.)
+
+Rendering **less** than the engine claims is always safe; rendering more never is.
+The downgrade inspects the event log only for *evidence* (was a lineage declared?);
+it never derives a level of its own. If regista later reports independence with a
+confidence/evidence field of its own, rule 2 collapses into rule 1.
+
+The store-side `Regista.assurance.compute_assurance(work_item_id)` facade is the
+other delegation path; dossier does not use it because it re-reads the event log
+per rendered row (an N+1 against the store) and returns the level without the
+lineage evidence `gate_rationale` carries. Both run the same regista function over
+the same events.
+
 ## 2. The three provenance guarantees (MVP)
 
 These are the promises the verified-history view is allowed to make. Each maps to a

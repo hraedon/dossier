@@ -17,7 +17,7 @@ from .actors import Actor
 from .assurance import (
     assurance_class,
     assurance_label,
-    compute_assurance_level,
+    compute_assurance_verdict,
 )
 from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
@@ -940,7 +940,8 @@ def create_app(
                     "scheme": None,
                 }
 
-        assurance = compute_assurance_level(events)
+        verdict = compute_assurance_verdict(events)
+        assurance = verdict.level
 
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
@@ -960,6 +961,7 @@ def create_app(
                 "assurance_level": assurance,
                 "assurance_label": assurance_label(assurance),
                 "assurance_css": assurance_class(assurance),
+                "assurance_verdict": verdict,
             },
         )
 
@@ -1010,7 +1012,8 @@ def create_app(
                         "fingerprint": None,
                         "scheme": None,
                     }
-            assurance = compute_assurance_level(events)
+            verdict = compute_assurance_verdict(events)
+            assurance = verdict.level
 
             ctx = actor_context(request, actor)
             ctx["current_project"] = slug_to_project(project)
@@ -1030,6 +1033,7 @@ def create_app(
                     "assurance_level": assurance,
                     "assurance_label": assurance_label(assurance),
                     "assurance_css": assurance_class(assurance),
+                    "assurance_verdict": verdict,
                 },
                 status_code=status.HTTP_400_BAD_REQUEST,
             )

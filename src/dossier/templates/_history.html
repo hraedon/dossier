@@ -2,8 +2,13 @@
   <div class="ds-history__head">
     <h2 class="ds-history__title">verified history</h2>
     {% if assurance_level is defined and assurance_level %}
-    <span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance level">
+    <span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance level (computed by regista)">
       <span class="ds-pill__dot"></span>{{ assurance_label }}
+    </span>
+    {% endif %}
+    {% if assurance_verdict is defined and assurance_verdict and assurance_verdict.degraded %}
+    <span class="ds-pill ds-pill--warn" title="{{ assurance_verdict.degradation_reason }}">
+      <span class="ds-pill__dot"></span>degraded assurance
     </span>
     {% endif %}
     {% if integrity_drift == 0 %}

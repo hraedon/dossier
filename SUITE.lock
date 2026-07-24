@@ -44,7 +44,7 @@ sha = "9718b941939884fee94c260f19efe3e4040c456b"
 describe = "v0.5.3"
 # Mirrors the floor declared in pyproject.toml (the published lower bound); the
 # exact version to develop against is `version` above, not this floor.
-pyproject_floor = "regista-hraedon>=0.5.1"
+pyproject_floor = "regista-hraedon>=0.5.3"
 
 [container]
 registry = "ghcr.io"
