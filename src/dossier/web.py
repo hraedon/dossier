@@ -244,16 +244,31 @@ def verification_status_class(status: str) -> str:
         "verified": "ds-verify--ok",
         "gap-detected": "ds-verify--warn",
         "unverified": "ds-verify--crit",
+        # `unverifiable` is not a failure of the record — it is a failure to
+        # check it. It must not wear the same red as a broken chain, and it
+        # must never wear the green of a verified one.
+        "unverifiable": "ds-verify--warn",
     }.get(status, "ds-verify--muted")
 
 
 def verification_status_label(status: str) -> str:
     """Human-readable label for the verification status."""
     return {
-        "verified": "verified",
-        "gap-detected": "gap detected",
-        "unverified": "unverified",
+        "verified": "chain verified",
+        "gap-detected": "verified, trail incomplete",
+        "unverified": "verification FAILED",
+        "unverifiable": "could not be verified",
     }.get(status, status)
+
+
+def verification_pill_class(status: str) -> str:
+    """Pill modifier for the verification verdict (list + detail views)."""
+    return {
+        "verified": "ds-pill--ok",
+        "gap-detected": "ds-pill--warn",
+        "unverified": "ds-pill--crit",
+        "unverifiable": "ds-pill--warn",
+    }.get(status, "ds-pill--muted")
 
 
 def tool_call_status_class(status: str) -> str:

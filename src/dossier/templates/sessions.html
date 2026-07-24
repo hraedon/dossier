@@ -51,13 +51,10 @@
         <td class="mono tnum">{{ format_timestamp(s.start_time) }}</td>
         <td class="mono tnum">{{ format_timestamp(s.end_time) }}</td>
         <td>
-          {% if s.degraded %}
-          <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>degraded</span>
-          {% elif not s.chain_intact %}
-          <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>chain broken</span>
-          {% else %}
-          <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>intact</span>
-          {% endif %}
+          <span class="ds-pill {{ verification_pill_class(s.verification.status) }}"
+                title="{{ s.verification.reasons | join('; ') }}">
+            <span class="ds-pill__dot"></span>{{ verification_status_label(s.verification.status) }}
+          </span>
         </td>
       </tr>
       {% endfor %}

@@ -307,7 +307,9 @@ class RegistaGateway:
         binding. Returns a dict with::
 
             {
-                "verified": bool,
+                "verified": bool,             # signature valid AND signer known
+                "signature_valid": bool,      # the cryptographic check alone
+                "signer_registered": bool,    # key_id present in the registry
                 "principal_id": str | None,   # from the key's principal binding
                 "fingerprint": str | None,     # public-key fingerprint
                 "scheme": str | None,          # e.g. "ed25519", "hmac-sha256"
@@ -316,19 +318,28 @@ class RegistaGateway:
         An unverified or unregistered-signer event is returned with
         ``verified=False`` — the UI must never silently render it as trusted
         (Plan 014 WI-1.3 AC).
+
+        ``signature_valid`` and ``signer_registered`` are reported separately
+        because they are different failures: a signature that does not verify
+        means the record is *contradicted*, while an unregistered signer means
+        it merely cannot be *attributed*. Callers that must tell a human which
+        one happened (see ``provenance.verify_session_signatures``) need both;
+        callers that only need "may I render this as trusted?" use ``verified``.
         """
         info: dict[str, Any] = {
             "verified": False,
+            "signature_valid": False,
+            "signer_registered": False,
             "principal_id": None,
             "fingerprint": None,
             "scheme": None,
         }
         try:
             verified = self._reg.verify_event_signature(event)
-            info["verified"] = bool(verified)
+            info["signature_valid"] = bool(verified)
         except Exception:
             logger.debug("verify_event: signature verification failed", exc_info=True)
-            info["verified"] = False
+            info["signature_valid"] = False
 
         key_id = getattr(event, "key_id", None)
         if key_id:
@@ -340,12 +351,14 @@ class RegistaGateway:
                         info["principal_id"] = pk.get("principal_id")
                         info["fingerprint"] = pk.get("fingerprint")
                         info["scheme"] = pk.get("scheme")
+                        info["signer_registered"] = True
                         break
-                else:
-                    info["verified"] = False
             except Exception:
                 logger.debug("verify_event: public key lookup failed", exc_info=True)
-                info["verified"] = False
+                info["signer_registered"] = False
+        info["verified"] = bool(info["signature_valid"]) and (
+            not key_id or bool(info["signer_registered"])
+        )
         return info
 
     def has_principal_ops(self) -> bool:

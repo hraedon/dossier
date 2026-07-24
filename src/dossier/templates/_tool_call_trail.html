@@ -5,8 +5,10 @@
     <span class="ds-verify {{ verification_status_class(v.status) }}">
       <span class="ds-pill__dot"></span>{{ verification_status_label(v.status) }}
     </span>
-    {% if not detail.summary.chain_intact %}
+    {% if v.chain_state == "broken" %}
     <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>chain broken</span>
+    {% elif v.chain_state == "unknown" %}
+    <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>chain unchecked</span>
     {% endif %}
   </div>
 

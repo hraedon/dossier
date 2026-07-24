@@ -10,16 +10,49 @@
       <span class="ds-chip mono">principal: {{ session_principal_display(s) }}</span>
       <span class="ds-chip mono">harness: {{ harness_display(s.harnesses) }}</span>
       <span class="ds-chip mono">{{ s.event_count }} events</span>
-      {% if s.degraded %}
-      <span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>degraded</span>
-      {% elif not s.chain_intact %}
-      <span class="ds-pill ds-pill--crit"><span class="ds-pill__dot"></span>chain broken</span>
-      {% else %}
-      <span class="ds-pill ds-pill--ok"><span class="ds-pill__dot"></span>chain intact</span>
-      {% endif %}
+      {% set v = detail.verification %}
+      <span class="ds-pill {{ verification_pill_class(v.status) }}"
+            title="provenance verification verdict">
+        <span class="ds-pill__dot"></span>{{ verification_status_label(v.status) }}
+      </span>
     </div>
   </div>
   <a href="/sessions" class="ds-btn ds-btn--ghost">back</a>
+</div>
+
+{% set v = detail.verification %}
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">provenance verification</div>
+  <div class="ds-prose" style="font-size: var(--fs-sm);">
+    <div>
+      verdict:
+      <span class="ds-pill {{ verification_pill_class(v.status) }}">
+        <span class="ds-pill__dot"></span>{{ verification_status_label(v.status) }}
+      </span>
+    </div>
+    <div class="muted">
+      chain replay: <span class="mono">{{ v.chain_state }}</span> ·
+      signatures checked: <span class="mono tnum">{{ v.signatures_checked }}</span>
+    </div>
+    {% if v.reasons %}
+    <ul class="ds-findings">
+      {% for reason in v.reasons %}
+      <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if v.attribution_note %}
+    <div class="ds-prose muted" style="margin-top: var(--space-2);">
+      attribution: {{ v.attribution_note }}
+    </div>
+    {% endif %}
+    {% if not v.reasons and v.status == "verified" %}
+    <div class="muted">
+      Every attested event in this session replays and carries a signature that
+      verified. Nothing here is asserted on trust.
+    </div>
+    {% endif %}
+  </div>
 </div>
 
 {% if detail.attestation_event %}

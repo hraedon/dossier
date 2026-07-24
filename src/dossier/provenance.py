@@ -24,6 +24,7 @@ seam (``can_read_project``).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -73,11 +74,85 @@ class ToolCallEntry:
     harness_version: str | None
 
 
+CHAIN_INTACT = "intact"
+CHAIN_BROKEN = "broken"
+CHAIN_UNKNOWN = "unknown"
+
+# The four verdicts a human may be shown for a session's provenance chain.
+VERIFIED = "verified"
+GAP_DETECTED = "gap-detected"
+UNVERIFIED = "unverified"       # the chain or a signature demonstrably failed
+UNVERIFIABLE = "unverifiable"   # the check could not be run — say why
+
+
+@dataclass(frozen=True)
+class ChainIntegrity:
+    """Whether the replay check ran, and what it said.
+
+    ``unknown`` is deliberately distinct from ``broken``. "We could not reach
+    the store to check" and "the chain does not replay" are different claims,
+    and collapsing the first into the second (as the earlier boolean did) is a
+    false accusation — as dishonest as collapsing it into ``intact`` would be
+    a false reassurance.
+    """
+
+    state: str
+    reason: str | None = None
+
+    @property
+    def intact(self) -> bool:
+        return self.state == CHAIN_INTACT
+
+    @classmethod
+    def from_bool(cls, value: bool) -> ChainIntegrity:
+        return cls(CHAIN_INTACT if value else CHAIN_BROKEN)
+
+
 @dataclass(frozen=True)
 class VerificationStatus:
+    """The verification verdict rendered for a session.
+
+    ``status`` is one of :data:`VERIFIED`, :data:`GAP_DETECTED`,
+    :data:`UNVERIFIED`, :data:`UNVERIFIABLE`. ``reasons`` carries the
+    human-readable *why* for anything that is not ``verified`` — a verdict
+    without a reason is not an honest verdict.
+    """
+
     status: str
     chain_intact: bool
     degradation_flags: list[str] = field(default_factory=list)
+    chain_state: str = CHAIN_INTACT
+    chain_reason: str | None = None
+    signature_findings: list[str] = field(default_factory=list)
+    signatures_checked: int = 0
+    unattributed_signatures: int = 0
+
+    @property
+    def attribution_note(self) -> str | None:
+        """Events whose signature is sound but whose signer is unnamed.
+
+        Reported alongside the verdict rather than folded into it: an
+        unregistered signing key does not make the record wrong, it makes it
+        unattributable, and a human deserves to be told which.
+        """
+        if not self.unattributed_signatures:
+            return None
+        return (
+            f"{self.unattributed_signatures} of {self.signatures_checked} "
+            "signatures verified but were made with a key that is not in "
+            "regista's public-key registry — the record is intact but cannot "
+            "be attributed to a named principal"
+        )
+
+    @property
+    def reasons(self) -> list[str]:
+        """Every reason this verdict is not a clean ``verified``."""
+        out: list[str] = []
+        if self.chain_reason:
+            out.append(self.chain_reason)
+        out.extend(self.signature_findings)
+        out.extend(self.degradation_flags)
+        return out
 
 
 @dataclass(frozen=True)
@@ -93,6 +168,7 @@ class SessionSummary:
     degraded: bool
     project_slug: str
     chain_intact: bool
+    verification: VerificationStatus
 
 
 @dataclass(frozen=True)
@@ -261,16 +337,35 @@ def build_tool_call_trail(events: list[Event]) -> list[ToolCallEntry]:
 
 
 def compute_verification(
-    chain_intact: bool,
+    chain_intact: bool | ChainIntegrity,
     tool_calls: list[ToolCallEntry],
+    *,
+    signatures: SignatureReport | None = None,
 ) -> VerificationStatus:
-    """Compute the verification status from chain integrity + trail gaps.
+    """Compute the verification verdict for a session.
+
+    Inputs are all real results from regista/cairn: the replay outcome, the
+    per-event signature checks, and the shape of the attested trail. Nothing
+    here defaults to optimism — an input that could not be obtained produces
+    ``unverifiable``, never ``verified``.
 
     Returns one of:
-    - ``verified``: chain intact, no degradation detected
-    - ``gap-detected``: chain intact but trail has gaps (orphaned begins/ends)
-    - ``unverified``: chain broken (replay drift detected)
+
+    - ``verified``: the chain replays, every checked signature verified, and
+      the trail has no gaps.
+    - ``gap-detected``: the record verifies, but it is incomplete — a tool call
+      began and never ended, or ended without a begin.
+    - ``unverified``: the chain does not replay, or a signature failed. The
+      record is contradicted by the evidence.
+    - ``unverifiable``: the check could not be performed. ``chain_reason``
+      says why.
     """
+    integrity = (
+        chain_intact
+        if isinstance(chain_intact, ChainIntegrity)
+        else ChainIntegrity.from_bool(chain_intact)
+    )
+
     flags: list[str] = []
     for tc in tool_calls:
         if tc.status == "running":
@@ -278,22 +373,109 @@ def compute_verification(
         if tc.begin_timestamp is None and tc.end_timestamp is not None:
             flags.append(f"tool call {tc.tool} ({str(tc.work_item_id)[:8]}) has an end without a begin")
 
-    if not chain_intact:
+    report = signatures or SignatureReport()
+    findings = list(report.findings)
+
+    def _build(status: str, chain_reason: str | None) -> VerificationStatus:
         return VerificationStatus(
-            status="unverified",
-            chain_intact=False,
+            status=status,
+            chain_intact=integrity.intact,
             degradation_flags=flags,
+            chain_state=integrity.state,
+            chain_reason=chain_reason,
+            signature_findings=findings,
+            signatures_checked=report.checked,
+            unattributed_signatures=report.unattributed,
+        )
+
+    if integrity.state == CHAIN_BROKEN:
+        return _build(
+            UNVERIFIED,
+            integrity.reason or "the event chain does not replay (drift detected)",
+        )
+    if findings:
+        # A failed signature is a demonstrated failure, not an inability to
+        # check — it outranks an unknown chain state.
+        return _build(UNVERIFIED, integrity.reason)
+    if integrity.state == CHAIN_UNKNOWN:
+        return _build(
+            UNVERIFIABLE,
+            integrity.reason or "the chain integrity check could not be run",
         )
     if flags:
-        return VerificationStatus(
-            status="gap-detected",
-            chain_intact=True,
-            degradation_flags=flags,
+        return _build(GAP_DETECTED, None)
+    return _build(VERIFIED, None)
+
+
+def read_chain_integrity(gateway: RegistaGateway) -> ChainIntegrity:
+    """Ask regista to replay the project's chain, keeping the failure reason.
+
+    A store that cannot be reached yields ``unknown`` with the exception type
+    — never ``broken``, which would accuse the record of something the check
+    never established.
+    """
+    try:
+        report = gateway.integrity()
+    except Exception as exc:  # noqa: BLE001 — any store failure is 'unknown'
+        return ChainIntegrity(
+            CHAIN_UNKNOWN,
+            "the chain integrity check could not be run "
+            f"({type(exc).__name__}); this session's provenance is unverified, "
+            "not verified",
         )
-    return VerificationStatus(
-        status="verified",
-        chain_intact=True,
-        degradation_flags=[],
+    drift = report.replayed_drift
+    if drift:
+        return ChainIntegrity(
+            CHAIN_BROKEN,
+            f"the project's event chain does not replay ({drift} drift)",
+        )
+    return ChainIntegrity(CHAIN_INTACT)
+
+
+@dataclass(frozen=True)
+class SignatureReport:
+    """The result of verifying every signature in a session.
+
+    ``findings`` are hard failures — a signature that did not verify, or a
+    check that could not be run. ``unattributed`` counts events whose
+    signature *is* valid but whose signing key is not in regista's public-key
+    registry: the record is intact, it just cannot be tied to a named
+    principal. Conflating the two would either accuse a sound record of being
+    forged, or quietly drop the attribution gap.
+    """
+
+    findings: list[str] = field(default_factory=list)
+    checked: int = 0
+    unattributed: int = 0
+
+
+def verify_session_signatures(
+    gateway: RegistaGateway,
+    events: Sequence[Event],
+) -> SignatureReport:
+    """Verify each event's signature via regista (never a cached optimism)."""
+    findings: list[str] = []
+    checked = 0
+    unattributed = 0
+    for event in events:
+        try:
+            info = gateway.verify_event(event)
+        except Exception as exc:  # noqa: BLE001
+            findings.append(
+                f"signature for the {event.transition} event could not be "
+                f"checked ({type(exc).__name__})"
+            )
+            continue
+        checked += 1
+        if not info.get("signature_valid"):
+            findings.append(
+                f"the signature on the {event.transition} event "
+                f"({str(event.event_id)[:8]}) did not verify"
+            )
+        elif not info.get("signer_registered"):
+            unattributed += 1
+    return SignatureReport(
+        findings=findings, checked=checked, unattributed=unattributed
     )
 
 
@@ -332,11 +514,7 @@ def read_session_summaries(
     tool_call_events = _read_tool_call_events(gateway)
     tc_by_session = _group_by_session(tool_call_events)
 
-    try:
-        integrity = gateway.integrity()
-        chain_intact = integrity.replayed_drift == 0
-    except Exception:
-        chain_intact = False
+    integrity = read_chain_integrity(gateway)
 
     summaries: list[SessionSummary] = []
     for att_ev in attestation_events:
@@ -355,6 +533,13 @@ def read_session_summaries(
         end_time = max(timestamps) if timestamps else None
 
         degraded = any(tc.status == "running" for tc in tool_calls)
+        # The list view reports the chain + trail verdict. Per-event signature
+        # verification is deliberately left to the detail view: it is one call
+        # per event, and an estate-wide list must not turn into thousands of
+        # them. The list therefore never claims more than the detail does —
+        # `signatures_checked=0` says the signatures were not part of this
+        # verdict.
+        verification = compute_verification(integrity, tool_calls)
 
         summaries.append(SessionSummary(
             session_id=sid,
@@ -367,7 +552,8 @@ def read_session_summaries(
             end_time=end_time,
             degraded=degraded,
             project_slug=project_slug,
-            chain_intact=chain_intact,
+            chain_intact=integrity.intact,
+            verification=verification,
         ))
 
     summaries.sort(key=lambda s: s.attested_at or datetime.min, reverse=True)
@@ -400,13 +586,15 @@ def read_session_detail(
     ]
     tool_calls = build_tool_call_trail(tc_events)
 
-    try:
-        integrity = gateway.integrity()
-        chain_intact = integrity.replayed_drift == 0
-    except Exception:
-        chain_intact = False
-
-    verification = compute_verification(chain_intact, tool_calls)
+    integrity = read_chain_integrity(gateway)
+    signed_events: list[Event] = list(tc_events)
+    if att_ev is not None:
+        signed_events.insert(0, att_ev)
+    verification = compute_verification(
+        integrity,
+        tool_calls,
+        signatures=verify_session_signatures(gateway, signed_events),
+    )
 
     if att_ev is None:
         if not tool_calls:
@@ -435,7 +623,8 @@ def read_session_detail(
         end_time=end_time,
         degraded=degraded,
         project_slug=project_slug,
-        chain_intact=chain_intact,
+        chain_intact=integrity.intact,
+        verification=verification,
     )
 
     return SessionDetail(

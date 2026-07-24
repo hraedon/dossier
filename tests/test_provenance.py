@@ -555,7 +555,9 @@ def test_sessions_route_shows_session(client, gateway):
     assert _SESSION_ID[:8] in resp.text
     assert _PRINCIPAL_DISPLAY in resp.text
     assert f"{_HARNESS_NAME}@{_HARNESS_VERSION}" in resp.text
-    assert "intact" in resp.text.lower()
+    # WI-C: the list carries the real verification verdict, not a bare
+    # "intact" derived from the project-wide chain flag.
+    assert "chain verified" in resp.text.lower()
 
 
 def test_sessions_route_shows_degraded(client, gateway):
@@ -565,7 +567,7 @@ def test_sessions_route_shows_degraded(client, gateway):
 
     resp = client.get("/sessions")
     assert resp.status_code == 200
-    assert "degraded" in resp.text.lower()
+    assert "trail incomplete" in resp.text.lower()
 
 
 def test_session_detail_route_unauthenticated_redirects(client):
@@ -618,7 +620,7 @@ def test_session_detail_route_degraded_shows_gap(client, gateway):
 
     resp = client.get(f"/p/dossier-test/sessions/{_SESSION_ID}")
     assert resp.status_code == 200
-    assert "gap detected" in resp.text.lower()
+    assert "trail incomplete" in resp.text.lower()
     assert "degradation" in resp.text.lower()
     assert "running" in resp.text.lower()
 
@@ -676,3 +678,212 @@ def test_session_detail_route_shows_attestation_section(client, gateway):
     assert "In scope: claude-code" in resp.text
     assert _PRINCIPAL_DISPLAY in resp.text
     assert "on behalf of" in resp.text.lower()
+
+
+# ── WI-C: session verification UX ────────────────────────────────────────
+#
+# A human looking at a session must be able to see whether its provenance
+# chain actually verifies — and when it does not, why. Nothing below asserts a
+# hardcoded optimistic value; every verdict is driven by a real regista result.
+
+
+def test_unreachable_store_is_unverifiable_not_broken(gateway, monkeypatch):
+    """The distinction WI-C exists for: 'could not check' != 'chain broken'."""
+    from dossier.provenance import CHAIN_UNKNOWN, read_chain_integrity
+
+    def _boom(*args, **kwargs):
+        raise ConnectionError("store unreachable")
+
+    monkeypatch.setattr(gateway, "integrity", _boom)
+    integrity = read_chain_integrity(gateway)
+    assert integrity.state == CHAIN_UNKNOWN
+    assert integrity.intact is False
+    assert integrity.reason is not None
+    assert "could not be run" in integrity.reason
+    assert "not verified" in integrity.reason
+
+
+def test_broken_chain_is_reported_as_broken_with_the_drift(gateway, monkeypatch):
+    from dossier.provenance import CHAIN_BROKEN, read_chain_integrity
+
+    class _Drifted:
+        replayed_drift = 3
+
+    monkeypatch.setattr(gateway, "integrity", lambda *a, **k: _Drifted())
+    integrity = read_chain_integrity(gateway)
+    assert integrity.state == CHAIN_BROKEN
+    assert integrity.reason is not None
+    assert "3 drift" in integrity.reason
+
+
+def test_unverifiable_chain_never_renders_as_verified(gateway, monkeypatch):
+    from dossier.provenance import UNVERIFIABLE
+
+    _attest_session(gateway)
+    wid = _begin_tool_call(gateway, tool="Edit")
+    _end_tool_call(gateway, wid, tool="Edit")
+
+    monkeypatch.setattr(
+        gateway, "integrity", lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
+    )
+    detail = read_session_detail(gateway, _SESSION_ID, "dossier-test")
+    assert detail is not None
+    assert detail.verification.status == UNVERIFIABLE
+    assert detail.verification.chain_intact is False
+    assert detail.verification.reasons  # a verdict without a reason is not honest
+
+
+def test_invalid_signature_makes_the_session_unverified(gateway, monkeypatch):
+    """A tampered/unverifiable signature is a failure, not a footnote."""
+    from dossier.provenance import UNVERIFIED
+
+    _attest_session(gateway)
+    wid = _begin_tool_call(gateway, tool="Edit")
+    _end_tool_call(gateway, wid, tool="Edit")
+
+    monkeypatch.setattr(
+        gateway,
+        "verify_event",
+        lambda event: {
+            "verified": False,
+            "signature_valid": False,
+            "signer_registered": True,
+        },
+    )
+    detail = read_session_detail(gateway, _SESSION_ID, "dossier-test")
+    assert detail is not None
+    assert detail.verification.status == UNVERIFIED
+    assert detail.verification.signature_findings
+    assert any("did not verify" in f for f in detail.verification.signature_findings)
+
+
+def test_unregistered_signer_is_attribution_not_failure(gateway):
+    """A sound signature from an unregistered key: intact, but unattributable.
+
+    The in-memory test store signs with an HMAC keyset that is not in the
+    public-key registry, which is exactly this case.
+    """
+    _attest_session(gateway)
+    wid = _begin_tool_call(gateway, tool="Edit")
+    _end_tool_call(gateway, wid, tool="Edit")
+
+    detail = read_session_detail(gateway, _SESSION_ID, "dossier-test")
+    assert detail is not None
+    v = detail.verification
+    assert v.status == "verified"
+    assert v.signature_findings == []
+    assert v.signatures_checked == 3
+    assert v.unattributed_signatures == 3
+    assert v.attribution_note is not None
+    assert "cannot" in v.attribution_note
+
+
+def test_signature_check_error_is_a_finding(gateway, monkeypatch):
+    from dossier.provenance import UNVERIFIED
+
+    _attest_session(gateway)
+    wid = _begin_tool_call(gateway, tool="Edit")
+    _end_tool_call(gateway, wid, tool="Edit")
+
+    def _boom(event):
+        raise RuntimeError("verifier exploded")
+
+    monkeypatch.setattr(gateway, "verify_event", _boom)
+    detail = read_session_detail(gateway, _SESSION_ID, "dossier-test")
+    assert detail is not None
+    assert detail.verification.status == UNVERIFIED
+    assert any(
+        "could not be checked" in f
+        for f in detail.verification.signature_findings
+    )
+
+
+def test_failed_signature_outranks_an_unknown_chain(gateway):
+    """A demonstrated failure is reported as failure, not as 'cannot check'."""
+    from dossier.provenance import (
+        CHAIN_UNKNOWN,
+        UNVERIFIED,
+        ChainIntegrity,
+        SignatureReport,
+        compute_verification,
+    )
+
+    v = compute_verification(
+        ChainIntegrity(CHAIN_UNKNOWN, "store down"),
+        [],
+        signatures=SignatureReport(findings=["bad sig"], checked=1),
+    )
+    assert v.status == UNVERIFIED
+
+
+def test_summaries_carry_a_verdict_without_claiming_signature_checks(gateway):
+    """The list view must not imply it checked signatures when it did not."""
+    _attest_session(gateway)
+    wid = _begin_tool_call(gateway, tool="Edit")
+    _end_tool_call(gateway, wid, tool="Edit")
+
+    summaries = read_session_summaries(gateway, "dossier-test")
+    assert len(summaries) == 1
+    v = summaries[0].verification
+    assert v.status == "verified"
+    assert v.signatures_checked == 0
+    assert v.attribution_note is None
+
+
+def test_session_detail_route_renders_the_verification_panel(client, gateway):
+    _login(client)
+    _attest_session(gateway)
+    wid = _begin_tool_call(gateway, tool="Edit")
+    _end_tool_call(gateway, wid, tool="Edit")
+
+    resp = client.get(f"/p/dossier-test/sessions/{_SESSION_ID}")
+    assert resp.status_code == 200
+    text = resp.text.lower()
+    assert "provenance verification" in text
+    assert "chain verified" in text
+    assert "signatures checked" in text
+    # The attribution gap is stated, not hidden behind the green verdict.
+    assert "attribution" in text
+    assert "public-key registry" in text
+
+
+def test_session_detail_route_renders_an_unverifiable_session(
+    client, gateway, monkeypatch
+):
+    """A session whose chain cannot be checked says so, and says why."""
+    _login(client)
+    _attest_session(gateway)
+    _begin_tool_call(gateway, tool="Edit")
+
+    monkeypatch.setattr(
+        gateway,
+        "integrity",
+        lambda *a, **k: (_ for _ in ()).throw(ConnectionError("store unreachable")),
+    )
+    resp = client.get(f"/p/dossier-test/sessions/{_SESSION_ID}")
+    assert resp.status_code == 200
+    text = resp.text.lower()
+    assert "could not be verified" in text
+    assert "could not be run" in text
+    assert "chain verified" not in text
+
+
+def test_session_detail_route_renders_a_broken_session(client, gateway, monkeypatch):
+    _login(client)
+    _attest_session(gateway)
+    _begin_tool_call(gateway, tool="Edit")
+
+    monkeypatch.setattr(
+        gateway,
+        "verify_event",
+        lambda event: {
+            "verified": False,
+            "signature_valid": False,
+            "signer_registered": True,
+        },
+    )
+    resp = client.get(f"/p/dossier-test/sessions/{_SESSION_ID}")
+    assert resp.status_code == 200
+    text = resp.text.lower()
+    assert "verification failed" in text
+    assert "did not verify" in text

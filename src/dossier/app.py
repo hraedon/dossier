@@ -265,6 +265,7 @@ def create_app(
         harness_display=web.harness_display,
         verification_status_class=web.verification_status_class,
         verification_status_label=web.verification_status_label,
+        verification_pill_class=web.verification_pill_class,
         tool_call_status_class=web.tool_call_status_class,
         format_digest=web.format_digest,
         format_bytes=web.format_bytes,
