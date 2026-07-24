@@ -3,6 +3,28 @@
 The policy is a deployment input, not work state. Regista remains authoritative
 for projects, ownership, events, and workflow; dossier decides which of those
 projects an authenticated human face may disclose.
+
+**Deny by default (dossier WI-017).** ``enforce`` is the resolved default: an
+authenticated principal sees a project only when the policy names them. The
+old flat-open posture still exists but must now be *chosen*
+(``DOSSIER_PROJECT_ACCESS_MODE=open``) — it is never the fallback.
+
+Two sources compose into one policy:
+
+- ``DOSSIER_PROJECT_ACL_PATH`` — the owner-controlled JSON ACL (per-project
+  grants plus administrators).
+- ``DOSSIER_BOOTSTRAP_ADMINS`` — a comma-separated list of principal IDs (or
+  ``name:``/``guid:`` group claims) granted administrator access with no ACL
+  file at all. This is the **recovery path**: an operator upgrading into
+  deny-by-default, or one who has locked themselves out, sets this one
+  variable and is back in. It is deliberately explicit — there is no silent
+  fallback to open, and no bootstrap identity is implied or built in.
+
+An ``enforce`` deployment with neither source configured denies everything.
+That is refused loudly rather than silently: the doctor reports ``fail`` with
+the remediation, ``/healthz`` returns 503, and startup logs an error. It is
+not "fixed" by reopening access, because a face that cannot tell you who may
+read a project must not guess.
 """
 
 from __future__ import annotations
@@ -10,15 +32,19 @@ from __future__ import annotations
 import json
 import hashlib
 import hmac
+import logging
 import os
 import stat
 import uuid
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
 from ._platform import open_no_follow
 from .actors import Actor
+
+_log = logging.getLogger("dossier.authz")
 
 AccessMode = Literal["open", "audit", "enforce"]
 
@@ -37,6 +63,19 @@ class AccessGrant:
         return actor.actor_id in self.principals or bool(
             self.groups.intersection(actor.groups)
         )
+
+    def union(self, other: AccessGrant) -> AccessGrant:
+        return AccessGrant(
+            self.principals | other.principals,
+            self.groups | other.groups,
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.principals and not self.groups
+
+
+_EMPTY_GRANT = AccessGrant(frozenset(), frozenset())
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +98,11 @@ class ProjectAccessPolicy:
     def decide(self, actor: Actor, project: str) -> AccessDecision:
         if self.administrators.matches(actor):
             return AccessDecision(True, "explicit-administrator")
+        if self.is_empty:
+            # No ACL and no bootstrap administrators. Denying is the only
+            # honest answer — but say *which* misconfiguration caused it so
+            # the operator is not left guessing at a bare 403.
+            return AccessDecision(False, "no-access-policy-configured")
         grant = self.projects.get(project)
         if grant is None:
             return AccessDecision(False, "project-not-declared")
@@ -68,21 +112,103 @@ class ProjectAccessPolicy:
             return AccessDecision(True, "project-membership")
         return AccessDecision(False, "no-matching-principal-or-group")
 
+    @property
+    def is_empty(self) -> bool:
+        """True when the policy names nobody — it can only deny."""
+        return self.administrators.is_empty and not self.projects
+
+
+EMPTY_POLICY = ProjectAccessPolicy(administrators=_EMPTY_GRANT, projects={})
+
 
 def can_read_project(
     actor: Actor,
     project: str,
-    policy: ProjectAccessPolicy | None = None,
+    policy: ProjectAccessPolicy | None,
+    *,
+    mode: AccessMode,
 ) -> bool:
     """The single project-read authorization seam.
 
-    ``policy=None`` preserves the v1 open posture. Deployed audit/enforcement
-    paths pass a validated policy. Keeping the compatibility behavior here lets
-    existing single-team installations upgrade without silently denying access.
+    There is no permissive default: the caller must state the posture. ``open``
+    discloses everything (and is only ever reached when an operator explicitly
+    chose it); ``audit`` evaluates the policy and permits the would-be denial
+    after logging it; ``enforce`` applies the decision.
     """
-    if policy is None:
+    if mode == "open":
         return True
-    return policy.decide(actor, project).allowed
+    decision = (policy or EMPTY_POLICY).decide(actor, project)
+    if decision.allowed:
+        return True
+    if mode == "audit":
+        _log.warning(
+            "project access would be denied actor=%s project=%s reason=%s",
+            actor.actor_id,
+            project,
+            decision.reason,
+        )
+        return True
+    return False
+
+
+def parse_bootstrap_administrators(
+    values: Iterable[str],
+    *,
+    group_claim_key: bytes | None = None,
+) -> AccessGrant:
+    """Parse ``DOSSIER_BOOTSTRAP_ADMINS`` into an administrator grant.
+
+    Entries are principal IDs, or group claims prefixed ``name:`` / ``guid:``
+    (the same claim vocabulary the ACL uses). Validation is identical to the
+    ACL's — a malformed bootstrap entry is an error, never a silently ignored
+    security control.
+    """
+    principals: list[str] = []
+    groups: list[str] = []
+    for raw in values:
+        value = raw.strip()
+        if not value:
+            continue
+        _validate_identifier(value, "bootstrap administrator")
+        if value.startswith(("name:", "guid:")):
+            _validate_group_claim(value, "bootstrap administrator")
+            groups.append(value)
+        else:
+            principals.append(value)
+    if len(set(principals)) != len(principals) or len(set(groups)) != len(groups):
+        raise ValueError("bootstrap administrators contain duplicates")
+    if group_claim_key is not None:
+        groups = [encode_group_claim(group, group_claim_key) for group in groups]
+    return AccessGrant(frozenset(principals), frozenset(groups))
+
+
+def build_project_access_policy(
+    acl_path: str,
+    bootstrap_administrators: Sequence[str] = (),
+    *,
+    group_claim_key: bytes | None = None,
+) -> ProjectAccessPolicy:
+    """Compose the effective policy from the ACL file and bootstrap admins.
+
+    Either source may be absent. When both are, the result is
+    :data:`EMPTY_POLICY` — a policy that denies every project, which callers
+    must surface (see the module docstring), not paper over.
+    """
+    if acl_path.strip():
+        policy = load_project_access_policy(
+            acl_path, group_claim_key=group_claim_key
+        )
+    else:
+        policy = EMPTY_POLICY
+    bootstrap = parse_bootstrap_administrators(
+        bootstrap_administrators, group_claim_key=group_claim_key
+    )
+    if bootstrap.is_empty:
+        return policy
+    return ProjectAccessPolicy(
+        administrators=policy.administrators.union(bootstrap),
+        projects=policy.projects,
+    )
 
 
 def load_project_access_policy(

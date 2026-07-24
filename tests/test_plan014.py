@@ -71,6 +71,8 @@ def _settings(tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
 
 
@@ -142,14 +144,17 @@ def _gw(client, project_name):
 # ── 1. Authz seam ────────────────────────────────────────────────────────
 
 
-def test_authz_seam_can_read_project_returns_true_v1():
-    """can_read_project returns True for any authenticated actor in v1."""
+def test_authz_seam_has_no_permissive_default(): 
+    """WI-017: the seam denies unless a posture and policy say otherwise.
+
+    The v1 behaviour (True for any authenticated actor) is now reachable only
+    through an explicit ``open`` posture — there is no implicit fallback.
+    """
     from dossier.authz import can_read_project
 
-    assert can_read_project(ALICE, "dossier_test") is True
-    assert can_read_project(ALICE, "cert_watch") is True
-    assert can_read_project(BOB, "dossier_test") is True
-    assert can_read_project(AGENT_GLM, "dossier_test") is True
+    for actor in (ALICE, BOB, AGENT_GLM):
+        assert can_read_project(actor, "dossier_test", None, mode="enforce") is False
+        assert can_read_project(actor, "dossier_test", None, mode="open") is True
 
 
 def test_authz_seam_all_project_routes_go_through_seam(client, monkeypatch):
@@ -157,7 +162,10 @@ def test_authz_seam_all_project_routes_go_through_seam(client, monkeypatch):
     _login(client)
     issue_url = _create_issue_via_ui(client, "dossier-test", "Seam test")
 
-    monkeypatch.setattr("dossier.app.can_read_project", lambda actor, project: False)
+    monkeypatch.setattr(
+        "dossier.app.can_read_project",
+        lambda actor, project, policy, *, mode: False,
+    )
 
     resp = client.get("/p/dossier-test")
     assert resp.status_code == 403
@@ -196,7 +204,7 @@ def test_authz_seam_blocks_unauthorized_access(multi_client, monkeypatch):
     """can_read_project returning False for one project blocks only that project."""
     _login(multi_client)
 
-    def selective(actor, project):
+    def selective(actor, project, policy, *, mode):
         if project == _PROJECT_A:
             return False
         return True

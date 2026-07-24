@@ -140,8 +140,9 @@ Copy `.env.example` to `.env` (`.env` is gitignored) and fill in real values.
 | `DOSSIER_NOTIFICATION_SOURCE` | no | `dossier` | agent-wake source name used in the signed envelope and header |
 | `DOSSIER_NOTIFICATION_IDENTITY` | no | — | sender principal for agent-wake source identity gating |
 | `DOSSIER_BASE_URL` | no | `http://localhost:8000` | public origin used for notification deep links |
-| `DOSSIER_PROJECT_ACCESS_MODE` | no | `open` | cross-project disclosure posture: `open`, `audit`, or `enforce` |
+| `DOSSIER_PROJECT_ACCESS_MODE` | no | `enforce` | cross-project disclosure posture: `open`, `audit`, or `enforce` — **deny by default** |
 | `DOSSIER_PROJECT_ACL_PATH` | audit/enforce | — | operator-owned project ACL JSON; symlinks and writable files are refused |
+| `DOSSIER_BOOTSTRAP_ADMINS` | recovery | — | comma-separated principal IDs / `name:`/`guid:` group claims granted admin access with no ACL file |
 
 For authenticated human notifications through agent-wake, configure the same
 32-byte-or-longer HMAC secret on both sides. Dossier accepts the suite secret-ref
@@ -165,14 +166,27 @@ agent-wake compatible.
 
 ### Project access control
 
-The compatibility default is `open`: every authenticated principal can read
-every configured or discovered project, and doctor reports a warning. A team
-deployment should progress through `audit` to `enforce`:
+> **Breaking change (WI-017).** Access is now **deny by default**. The old
+> flat-open posture — every authenticated principal reads every project — is
+> still available but must be chosen explicitly with
+> `DOSSIER_PROJECT_ACCESS_MODE=open`; it is no longer what you get by omission.
+> **Upgrading a running instance? Read [docs/project-access.md](docs/project-access.md)
+> first** — it covers the migration, the lockout state, and the
+> `DOSSIER_BOOTSTRAP_ADMINS` recovery path.
+
+`DOSSIER_PROJECT_ACCESS_MODE` resolves to `enforce` when unset. An `enforce`
+deployment with no ACL and no bootstrap administrators denies everything; that
+state is reported by the doctor as a `fail` with the remediation, and is
+recovered with one variable:
 
 ```dotenv
-DOSSIER_PROJECT_ACCESS_MODE=audit
+DOSSIER_PROJECT_ACCESS_MODE=enforce
+DOSSIER_BOOTSTRAP_ADMINS=11111111-1111-1111-1111-111111111111
 DOSSIER_PROJECT_ACL_PATH=/etc/dossier/project-acl.json
 ```
+
+`audit` is the safe intermediate step: the policy is evaluated and would-be
+denials are logged on `dossier.authz`, but access is still permitted.
 
 Start from [`project-acl.example.json`](project-acl.example.json). The policy is
 strict JSON with version `1`:

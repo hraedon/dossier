@@ -349,6 +349,8 @@ def test_registry_close_all_scrubs_materialized_temp_manifest(monkeypatch, tmp_p
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     registry = GatewayRegistry(settings=settings, known_projects=["dossier_test"])
     gw = registry.get("dossier_test")
@@ -402,6 +404,8 @@ def test_registry_build_failure_scrubs_temp_and_closes_pool(monkeypatch, tmp_pat
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     registry = GatewayRegistry(settings=settings, known_projects=["dossier_test"])
     with pytest.raises(RuntimeError, match="simulated workflow"):
@@ -450,6 +454,8 @@ def test_registry_literal_path_no_cleanup(monkeypatch, tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     registry = GatewayRegistry(settings=settings, known_projects=["dossier_test"])
     registry.get("dossier_test")
@@ -479,6 +485,8 @@ def test_health_secrets_check_skip_for_plaintext(tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     checks = _secrets_backend_checks(settings)
     assert len(checks) == 1
@@ -502,6 +510,8 @@ def test_health_secrets_check_fails_for_missing_file_manifest(tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     checks = _secrets_backend_checks(settings)
     key_check = [c for c in checks if c["name"] == "secrets_backend:REGISTA_KEY_PATH"][0]
@@ -528,6 +538,8 @@ def test_health_secrets_check_ok_for_env_refs(monkeypatch, tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     checks = _secrets_backend_checks(settings)
     statuses = {c["name"]: c["status"] for c in checks}
@@ -554,6 +566,8 @@ def test_health_secrets_check_fails_for_corrupt_file_manifest(tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     checks = _secrets_backend_checks(settings)
     key_check = [c for c in checks if c["name"] == "secrets_backend:REGISTA_KEY_PATH"][0]

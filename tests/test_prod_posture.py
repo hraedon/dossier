@@ -113,7 +113,8 @@ def test_dev_default_require_ssl_off(monkeypatch):
     settings = load_settings(strict=False)
     assert settings.env_mode == "dev"
     assert settings.require_ssl is False
-    assert settings.project_access_mode == "open"
+    # WI-017: project access is deny-by-default in dev too.
+    assert settings.project_access_mode == "enforce"
     assert settings.allowed_hosts == ()
 
 
@@ -152,14 +153,18 @@ def test_prod_defaults_access_mode_enforce_with_acl(monkeypatch, tmp_path):
     assert settings.project_access_mode == "enforce"
 
 
-def test_prod_without_acl_falls_back_to_open(monkeypatch):
-    """prod + no ACL → open (so the doctor can report the posture gap as a
-    fail, rather than crashing load_settings)."""
+def test_prod_without_acl_stays_deny_by_default(monkeypatch):
+    """prod + no ACL → enforce, NOT open (WI-017).
+
+    load_settings still resolves rather than raising, so the doctor can report
+    the posture gap as a fail instead of the process dying undiagnosed.
+    """
     monkeypatch.setenv("DOSSIER_ENV", "prod")
     monkeypatch.delenv("DOSSIER_PROJECT_ACCESS_MODE", raising=False)
     monkeypatch.delenv("DOSSIER_PROJECT_ACL_PATH", raising=False)
+    monkeypatch.delenv("DOSSIER_BOOTSTRAP_ADMINS", raising=False)
     settings = load_settings(strict=False)
-    assert settings.project_access_mode == "open"
+    assert settings.project_access_mode == "enforce"
 
 
 def test_prod_explicit_access_mode_wins(monkeypatch, tmp_path):

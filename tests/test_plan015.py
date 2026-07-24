@@ -743,6 +743,8 @@ def test_inmemory_rotation_works_without_custody(tmp_path, monkeypatch):
             users_path=str(_users_file_for(tmp_path)),
             auth_backend="local",
             principal_key_dir=str(tmp_path / "principals"),
+                    # explicit: this fixture exercises features, not authz (WI-017)
+            project_access_mode="open",
         )
         backend = LocalBackend(_users_file_for(tmp_path))
         registry = GatewayRegistry(known_projects=[project])

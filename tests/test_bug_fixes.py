@@ -304,6 +304,8 @@ def test_healthz_regista_failure_does_not_leak_dsn():
         users_path="",
         auth_backend="local",
         principal_key_dir="",
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
 
     broken_registry = MagicMock(spec=GatewayRegistry)

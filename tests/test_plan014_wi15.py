@@ -55,6 +55,8 @@ def _empty_settings(tmp_path: Path) -> Settings:
         users_path=str(tmp_path / "users.json"),
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
 
 

@@ -350,22 +350,28 @@ def _project_access_check(
 ) -> dict[str, Any]:
     """Report the effective cross-project disclosure posture.
 
-    In ``prod`` (Plan 015 WI-1.1), ``open`` escalates from ``warn`` to
-    ``fail``: a production deploy must not let every authenticated principal
-    read every project. The operator opts into prod posture via
-    ``DOSSIER_ENV=prod`` and should pair it with
-    ``DOSSIER_PROJECT_ACCESS_MODE=enforce`` + an ACL.
+    Access is deny-by-default (dossier WI-017): ``enforce`` is what an
+    unconfigured deployment resolves to, and ``open`` is now an explicit
+    operator choice. In ``prod`` (Plan 015 WI-1.1), ``open`` escalates from
+    ``warn`` to ``fail``.
+
+    The one state that fails in every environment is ``enforce``/``audit``
+    with **no policy at all** — no ACL and no bootstrap administrators. That
+    deployment denies every project to everybody, so the check names the exact
+    remediation rather than leaving a bare 403 to be reverse-engineered.
     """
     mode = settings.project_access_mode
 
-    # ``open`` needs no ACL; ``audit`` and ``enforce`` both require a loadable
-    # policy before the mode-specific status is reported.
+    # ``open`` needs no policy; ``audit`` and ``enforce`` both need a loadable
+    # one before the mode-specific status is reported.
+    policy = None
     if mode != "open":
-        from .authz import load_project_access_policy
+        from .authz import build_project_access_policy
 
         try:
-            load_project_access_policy(
+            policy = build_project_access_policy(
                 settings.project_acl_path,
+                settings.bootstrap_administrators,
                 group_claim_key=settings.session_secret.encode("utf-8"),
             )
         except Exception as exc:
@@ -374,21 +380,49 @@ def _project_access_check(
                 "status": "fail",
                 "detail": f"ACL invalid or unreadable: {type(exc).__name__}",
             }
+        if policy.is_empty:
+            return {
+                "name": "project_access",
+                "status": "fail",
+                "detail": (
+                    f"{mode}: no ACL (DOSSIER_PROJECT_ACL_PATH) and no bootstrap "
+                    "administrators (DOSSIER_BOOTSTRAP_ADMINS) — every project is "
+                    "denied to every principal. Set DOSSIER_BOOTSTRAP_ADMINS to "
+                    "recover, then declare an ACL. See docs/project-access.md."
+                ),
+            }
+
+    bootstrap_only = (
+        policy is not None and not policy.projects and not settings.project_acl_path
+    )
 
     match mode:
         case "open":
             return {
                 "name": "project_access",
                 "status": "fail" if prod else "warn",
-                "detail": "open: every authenticated principal can read every project",
+                "detail": (
+                    "open: explicitly configured; every authenticated principal "
+                    "can read every project"
+                ),
             }
         case "audit":
             return {
                 "name": "project_access",
                 "status": "warn",
-                "detail": "audit: default-deny ACL loaded; denials not enforced",
+                "detail": "audit: default-deny policy loaded; denials not enforced",
             }
         case "enforce":
+            if bootstrap_only:
+                return {
+                    "name": "project_access",
+                    "status": "warn",
+                    "detail": (
+                        "enforce: bootstrap administrators only — no per-project "
+                        "ACL is declared, so only administrators can read anything. "
+                        "Declare DOSSIER_PROJECT_ACL_PATH to finish the migration."
+                    ),
+                }
             return {
                 "name": "project_access",
                 "status": "ok",

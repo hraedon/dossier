@@ -96,8 +96,9 @@ keep their `DOSSIER_*` names.
 | `DOSSIER_SESSION_SECRET` | signed-cookie secret (>= 32 bytes; never committed) |
 | `DOSSIER_SECURE_COOKIES` | `true` for TLS deploys, `false` for dev |
 | `DOSSIER_AUTH_BACKEND` | `local` (JSON users) or `ldap` (the workplace directory) |
-| `DOSSIER_PROJECT_ACCESS_MODE` | `open` (dev default), `audit`, or `enforce` (prod default when ACL set) |
-| `DOSSIER_PROJECT_ACL_PATH` | project ACL JSON (required for `audit`/`enforce`) |
+| `DOSSIER_PROJECT_ACCESS_MODE` | `enforce` (the default, deny-by-default), `audit`, or `open` (explicit opt-in) |
+| `DOSSIER_PROJECT_ACL_PATH` | project ACL JSON (the per-project grants for `audit`/`enforce`) |
+| `DOSSIER_BOOTSTRAP_ADMINS` | administrator principals/group-claims that need no ACL file — the recovery path (see `docs/project-access.md`) |
 | `DOSSIER_TLS_CERT_PATH` | TLS cert path — set both to serve HTTPS, unset for HTTP |
 | `DOSSIER_TLS_KEY_PATH` | TLS key path — set both to serve HTTPS, unset for HTTP |
 | `DOSSIER_BEHIND_TLS_PROXY` | `true` when an ingress/proxy terminates HTTP TLS for dossier |
@@ -140,9 +141,9 @@ LDAP is a named `fail`, never a 500.
 
 ## Production posture (`DOSSIER_ENV=prod`, Plan 015 WI-1.1)
 
-The dev defaults (the historical behavior) are deliberately permissive so a
-fresh checkout runs without ceremony: `require_ssl=false`,
-`project_access_mode=open`, no TLS, no host allowlist. **Set
+The dev defaults are deliberately permissive so a fresh checkout runs without
+ceremony: `require_ssl=false`, no TLS, no host allowlist. Project access is the
+exception — it is deny-by-default in dev too (WI-017). **Set
 `DOSSIER_ENV=prod` for every team deploy** to promote the safe defaults:
 
 - `require_ssl` defaults to `true` (the operator may still override via
@@ -153,12 +154,14 @@ fresh checkout runs without ceremony: `require_ssl=false`,
   The HTTP listener's TLS is controlled independently by
   `DOSSIER_TLS_CERT_PATH` / `DOSSIER_TLS_KEY_PATH`; a proxy deployment declares
   its equivalent posture with `DOSSIER_BEHIND_TLS_PROXY=true`.
-- `project_access_mode` defaults to `enforce` when `DOSSIER_PROJECT_ACL_PATH`
-  is set — pair `DOSSIER_ENV=prod` with an ACL so cross-project disclosure is
-  default-deny. When no ACL is set in prod, the mode falls back to `open` so
-  the doctor can **report** the posture gap as a `fail` rather than crash
-  `load_settings`; an explicit `DOSSIER_PROJECT_ACCESS_MODE=enforce` without
-  an ACL is still a hard `RuntimeError` (you cannot enforce without a policy).
+- `project_access_mode` is `enforce` unless you say otherwise, in every
+  environment (WI-017). Pair it with `DOSSIER_PROJECT_ACL_PATH` so
+  cross-project disclosure is default-deny against a real policy. `enforce`
+  with no ACL and no `DOSSIER_BOOTSTRAP_ADMINS` denies everything: the app
+  still starts (so the doctor can **report** the gap as a `fail` rather than
+  crash `load_settings`), `/healthz` returns 503, and startup logs an error
+  naming both variables. See `docs/project-access.md` for the migration and
+  recovery path.
 - The doctor escalates posture gaps from `warn` to `fail` in prod: open
   access, missing TLS, missing/short session secret, missing `users_path` for
   the local backend. In dev these remain `warn`/informational.

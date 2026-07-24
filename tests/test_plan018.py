@@ -82,6 +82,8 @@ def _settings(tmp_path, **kwargs: Any) -> Settings:
         users_path=str(_users_file(tmp_path)),
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
+        # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
     defaults.update(kwargs)
     return Settings(**defaults)
@@ -263,7 +265,10 @@ def test_review_queue_cross_project(tmp_path):
 
 def test_review_queue_respects_permissions(client, monkeypatch):
     _login(client)
-    monkeypatch.setattr("dossier.app.can_read_project", lambda actor, project: False)
+    monkeypatch.setattr(
+        "dossier.app.can_read_project",
+        lambda actor, project, policy, *, mode: False,
+    )
     resp = client.get("/review")
     assert resp.status_code == 200
     assert "nothing awaiting review" in resp.text

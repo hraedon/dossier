@@ -15,7 +15,11 @@ from dossier.actors import Actor
 from dossier.app import create_app
 from dossier.auth.backends import GroupIdentity, LocalBackend, Principal
 from dossier.auth.resolver import principal_to_actor
-from dossier.authz import load_project_access_policy
+from dossier.authz import (
+    build_project_access_policy,
+    load_project_access_policy,
+    parse_bootstrap_administrators,
+)
 from dossier.config import Settings
 from dossier.config import load_settings
 from dossier.gateway import RegistaGateway
@@ -136,10 +140,33 @@ def test_policy_rejects_symlink(tmp_path: Path) -> None:
         load_project_access_policy(str(link))
 
 
-def test_settings_require_acl_for_audit_or_enforce(monkeypatch) -> None:
+def test_enforce_without_any_policy_resolves_but_denies(monkeypatch) -> None:
+    """WI-017: enforce with no ACL and no bootstrap admins must not crash.
+
+    It resolves — so ``/healthz`` and ``dossier doctor`` still run and can
+    explain the state — and it denies everything.
+    """
     monkeypatch.setenv("DOSSIER_PROJECT_ACCESS_MODE", "enforce")
     monkeypatch.delenv("DOSSIER_PROJECT_ACL_PATH", raising=False)
-    with pytest.raises(RuntimeError, match="ACL_PATH is required"):
+    monkeypatch.delenv("DOSSIER_BOOTSTRAP_ADMINS", raising=False)
+    settings = load_settings(strict=False)
+    assert settings.project_access_mode == "enforce"
+    assert settings.project_acl_path == ""
+    assert settings.bootstrap_administrators == ()
+
+    policy = build_project_access_policy("", ())
+    assert policy.is_empty
+    decision = policy.decide(Actor("anyone", "human", "Anyone"), _PROJECT_A)
+    assert decision.allowed is False
+    assert decision.reason == "no-access-policy-configured"
+
+
+def test_settings_reject_malformed_bootstrap_admins(monkeypatch) -> None:
+    """A typo in a security control fails at config load, not at first use."""
+    monkeypatch.setenv("DOSSIER_PROJECT_ACCESS_MODE", "enforce")
+    monkeypatch.delenv("DOSSIER_PROJECT_ACL_PATH", raising=False)
+    monkeypatch.setenv("DOSSIER_BOOTSTRAP_ADMINS", "guid:not-a-guid")
+    with pytest.raises(ValueError, match="group GUID"):
         load_settings(strict=False)
 
 
@@ -378,3 +405,196 @@ def test_health_fails_for_acl_changed_to_invalid_after_startup(tmp_path: Path) -
     health = build_health(settings, GatewayRegistry(known_projects=[]))
     check = next(c for c in health["checks"] if c["name"] == "project_access")
     assert check["status"] == "fail"
+
+
+# ── WI-017: deny-by-default + the bootstrap recovery path ────────────────
+
+
+def test_bootstrap_admin_recovers_access_with_no_acl_file(tmp_path: Path) -> None:
+    """The documented way out of a locked-out enforce deployment.
+
+    One env var, no ACL file: the named principal gets in, everyone else is
+    still denied. This is the migration path — not a fallback to open.
+    """
+    policy = build_project_access_policy("", (_ALICE_ID,))
+    alice = Actor(_ALICE_ID, "human", "Alice")
+    bob = Actor(_BOB_ID, "human", "Bob")
+
+    assert policy.is_empty is False
+    assert policy.decide(alice, _PROJECT_A).reason == "explicit-administrator"
+    assert policy.decide(alice, "any_project_at_all").allowed is True
+    assert policy.decide(bob, _PROJECT_A).allowed is False
+
+
+def test_bootstrap_admin_accepts_group_claims() -> None:
+    policy = build_project_access_policy("", ("name:platform-team",))
+    member = Actor("someone", "human", "Someone", groups=("name:platform-team",))
+    outsider = Actor("nobody", "human", "Nobody")
+    assert policy.decide(member, _PROJECT_A).allowed is True
+    assert policy.decide(outsider, _PROJECT_A).allowed is False
+
+
+def test_bootstrap_admins_compose_with_an_acl(tmp_path: Path) -> None:
+    """Bootstrap admins add to the ACL's administrators; they do not replace."""
+    acl_path = _write_acl(tmp_path / "acl.json", _acl_body())
+    policy = build_project_access_policy(str(acl_path), ("break-glass",))
+    assert policy.decide(Actor("security-admin", "human", "S"), "x").allowed is True
+    assert policy.decide(Actor("break-glass", "human", "B"), "x").allowed is True
+    # The per-project grants survive.
+    assert policy.decide(Actor(_ALICE_ID, "human", "A"), _PROJECT_A).allowed is True
+
+
+def test_bootstrap_admins_reject_malformed_entries() -> None:
+    with pytest.raises(ValueError, match="group GUID"):
+        parse_bootstrap_administrators(["guid:nope"])
+    with pytest.raises(ValueError, match="case-folded"):
+        parse_bootstrap_administrators(["name:Mixed-Case"])
+    with pytest.raises(ValueError, match="duplicates"):
+        parse_bootstrap_administrators(["alice", "alice"])
+
+
+def test_bootstrap_admins_ignore_blank_entries() -> None:
+    grant = parse_bootstrap_administrators(["alice", "", "  ", "bob"])
+    assert grant.principals == frozenset({"alice", "bob"})
+
+
+def test_health_fails_when_enforce_has_no_policy_at_all(tmp_path: Path) -> None:
+    """The lockout state is diagnosable, with the remediation in the detail."""
+    users_path = _users_path(tmp_path)
+    settings = Settings(
+        database_url="",
+        project=_PROJECT_A,
+        hmac_key_path="",
+        session_secret="test-session-secret-not-for-prod",
+        session_max_age_seconds=43200,
+        secure_cookies=False,
+        require_ssl=False,
+        users_path=str(users_path),
+        auth_backend="local",
+        principal_key_dir=str(tmp_path / "principals"),
+        project_access_mode="enforce",
+        project_acl_path="",
+    )
+    health = build_health(settings, GatewayRegistry(known_projects=[]))
+    check = next(c for c in health["checks"] if c["name"] == "project_access")
+    assert check["status"] == "fail"
+    assert "DOSSIER_BOOTSTRAP_ADMINS" in check["detail"]
+    assert "every project is denied" in check["detail"]
+
+
+def test_health_warns_when_only_bootstrap_admins_are_configured(
+    tmp_path: Path,
+) -> None:
+    """Recovered but not yet migrated — honest middle state, not 'ok'."""
+    users_path = _users_path(tmp_path)
+    settings = Settings(
+        database_url="",
+        project=_PROJECT_A,
+        hmac_key_path="",
+        session_secret="test-session-secret-not-for-prod",
+        session_max_age_seconds=43200,
+        secure_cookies=False,
+        require_ssl=False,
+        users_path=str(users_path),
+        auth_backend="local",
+        principal_key_dir=str(tmp_path / "principals"),
+        project_access_mode="enforce",
+        project_acl_path="",
+        bootstrap_administrators=(_ALICE_ID,),
+    )
+    health = build_health(settings, GatewayRegistry(known_projects=[]))
+    check = next(c for c in health["checks"] if c["name"] == "project_access")
+    assert check["status"] == "warn"
+    assert "bootstrap administrators only" in check["detail"]
+
+
+@pytest.fixture
+def bootstrapped_client(tmp_path: Path):
+    """enforce mode, no ACL file, alice recovered via DOSSIER_BOOTSTRAP_ADMINS."""
+    users_path = _users_path(tmp_path)
+    gateway_a = _gateway(tmp_path, _PROJECT_A)
+    registry = GatewayRegistry(known_projects=[_PROJECT_A])
+    registry.add(_PROJECT_A, gateway_a)
+    settings = Settings(
+        database_url="",
+        project=_PROJECT_A,
+        hmac_key_path="",
+        session_secret="test-session-secret-not-for-prod",
+        session_max_age_seconds=43200,
+        secure_cookies=False,
+        require_ssl=False,
+        users_path=str(users_path),
+        auth_backend="local",
+        principal_key_dir=str(tmp_path / "principals"),
+        project_access_mode="enforce",
+        project_acl_path="",
+        bootstrap_administrators=(_ALICE_ID,),
+    )
+    app = create_app(settings, registry, LocalBackend(users_path))
+    with TestClient(app) as client:
+        yield client
+    gateway_a.close()
+
+
+def test_bootstrap_admin_can_read_the_estate_end_to_end(bootstrapped_client) -> None:
+    login(bootstrapped_client, "alice", "alice-password")
+    dashboard = bootstrapped_client.get("/")
+    assert dashboard.status_code == 200
+    assert "project-alpha" in dashboard.text
+    assert bootstrapped_client.get("/p/project-alpha").status_code == 200
+
+
+def test_non_bootstrap_user_is_denied_end_to_end(bootstrapped_client) -> None:
+    login(bootstrapped_client, "bob", "bob-password")
+    dashboard = bootstrapped_client.get("/")
+    assert dashboard.status_code == 200
+    assert "project-alpha" not in dashboard.text
+    assert bootstrapped_client.get("/p/project-alpha").status_code == 403
+
+
+@pytest.fixture
+def unconfigured_client(tmp_path: Path):
+    """enforce mode with nothing configured — the lockout state."""
+    users_path = _users_path(tmp_path)
+    gateway_a = _gateway(tmp_path, _PROJECT_A)
+    registry = GatewayRegistry(known_projects=[_PROJECT_A])
+    registry.add(_PROJECT_A, gateway_a)
+    settings = Settings(
+        database_url="",
+        project=_PROJECT_A,
+        hmac_key_path="",
+        session_secret="test-session-secret-not-for-prod",
+        session_max_age_seconds=43200,
+        secure_cookies=False,
+        require_ssl=False,
+        users_path=str(users_path),
+        auth_backend="local",
+        principal_key_dir=str(tmp_path / "principals"),
+        project_access_mode="enforce",
+        project_acl_path="",
+    )
+    app = create_app(settings, registry, LocalBackend(users_path))
+    with TestClient(app) as client:
+        yield client
+    gateway_a.close()
+
+
+def test_unconfigured_enforce_denies_everything_but_stays_diagnosable(
+    unconfigured_client,
+) -> None:
+    login(unconfigured_client, "alice", "alice-password")
+    assert unconfigured_client.get("/p/project-alpha").status_code == 403
+    # The app is still up and still able to explain itself.
+    assert unconfigured_client.get("/livez").status_code == 200
+    health = unconfigured_client.get("/healthz")
+    check = next(
+        c for c in health.json()["checks"] if c["name"] == "project_access"
+    )
+    assert check["status"] == "fail"
+
+
+def test_default_settings_are_deny_by_default() -> None:
+    """The dataclass default itself is secure — not just load_settings."""
+    from dossier.config import Settings as S
+
+    assert S.__dataclass_fields__["project_access_mode"].default == "enforce"

@@ -55,6 +55,8 @@ def _settings(tmp_path):
         users_path="",
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
+            # explicit: this fixture exercises features, not authz (WI-017)
+        project_access_mode="open",
     )
 
 

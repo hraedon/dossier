@@ -23,7 +23,11 @@ from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
 from .auth.throttle import LoginThrottler, _normalize_identifier
-from .authz import ProjectAccessPolicy, can_read_project, load_project_access_policy
+from .authz import (
+    ProjectAccessPolicy,
+    build_project_access_policy,
+    can_read_project,
+)
 from .config import Settings
 from .gateway import RegistaGateway, packaged_workflow_version
 from .keys import _validate_principal_id
@@ -175,31 +179,31 @@ def create_app(
 
     access_policy: ProjectAccessPolicy | None = None
     if settings.project_access_mode != "open":
-        access_policy = load_project_access_policy(
+        access_policy = build_project_access_policy(
             settings.project_acl_path,
+            settings.bootstrap_administrators,
             group_claim_key=settings.session_secret.encode("utf-8"),
         )
+        if access_policy.is_empty:
+            # Deny-by-default with nothing declared: the app starts (so
+            # /healthz, /livez and `dossier doctor` can explain the state) but
+            # it discloses nothing. Say so once, loudly, at startup.
+            logging.getLogger("dossier.authz").error(
+                "project access mode is %s but no ACL "
+                "(DOSSIER_PROJECT_ACL_PATH) and no bootstrap administrators "
+                "(DOSSIER_BOOTSTRAP_ADMINS) are configured — every project "
+                "will be denied. See docs/project-access.md.",
+                settings.project_access_mode,
+            )
     app.state.project_access_policy = access_policy
 
     def _can_read_project(actor: Actor, project: str) -> bool:
-        # Preserve the named seam as the first and final compatibility gate;
-        # existing integrations/tests may deliberately override it.
-        if not can_read_project(actor, project):
-            return False
-        if settings.project_access_mode == "open":
-            return True
-        assert access_policy is not None
-        decision = access_policy.decide(actor, project)
-        if settings.project_access_mode == "audit":
-            if not decision.allowed:
-                logging.getLogger("dossier.authz").warning(
-                    "project access would be denied actor=%s project=%s reason=%s",
-                    actor.actor_id,
-                    project,
-                    decision.reason,
-                )
-            return True
-        return decision.allowed
+        return can_read_project(
+            actor,
+            project,
+            access_policy,
+            mode=settings.project_access_mode,
+        )
 
     from .secrets import resolve_secret_bytes
 
