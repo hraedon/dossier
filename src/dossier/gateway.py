@@ -4,14 +4,17 @@ import logging
 import re
 import threading
 import uuid
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
 import regista
-from regista import Event, QueryPage, Regista, RegistaError, ReplayReport, WorkItem
+from regista import Event, QueryPage, Regista, ErrorCode, RegistaError, ReplayReport, WorkItem
 
 from .actors import Actor
+
+if TYPE_CHECKING:
+    from .contracts import ProviderDescriptor
 
 logger = logging.getLogger("dossier.gateway")
 
@@ -94,6 +97,32 @@ class RegistaGateway:
 
     def close(self) -> None:
         self._reg.close()
+
+    def describe_work(self) -> "ProviderDescriptor":
+        from .contracts import CONTRACT_VERSION, ProviderDescriptor
+        from .shell import Availability
+
+        return ProviderDescriptor(
+            name="work",
+            contract_version=CONTRACT_VERSION,
+            availability=Availability.AVAILABLE,
+            capabilities=("create", "transition", "comment", "history", "search"),
+        )
+
+    def describe_identity(self) -> "ProviderDescriptor":
+        from .contracts import CONTRACT_VERSION, ProviderDescriptor
+        from .shell import Availability
+
+        return ProviderDescriptor(
+            name="identity",
+            contract_version=CONTRACT_VERSION,
+            availability=(
+                Availability.AVAILABLE
+                if self.has_principal_ops()
+                else Availability.NOT_CONFIGURED
+            ),
+            capabilities=("enroll", "revoke", "list", "get_active"),
+        )
 
     def create_issue(
         self,
@@ -554,14 +583,23 @@ class RegistaGateway:
     ) -> dict[str, Any] | None:
         """Register a new principal key (Plan 015 WI-2.3).
 
-        Plan 015 WI-3.1: custody is no longer handled by dossier. The caller
-        or a custody provider owns private-key generation and storage.
-        Dossier generates a keypair for test/dev paths and registers the
-        public key via the public principal-key API.
-
-        Used by break-glass (WI-2.3) to issue a new key after revoking the
-        old one.
+        Fails closed against real regista: the generate-discard-register
+        pattern produces an active key the client cannot use (the private
+        key is thrown away). Until regista Plan 031 lands the durable
+        lifecycle (prepare → possession proof → approval → atomic commit →
+        effective-client receipt), this operation is disabled on the real
+        backend. The test-store path remains for dev/test.
         """
+        if self.has_principal_ops():
+            raise RegistaError(
+                code=ErrorCode.SECRET_WRITE_UNSUPPORTED,
+                message=(
+                    "break-glass key registration is disabled against real "
+                    "regista: the generate-discard-register pattern produces "
+                    "an active key the client cannot use. Requires regista "
+                    "Plan 031 (durable key lifecycle)."
+                ),
+            )
         registered_by = actor.actor_id if actor else "system"
         return self._generate_and_register(
             principal_id,
@@ -579,11 +617,23 @@ class RegistaGateway:
     ) -> dict[str, Any] | None:
         """Rotate a principal's key (Plan 015 WI-1.2).
 
-        Plan 015 WI-3.1: custody is no longer handled by dossier. The caller
-        or a custody provider owns private-key generation and storage.
-        Dossier generates a keypair for test/dev paths and rotates the
-        public key via the public principal-key API.
+        Fails closed against real regista: the generate-discard-register
+        pattern produces an active key the client cannot use (the private
+        key is thrown away). Until regista Plan 031 lands the durable
+        lifecycle (prepare → possession proof → approval → atomic commit →
+        effective-client receipt), this operation is disabled on the real
+        backend. The test-store path remains for dev/test.
         """
+        if self.has_principal_ops():
+            raise RegistaError(
+                code=ErrorCode.SECRET_WRITE_UNSUPPORTED,
+                message=(
+                    "key rotation is disabled against real regista: the "
+                    "generate-discard-register pattern produces an active "
+                    "key the client cannot use. Requires regista Plan 031 "
+                    "(durable key lifecycle)."
+                ),
+            )
         registered_by = actor.actor_id if actor else "system"
         return self._generate_and_register(
             principal_id,

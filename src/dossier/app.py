@@ -1212,9 +1212,7 @@ def create_app(
                 if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,
-                        "key custody requires a writable secret backend "
-                        "(file/windows/vault/azure); the configured backend "
-                        "cannot store a generated private key",
+                        exc.message,
                     )
                 errors.append(f"{project}: {type(exc).__name__}")
             except Exception as exc:
@@ -1563,9 +1561,7 @@ def create_app(
                 if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,
-                        "key custody requires a writable secret backend "
-                        "(file/windows/vault/azure); the configured backend "
-                        "cannot store a generated private key",
+                        exc.message,
                     )
                 errors.append(f"{project}: {type(exc).__name__}")
             except Exception as exc:
@@ -1962,6 +1958,18 @@ def create_app(
             },
         )
 
+    @app.get("/knowledge/new")
+    def knowledge_new(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        ctx = actor_context(request, actor)
+        return templates.TemplateResponse(
+            request,
+            "knowledge_new.html",
+            {**ctx},
+        )
+
     @app.get("/knowledge/{note_id}")
     def knowledge_detail(
         request: Request,
@@ -1998,18 +2006,6 @@ def create_app(
                 "note": detail,
                 "verification": verification,
             },
-        )
-
-    @app.get("/knowledge/new")
-    def knowledge_new(
-        request: Request,
-        actor: Actor = Depends(current_actor_or_redirect),
-    ) -> Response:
-        ctx = actor_context(request, actor)
-        return templates.TemplateResponse(
-            request,
-            "knowledge_new.html",
-            {**ctx},
         )
 
     @app.post("/knowledge/create", response_model=None)
