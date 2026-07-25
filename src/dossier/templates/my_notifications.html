@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}my notifications — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">my notifications</h1>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose">
+    dossier nudges, it does not nag. When an event needs you — a review
+    awaiting your accept, an item returned, an integrity failure — a
+    notification is emitted to the configured sink (agent-wake), carrying a
+    deep link to the exact page. Here you choose which classes reach you and
+    whether they are immediate or batched into a digest. Review-actionable
+    events deep-link to the work item; an integrity failure deep-links to the
+    integrity report (the recovery surface).
+  </div>
+  {% if not sink_configured %}
+  <div class="ds-callout">
+    No notification sink is configured on this deployment, so nothing is
+    delivered regardless of your choices. Your preferences are still saved and
+    take effect the moment a sink is configured.
+  </div>
+  {% endif %}
+</div>
+
+<form method="post" action="/me/notifications" class="ds-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+  <div class="ds-panel ds-panel--pad">
+    <div class="ds-section-label">event classes</div>
+    <div class="ds-table-wrap">
+      <table class="ds-table">
+        <thead>
+          <tr>
+            <th>event</th>
+            <th>enabled</th>
+            <th>delivery</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in preference_rows %}
+          <tr>
+            <td>
+              <div>{{ row.label }}</div>
+              <div class="ds-prose muted">{{ row.description }}</div>
+              {% if row.is_recovery %}
+              <div class="ds-prose muted">deep link → integrity report (recovery).</div>
+              {% else %}
+              <div class="ds-prose muted">deep link → the work item.</div>
+              {% endif %}
+            </td>
+            <td>
+              <label class="ds-check">
+                <input type="checkbox" name="{{ row.event_type }}_enabled"
+                       {% if row.enabled %}checked{% endif %}>
+                <span>notify me</span>
+              </label>
+            </td>
+            <td>
+              <select name="{{ row.event_type }}_routing" class="ds-select">
+                <option value="immediate"
+                        {% if row.routing == "immediate" %}selected{% endif %}>
+                  immediate
+                </option>
+                <option value="digest"
+                        {% if row.routing == "digest" %}selected{% endif %}>
+                  digest
+                </option>
+              </select>
+              <div class="ds-prose muted">default: {{ row.default_routing }}</div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="ds-panel ds-panel--pad">
+    <button type="submit" class="ds-btn ds-btn--primary">save preferences</button>
+  </div>
+</form>
+
+<div class="ds-panel ds-panel--pad">
+  <div class="ds-prose muted">
+    Preferences are a per-user setting over the emitter, not workflow state.
+    In this v1 deployment they are stored on this instance; a future update
+    will carry them through the durable-notification layer so they are
+    consistent across replicas.
+  </div>
+</div>
+{% endblock %}

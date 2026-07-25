@@ -38,7 +38,14 @@ from .provenance import (
     read_session_detail,
     read_session_summaries,
 )
-from .notifications import NotificationEmitter
+from .notifications import (
+    EVENT_CLASSES,
+    FilePreferenceStore,
+    MemoryPreferenceStore,
+    NotificationEmitter,
+    NotificationPreference,
+    NotificationPreferenceStore,
+)
 from .evidence import (
     EvidenceSummary,
     EventVerification,
@@ -212,12 +219,20 @@ def create_app(
         if settings.notification_sink and settings.notification_secret_ref
         else None
     )
+    if settings.notification_pref_dir:
+        preference_store: NotificationPreferenceStore = FilePreferenceStore(
+            settings.notification_pref_dir
+        )
+    else:
+        preference_store = MemoryPreferenceStore()
+    app.state.preference_store = preference_store
     notifier = NotificationEmitter(
         sink_url=settings.notification_sink,
         base_url=settings.base_url,
         signing_secret=notification_secret,
         source=settings.notification_source,
         sender_identity=settings.notification_identity,
+        preference_store=preference_store,
     )
     app.state.notifier = notifier
 
@@ -1269,6 +1284,66 @@ def create_app(
             request,
             "my_signing_history.html",
             ctx,
+        )
+
+    # ---- notification preferences (Plan 018 WI-2.2 / GJ-7) ----
+
+    def _preference_rows(actor: Actor) -> list[dict[str, Any]]:
+        preference = app.state.preference_store.get(actor.actor_id)
+        rows: list[dict[str, Any]] = []
+        for ec in EVENT_CLASSES:
+            rows.append(
+                {
+                    "event_type": ec.event_type,
+                    "label": ec.label,
+                    "description": ec.description,
+                    "default_routing": ec.default_routing,
+                    "enabled": preference.is_enabled(ec.event_type),
+                    "routing": preference.routing_for(ec.event_type),
+                    "is_recovery": ec.event_type == "chain_verify_failed",
+                }
+            )
+        return rows
+
+    @app.get("/me/notifications")
+    def my_notifications(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+    ) -> Response:
+        ctx = actor_context(request, actor)
+        ctx["preference_rows"] = _preference_rows(actor)
+        ctx["sink_configured"] = app.state.notifier.configured
+        return templates.TemplateResponse(
+            request,
+            "my_notifications.html",
+            ctx,
+        )
+
+    @app.post("/me/notifications", response_model=None)
+    async def save_notifications(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        form = await request.form()
+        enabled: dict[str, bool] = {}
+        routing: dict[str, str] = {}
+        for ec in EVENT_CLASSES:
+            # A checkbox is present in the POST body only when checked, so
+            # absence means the principal opted out of that class.
+            enabled[ec.event_type] = f"{ec.event_type}_enabled" in form
+            routing[ec.event_type] = str(
+                form.get(f"{ec.event_type}_routing", ec.default_routing)
+            )
+        app.state.preference_store.save(
+            actor.actor_id,
+            NotificationPreference(
+                principal_id=actor.actor_id, enabled=enabled, routing=routing
+            ),
+        )
+        return RedirectResponse(
+            url="/me/notifications",
+            status_code=status.HTTP_303_SEE_OTHER,
         )
 
     # ---- admin: principal roster + enrollment (Plan 015 WI-2.1) ----

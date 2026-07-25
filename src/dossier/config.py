@@ -185,6 +185,11 @@ class Settings:
     notification_secret_ref: str = ""
     notification_source: str = "dossier"
     notification_identity: str = ""
+    # Directory for per-principal notification preferences (Plan 018 WI-2.2 /
+    # GJ-7). Empty = use an in-memory store (preferences do not survive a
+    # restart). The file store is instance-local in v1; multi-replica
+    # consistency is the durable-notification layer's concern (Plan 019).
+    notification_pref_dir: str = ""
     # Deny by default (dossier WI-017). ``open`` — every authenticated
     # principal reads every project — is still available but must be chosen
     # explicitly; it is never what you get by omission.
@@ -405,6 +410,9 @@ def load_settings(strict: bool = True) -> Settings:
         ),
         notification_identity=os.environ.get(
             "DOSSIER_NOTIFICATION_IDENTITY", ""
+        ),
+        notification_pref_dir=os.environ.get(
+            "DOSSIER_NOTIFICATION_PREF_DIR", ""
         ),
         project_access_mode=project_access_mode,
         project_acl_path=project_acl_path,

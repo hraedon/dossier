@@ -145,6 +145,7 @@ _ROUTE_TITLES = {
     "/admin/principals": "Principal roster",
     "/me/identity": "My signing identity",
     "/me/signing-history": "My signing history",
+    "/me/notifications": "My notifications",
     "/knowledge": "Knowledge",
     "/knowledge/search": "Search knowledge",
     "/knowledge/new": "New note",

@@ -20,7 +20,7 @@ def build_health(
 
         {
             "component": "dossier",
-            "version": "0.0.1",
+            "version": "0.1.0",
             "ok": bool,
             "degraded": bool,
             "regista": {"reachable": bool, "project": str, "chain_ok": bool | None},
