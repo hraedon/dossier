@@ -506,6 +506,7 @@ def create_app(
         for project in registry.list_projects():
             if not _can_read_project(actor, project):
                 continue
+            unreachable = False
             try:
                 gw = registry.get(project)
                 page = gw.list_issues(
@@ -517,6 +518,7 @@ def create_app(
                 catalog_entry = gw.get_project_catalog_entry()
             except Exception:
                 logger.warning("dashboard: project %s unreachable", project, exc_info=True)
+                unreachable = True
                 count = 0
                 catalog_entry = None
                 items = []
@@ -526,6 +528,7 @@ def create_app(
                 "name": project,
                 "open_count": count,
                 "catalog_entry": catalog_entry,
+                "unreachable": unreachable,
             })
             if filter_project and slug != filter_project:
                 continue

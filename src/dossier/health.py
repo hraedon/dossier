@@ -51,26 +51,52 @@ def build_health(
 
     try:
         projects = registry.list_projects()
-        if projects:
-            gw = registry.get(projects[0])
-            gw.list_issues(current_states=["open"], page_size=1)
-            regista_reachable = True
-            try:
-                report = gw.integrity()
-                chain_ok = not report.replayed_drift
-            except Exception:
-                chain_ok = False
-        else:
-            checks.append({
-                "name": "regista",
-                "status": "skip",
-                "detail": "no projects configured",
-            })
     except Exception as exc:
+        projects = []
         checks.append({
             "name": "regista",
             "status": "fail",
-            "detail": f"unreachable ({type(exc).__name__})",
+            "detail": f"project registry unreachable ({type(exc).__name__})",
+        })
+
+    if projects:
+        reachable: list[str] = []
+        unreachable: list[str] = []
+        chain_drift = False
+        for project in projects:
+            try:
+                gw = registry.get(project)
+                gw.list_issues(current_states=["open"], page_size=1)
+                reachable.append(project)
+                try:
+                    if gw.integrity().replayed_drift:
+                        chain_drift = True
+                except Exception:
+                    chain_drift = True
+            except Exception:
+                unreachable.append(project)
+        regista_reachable = bool(reachable) and not unreachable
+        chain_ok = (not chain_drift) if reachable else None
+        if unreachable:
+            checks.append({
+                "name": "regista",
+                "status": "fail",
+                "detail": (
+                    f"unreachable projects: {', '.join(unreachable)}"
+                    + (f" ({len(reachable)} reachable)" if reachable else "")
+                ),
+            })
+        else:
+            checks.append({
+                "name": "regista",
+                "status": "ok" if not chain_drift else "warn",
+                "detail": f"{len(reachable)} project(s) reachable",
+            })
+    elif not any(c["name"] == "regista" for c in checks):
+        checks.append({
+            "name": "regista",
+            "status": "warn",
+            "detail": "no projects configured (a dossier deployment should register at least one regista project)",
         })
 
     if settings.session_secret and len(settings.session_secret) >= 32:
