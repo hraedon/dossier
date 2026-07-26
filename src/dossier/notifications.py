@@ -522,7 +522,10 @@ def notification_health_check(
         return {
             "name": "notification_sink",
             "status": "warn",
-            "detail": "no sink configured (DOSSIER_NOTIFICATION_SINK) — notifications not delivered",
+            "detail": (
+                "no sink configured (DOSSIER_NOTIFICATION_SINK)"
+                " — notifications not delivered"
+            ),
         }
     if not secret_ref:
         return {

@@ -24,18 +24,18 @@ def slug_to_project(slug: str) -> str:
     """
     import re
 
-    _SCHEMA_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
-    _RESERVED_SCHEMAS = frozenset(
+    _schema_re = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+    _reserved_schemas = frozenset(
         {"public", "information_schema", "pg_catalog", "pg_toast"}
     )
 
     name = slug.replace("-", "_")
-    if not _SCHEMA_RE.match(name):
+    if not _schema_re.match(name):
         raise ValueError(
             f"Invalid project name {name!r}: must be 1-63 chars, lowercase "
             "alphanumeric/underscore, start with letter or underscore"
         )
-    if name in _RESERVED_SCHEMAS or name.startswith("pg_"):
+    if name in _reserved_schemas or name.startswith("pg_"):
         raise ValueError(
             f"Invalid project name {name!r}: reserved schema name"
         )

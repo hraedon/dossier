@@ -65,7 +65,10 @@ def _tool_call_begin_payload(
     return {
         "tool": tool,
         "tool_args_hash": "sha256:args123",
-        "tool_args_redacted": {"tool": tool, "file_paths": [f["path"] for f in files] if files else []},
+        "tool_args_redacted": {
+            "tool": tool,
+            "file_paths": [f["path"] for f in files] if files else [],
+        },
         "files": files or [],
         "on_behalf_of": {"principal_id": _PRINCIPAL, "session_id": session_id},
         "harness": {"name": _HARNESS_NAME, "version": _HARNESS_VERSION},
@@ -384,8 +387,13 @@ def test_compute_verification_unverified():
 
 def test_read_session_summaries_discovers_session(gateway):
     _attest_session(gateway)
-    wid = _begin_tool_call(gateway, tool="Edit", files=[{"path": "/foo.py", "pre_digest": "sha256:pre"}])
-    _end_tool_call(gateway, wid, tool="Edit", files=[{"path": "/foo.py", "post_digest": "sha256:post"}])
+    wid = _begin_tool_call(
+        gateway, tool="Edit", files=[{"path": "/foo.py", "pre_digest": "sha256:pre"}]
+    )
+    _end_tool_call(
+        gateway, wid, tool="Edit",
+        files=[{"path": "/foo.py", "post_digest": "sha256:post"}],
+    )
 
     summaries = read_session_summaries(gateway, "dossier-test")
     assert len(summaries) == 1
@@ -495,7 +503,13 @@ def test_read_session_detail_multiple_tool_calls(gateway):
     w1 = _begin_tool_call(gateway, tool="Read")
     _end_tool_call(gateway, w1, tool="Read", stdout="content")
     w2 = _begin_tool_call(gateway, tool="Edit", files=[{"path": "/a.py", "pre_digest": "p"}])
-    _end_tool_call(gateway, w2, tool="Edit", files=[{"path": "/a.py", "post_digest": "q"}], stdout="edited")
+    _end_tool_call(
+        gateway,
+        w2,
+        tool="Edit",
+        files=[{"path": "/a.py", "post_digest": "q"}],
+        stdout="edited",
+    )
     w3 = _begin_tool_call(gateway, tool="Bash")
     _fail_tool_call(gateway, w3, tool="Bash", error="timeout")
 

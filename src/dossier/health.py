@@ -96,7 +96,10 @@ def build_health(
         checks.append({
             "name": "regista",
             "status": "warn",
-            "detail": "no projects configured (a dossier deployment should register at least one regista project)",
+            "detail": (
+                "no projects configured (a dossier deployment should "
+                "register at least one regista project)"
+            ),
         })
 
     if settings.session_secret and len(settings.session_secret) >= 32:

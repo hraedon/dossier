@@ -128,12 +128,21 @@ def test_display_key_sanitizes_project_name(tmp_path):
 
     key_file = tmp_path / "keys.json"
     key_file.write_text(json.dumps({
-        "keys": [{"key_id": "k", "secret": base64.b64encode(secrets.token_bytes(32)).decode(), "status": "active", "scheme": "hmac-sha256"}]
+        "keys": [
+            {
+                "key_id": "k",
+                "secret": base64.b64encode(secrets.token_bytes(32)).decode(),
+                "status": "active",
+                "scheme": "hmac-sha256",
+            }
+        ]
     }))
     reg = InMemoryRegista(project="agent-notes project!", hmac_key_path=str(key_file))
     gw = RegistaGateway(reg, project_name="agent-notes project!")
     gw.register_workflow()
-    wi, _ = gw.create_issue(actor=ALICE, work_item_type="bug", custom_fields={"title": "Sanitize test"})
+    wi, _ = gw.create_issue(
+        actor=ALICE, work_item_type="bug", custom_fields={"title": "Sanitize test"}
+    )
     assert getattr(wi, "custom_fields", {}).get("display_key") == "AGENT_NOTES_PROJECT-1"
     gw.close()
 

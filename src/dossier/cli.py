@@ -227,7 +227,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         print(f"dossier {health['version']} — component health")
         regista = health["regista"]
-        print(f"  regista: reachable={regista['reachable']} project={regista['project']} chain_ok={regista['chain_ok']}")
+        print(
+            f"  regista: reachable={regista['reachable']} "
+            f"project={regista['project']} chain_ok={regista['chain_ok']}"
+        )
         for check in health["checks"]:
             detail = f" — {check['detail']}" if check.get("detail") else ""
             print(f"  {check['name']}: {check['status']}{detail}")
@@ -378,8 +381,14 @@ def _run(argv: list[str] | None) -> int:
     serve_parser.set_defaults(func=_cmd_serve)
 
     doctor_parser = subparsers.add_parser("doctor")
-    doctor_parser.add_argument("--json", action="store_true", help="Output JSON in the suite health shape")
-    doctor_parser.add_argument("--projects", default=None, help="Comma-separated project list (default: from env)")
+    doctor_parser.add_argument(
+        "--json", action="store_true", help="Output JSON in the suite health shape"
+    )
+    doctor_parser.add_argument(
+        "--projects",
+        default=None,
+        help="Comma-separated project list (default: from env)",
+    )
     doctor_parser.set_defaults(func=_cmd_doctor)
 
     parsed = parser.parse_args(argv)

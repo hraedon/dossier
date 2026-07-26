@@ -124,7 +124,8 @@ def test_verified_history_is_legible(pg_gateway):
 
     events = pg_gateway.history(wi.work_item_id)
     rendered = [
-        f"{e.timestamp.isoformat()} | {e.transition} | by {e.actor_metadata.get('display_name', e.actor_id)} ({e.actor_kind})"
+        f"{e.timestamp.isoformat()} | {e.transition} | by "
+        f"{e.actor_metadata.get('display_name', e.actor_id)} ({e.actor_kind})"
         for e in events
     ]
     joined = "\n".join(rendered)

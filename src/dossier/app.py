@@ -102,7 +102,7 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept
 
 
-class LoginRequired(Exception):
+class LoginRequiredError(Exception):
     """Raised by HTML-route dependencies when no authenticated actor is present.
 
     FastAPI renders ``HTTPException(302)`` as a JSON body (``{"detail": ...}``),
@@ -301,8 +301,10 @@ def create_app(
             TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts)
         )
 
-    @app.exception_handler(LoginRequired)
-    async def _login_required_handler(request: Request, exc: LoginRequired) -> RedirectResponse:
+    @app.exception_handler(LoginRequiredError)
+    async def _login_required_handler(
+        request: Request, exc: LoginRequiredError
+    ) -> RedirectResponse:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
     def current_actor(request: Request) -> Actor:
@@ -320,12 +322,12 @@ def create_app(
     def current_actor_or_redirect(request: Request) -> Actor:
         data = request.session.get(_ACTOR_SESSION_KEY)
         if not isinstance(data, dict):
-            raise LoginRequired()
+            raise LoginRequiredError()
         try:
             return Actor(**data)
         except TypeError:
             request.session.clear()
-            raise LoginRequired()
+            raise LoginRequiredError()
 
     def actor_context(request: Request, actor: Actor) -> dict[str, Any]:
         admin = _is_admin(actor)
@@ -463,7 +465,9 @@ def create_app(
         }
 
     @app.post("/logout", response_model=None)
-    async def logout(request: Request, _: None = Depends(verify_csrf)) -> Response | dict[str, bool]:
+    async def logout(
+        request: Request, _: None = Depends(verify_csrf)
+    ) -> Response | dict[str, bool]:
         request.session.clear()
         if _is_form_request(request) or _wants_html(request):
             return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
@@ -484,7 +488,7 @@ def create_app(
 
     # ---- cross-project dashboard (Plan 014 WI-1.2) ----
 
-    _DASHBOARD_MAX_ITEMS = 200
+    _dashboard_max_items = 200
 
     @app.get("/")
     def dashboard(
@@ -535,7 +539,10 @@ def create_app(
             for wi in items:
                 title = web.issue_title(wi)
                 if search_query:
-                    searchable = f"{web.display_key(wi)} {title} {web.issue_field(wi, 'assignee', '')}".lower()
+                    searchable = (
+                        f"{web.display_key(wi)} {title} "
+                        f"{web.issue_field(wi, 'assignee', '')}"
+                    ).lower()
                     if search_query.lower() not in searchable:
                         continue
                 all_items.append({
@@ -550,7 +557,7 @@ def create_app(
                 })
 
         total_count = len(all_items)
-        dashboard_items = all_items[:_DASHBOARD_MAX_ITEMS]
+        dashboard_items = all_items[:_dashboard_max_items]
 
         ctx = actor_context(request, actor)
         return templates.TemplateResponse(
@@ -561,7 +568,7 @@ def create_app(
                 "project_rows": project_rows,
                 "dashboard_items": dashboard_items,
                 "total_count": total_count,
-                "max_items": _DASHBOARD_MAX_ITEMS,
+                "max_items": _dashboard_max_items,
                 "filter_project": filter_project or "",
                 "filter_status": filter_status or "",
                 "filter_assignee": filter_assignee or "",
@@ -1164,8 +1171,16 @@ def create_app(
                         {
                             "transition": web.transition_label(getattr(ev, "transition", "")),
                             "timestamp": web.format_timestamp(getattr(ev, "timestamp", None)),
-                            "key_id": ev.payload.get("key_id") if isinstance(ev.payload, dict) else None,
-                            "fingerprint": ev.payload.get("fingerprint") if isinstance(ev.payload, dict) else None,
+                            "key_id": (
+                                ev.payload.get("key_id")
+                                if isinstance(ev.payload, dict)
+                                else None
+                            ),
+                            "fingerprint": (
+                                ev.payload.get("fingerprint")
+                                if isinstance(ev.payload, dict)
+                                else None
+                            ),
                         }
                         for ev in gw.read_principal_enrollment_events(actor.actor_id)
                     ]
@@ -1212,7 +1227,10 @@ def create_app(
                     continue
                 success_count += 1
             except RegistaError as exc:
-                if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
+                if exc.code in (
+                    ErrorCode.SECRET_WRITE_UNSUPPORTED,
+                    ErrorCode.SECRET_WRITE_EXTERNAL,
+                ):
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,
                         exc.message,
@@ -1419,7 +1437,10 @@ def create_app(
                 if result:
                     success_count += 1
             except RegistaError as exc:
-                if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
+                if exc.code in (
+                    ErrorCode.SECRET_WRITE_UNSUPPORTED,
+                    ErrorCode.SECRET_WRITE_EXTERNAL,
+                ):
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,
                         "key custody requires a writable secret backend "
@@ -1561,7 +1582,10 @@ def create_app(
                         )
                 success_count += 1
             except RegistaError as exc:
-                if exc.code in (ErrorCode.SECRET_WRITE_UNSUPPORTED, ErrorCode.SECRET_WRITE_EXTERNAL):
+                if exc.code in (
+                    ErrorCode.SECRET_WRITE_UNSUPPORTED,
+                    ErrorCode.SECRET_WRITE_EXTERNAL,
+                ):
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,
                         exc.message,
@@ -1945,7 +1969,11 @@ def create_app(
                     results = search_notes(gw, q, limit=50)
                     all_results.extend(results)
                 except Exception:
-                    logger.warning("knowledge/search: project %s unreachable", project, exc_info=True)
+                    logger.warning(
+                        "knowledge/search: project %s unreachable",
+                        project,
+                        exc_info=True,
+                    )
 
         all_results.sort(key=lambda n: n.updated_at, reverse=True)
 
@@ -2029,7 +2057,10 @@ def create_app(
                 gw = registry.get(project)
                 break
         if gw is None:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "no accessible project available")
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "no accessible project available",
+            )
 
         note_id = create_note(gw, actor=actor, title=title, body=body)
         return RedirectResponse(

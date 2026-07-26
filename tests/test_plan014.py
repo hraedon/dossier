@@ -426,7 +426,7 @@ def test_issue_detail_assurance_level_self_reviewed(client):
     """A same-lineage agent review shows 'self-reviewed' assurance."""
     from dossier.actors import Actor
 
-    AGENT_GLM_2 = Actor(
+    agent_glm_2 = Actor(
         actor_id="agent-glm-2",
         actor_kind="agent",
         display_name="GLM Agent 2",
@@ -446,7 +446,7 @@ def test_issue_detail_assurance_level_self_reviewed(client):
         actor=AGENT_GLM, work_item_id=wi.work_item_id, transition_name="submit_for_review"
     )
     gw.transition(
-        actor=AGENT_GLM_2,
+        actor=agent_glm_2,
         work_item_id=wi.work_item_id,
         transition_name="adversarial_pass",
         payload={

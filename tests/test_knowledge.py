@@ -235,7 +235,12 @@ class TestVerifyNote:
         ev = _make_event(transition="created", work_item_id=entity_id)
         gw = _make_gateway(
             note_events=[ev],
-            verify_result={"verified": False, "principal_id": None, "fingerprint": None, "scheme": None},
+            verify_result={
+                "verified": False,
+                "principal_id": None,
+                "fingerprint": None,
+                "scheme": None,
+            },
         )
         result = verify_note(gw, str(entity_id))
         assert result["verified"] is False

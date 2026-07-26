@@ -298,14 +298,20 @@ class RegistaGateway:
             return self._reg.get_project_catalog_entry()
         return None
 
-    def set_project_owner(self, owner_actor_id: str | None, *, updated_by: str | None = None) -> Any:
+    def set_project_owner(
+        self, owner_actor_id: str | None, *, updated_by: str | None = None
+    ) -> Any:
         """Set or clear the owner for this project (Plan 012 WI-4)."""
         if hasattr(self._reg, "set_project_owner"):
             return self._reg.set_project_owner(owner_actor_id, updated_by=updated_by)
         return None
 
     def register_project_metadata(
-        self, *, display_name: str | None = None, owner_actor_id: str | None = None, created_by: str | None = None
+        self,
+        *,
+        display_name: str | None = None,
+        owner_actor_id: str | None = None,
+        created_by: str | None = None,
     ) -> Any | None:
         """Insert or update this project's catalog row (Plan 012 WI-4)."""
         if hasattr(self._reg, "register_project_metadata"):
@@ -425,7 +431,10 @@ class RegistaGateway:
         reg = self._reg
         if hasattr(reg, "read_principal_enrollment_events"):
             try:
-                return cast(list[Event], reg.read_principal_enrollment_events(principal_id=principal_id))
+                return cast(
+                    list[Event],
+                    reg.read_principal_enrollment_events(principal_id=principal_id),
+                )
             except Exception:
                 logger.debug("read_principal_enrollment_events failed", exc_info=True)
         return []

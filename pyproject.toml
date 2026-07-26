@@ -50,17 +50,11 @@ packages = ["src/dossier"]
 line-length = 100
 
 [tool.ruff.lint]
-# Deliberate, explicit selection — ruff 0.16 expanded its default rule set
-# (TRY/BLE/PLW/SIM/S), flagging ~190 pre-existing lines. We adopt the family's
-# valuable rules (isort, pyupgrade, naming, warnings, ruff-specific) plus
-# ruff's E4/E7/E9 + F core, and deliberately exclude the noisy expanded rules
-# and E501 (line-length never repo-wide enforced; deferred follow-up).
-select = ["E4", "E7", "E9", "F", "I", "N", "W", "UP", "RUF"]
-# Naming rules dossier deliberately doesn't follow in spots: function-local
-# constant-style names (N806), a test convenience acronym alias (N817), and an
-# established exception name without the Error suffix (N818). Renaming is real
-# churn tracked separately; ignored here so CI is green on 0.16.
-ignore = ["N806", "N817", "N818"]
+# Full-E family selection matching regista/cairn: ruff's standard E (incl.
+# E501 line-length, now enforced at 100) + F + I (isort) + N (naming) + W +
+# UP (pyupgrade) + RUF. The noisy ruff-0.16 expanded defaults (TRY/BLE/PLW/
+# SIM/S) remain deliberately excluded.
+select = ["E", "F", "I", "N", "W", "UP", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

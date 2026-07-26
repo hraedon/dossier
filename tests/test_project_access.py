@@ -594,6 +594,6 @@ def test_unconfigured_enforce_denies_everything_but_stays_diagnosable(
 
 def test_default_settings_are_deny_by_default() -> None:
     """The dataclass default itself is secure — not just load_settings."""
-    from dossier.config import Settings as S
+    from dossier.config import Settings
 
-    assert S.__dataclass_fields__["project_access_mode"].default == "enforce"
+    assert Settings.__dataclass_fields__["project_access_mode"].default == "enforce"

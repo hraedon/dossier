@@ -21,7 +21,9 @@ from dossier.contracts import (
 )
 from dossier.shell import Availability
 
-CONTRACTS_PATH = Path(__file__).resolve().parent.parent / "data" / "contracts" / "provider-contracts.json"
+CONTRACTS_PATH = (
+    Path(__file__).resolve().parent.parent / "data" / "contracts" / "provider-contracts.json"
+)
 
 
 class TestContractDescriptors:

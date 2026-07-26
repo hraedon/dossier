@@ -241,7 +241,9 @@ def _parse_file_digests(files: Any) -> list[FileDigest]:
     return result
 
 
-def _merge_file_digests(begin_files: list[FileDigest], end_files: list[FileDigest]) -> list[FileDigest]:
+def _merge_file_digests(
+    begin_files: list[FileDigest], end_files: list[FileDigest]
+) -> list[FileDigest]:
     by_path: dict[str, FileDigest] = {}
     for fd in begin_files:
         by_path[fd.path] = fd
@@ -316,7 +318,11 @@ def build_tool_call_trail(events: list[Event]) -> list[ToolCallEntry]:
         entries.append(ToolCallEntry(
             work_item_id=wi_id,
             tool=str(begin_payload.get("tool") or end_payload.get("tool") or "unknown"),
-            tool_args_hash=str(begin_payload.get("tool_args_hash") or end_payload.get("tool_args_hash") or ""),
+            tool_args_hash=str(
+                begin_payload.get("tool_args_hash")
+                or end_payload.get("tool_args_hash")
+                or ""
+            ),
             files=files,
             exit_code=rs.get("exit_code"),
             stdout_digest=rs.get("stdout_digest"),
@@ -371,7 +377,10 @@ def compute_verification(
         if tc.status == "running":
             flags.append(f"tool call {tc.tool} ({str(tc.work_item_id)[:8]}) has no end event")
         if tc.begin_timestamp is None and tc.end_timestamp is not None:
-            flags.append(f"tool call {tc.tool} ({str(tc.work_item_id)[:8]}) has an end without a begin")
+            flags.append(
+                f"tool call {tc.tool} ({str(tc.work_item_id)[:8]}) "
+                "has an end without a begin"
+            )
 
     report = signatures or SignatureReport()
     findings = list(report.findings)

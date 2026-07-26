@@ -239,13 +239,25 @@ def test_review_queue_cross_project(tmp_path):
     gw_a = _make_gateway(tmp_path, _PROJECT_A)
     gw_b = _make_gateway(tmp_path, _PROJECT_B)
 
-    wi_a, _ = gw_a.create_issue(actor=ALICE, work_item_type="bug", custom_fields={"title": "Project A review"})
+    wi_a, _ = gw_a.create_issue(
+        actor=ALICE, work_item_type="bug", custom_fields={"title": "Project A review"}
+    )
     gw_a.transition(actor=ALICE, work_item_id=wi_a.work_item_id, transition_name="start")
-    gw_a.transition(actor=ALICE, work_item_id=wi_a.work_item_id, transition_name="submit_for_review")
+    gw_a.transition(
+        actor=ALICE,
+        work_item_id=wi_a.work_item_id,
+        transition_name="submit_for_review",
+    )
 
-    wi_b, _ = gw_b.create_issue(actor=ALICE, work_item_type="bug", custom_fields={"title": "Project B review"})
+    wi_b, _ = gw_b.create_issue(
+        actor=ALICE, work_item_type="bug", custom_fields={"title": "Project B review"}
+    )
     gw_b.transition(actor=ALICE, work_item_id=wi_b.work_item_id, transition_name="start")
-    gw_b.transition(actor=ALICE, work_item_id=wi_b.work_item_id, transition_name="submit_for_review")
+    gw_b.transition(
+        actor=ALICE,
+        work_item_id=wi_b.work_item_id,
+        transition_name="submit_for_review",
+    )
 
     settings = _settings(tmp_path)
     backend = LocalBackend(_users_file(tmp_path))
@@ -322,7 +334,11 @@ def test_my_work_distinguishes_agent_on_behalf(client, gateway, make_issue):
         on_behalf_of={"principal_id": _ALICE_ID, "principal_display_name": "Alice"},
     )
     gw.transition(actor=agent_for_alice, work_item_id=wi.work_item_id, transition_name="start")
-    gw.transition(actor=agent_for_alice, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+    gw.transition(
+        actor=agent_for_alice,
+        work_item_id=wi.work_item_id,
+        transition_name="submit_for_review",
+    )
 
     resp = client.get("/my-work")
     assert resp.status_code == 200
@@ -345,7 +361,11 @@ def test_my_work_agent_in_review_shows_under_my_flag(client, gateway, make_issue
         on_behalf_of={"principal_id": _ALICE_ID},
     )
     gw.transition(actor=agent_for_alice, work_item_id=wi.work_item_id, transition_name="start")
-    gw.transition(actor=agent_for_alice, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+    gw.transition(
+        actor=agent_for_alice,
+        work_item_id=wi.work_item_id,
+        transition_name="submit_for_review",
+    )
 
     resp = client.get("/my-work")
     assert resp.status_code == 200
@@ -804,9 +824,17 @@ def test_read_review_queue_sorts_strict_gate_first(gateway, make_issue):
     wi1 = make_issue(title="In review")
     wi2 = make_issue(title="In human review")
     gateway.transition(actor=ALICE, work_item_id=wi1.work_item_id, transition_name="start")
-    gateway.transition(actor=ALICE, work_item_id=wi1.work_item_id, transition_name="submit_for_review")
+    gateway.transition(
+        actor=ALICE,
+        work_item_id=wi1.work_item_id,
+        transition_name="submit_for_review",
+    )
     gateway.transition(actor=ALICE, work_item_id=wi2.work_item_id, transition_name="start")
-    gateway.transition(actor=ALICE, work_item_id=wi2.work_item_id, transition_name="submit_for_review")
+    gateway.transition(
+        actor=ALICE,
+        work_item_id=wi2.work_item_id,
+        transition_name="submit_for_review",
+    )
     gateway.transition(
         actor=BOB, work_item_id=wi2.work_item_id, transition_name="adversarial_pass",
         payload={"review_note": "approved"},
@@ -884,7 +912,11 @@ def test_build_digest_empty(gateway):
 def test_build_digest_with_items(gateway, make_issue):
     wi = make_issue(title="Digest item", assignee=ALICE.actor_id)
     gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="start")
-    gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="submit_for_review")
+    gateway.transition(
+        actor=ALICE,
+        work_item_id=wi.work_item_id,
+        transition_name="submit_for_review",
+    )
 
     digest = build_digest([(_PROJECT_SLUG, gateway)], ALICE.actor_id)
     assert digest["is_empty"] is False
