@@ -514,7 +514,7 @@ def test_health_secrets_check_fails_for_missing_file_manifest(tmp_path):
         project_access_mode="open",
     )
     checks = _secrets_backend_checks(settings)
-    key_check = [c for c in checks if c["name"] == "secrets_backend:REGISTA_KEY_PATH"][0]
+    key_check = next(c for c in checks if c["name"] == "secrets_backend:REGISTA_KEY_PATH")
     assert key_check["status"] == "fail"
     assert "REGISTA_KEY_PATH" in key_check["detail"]
 
@@ -570,7 +570,7 @@ def test_health_secrets_check_fails_for_corrupt_file_manifest(tmp_path):
         project_access_mode="open",
     )
     checks = _secrets_backend_checks(settings)
-    key_check = [c for c in checks if c["name"] == "secrets_backend:REGISTA_KEY_PATH"][0]
+    key_check = next(c for c in checks if c["name"] == "secrets_backend:REGISTA_KEY_PATH")
     assert key_check["status"] == "fail"
 
 

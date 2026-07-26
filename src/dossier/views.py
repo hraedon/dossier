@@ -20,14 +20,14 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from regista import Event, WorkItem
 
+from . import web
 from .assurance import assurance_class, assurance_label, compute_assurance_level
 from .gateway import RegistaGateway
-from . import web
 
 _REVIEW_STATES = frozenset({"in_review", "in_human_review"})
 _QUEUE_STATES = ["in_review", "in_human_review", "deferred"]
@@ -122,9 +122,9 @@ def _sort_priority(state: str, assurance: str) -> int:
 
 def _age_hours(wi: WorkItem) -> float:
     ts = wi.last_event_at
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
+        ts = ts.replace(tzinfo=UTC)
     delta = now - ts
     hours = delta.total_seconds() / 3600.0
     return hours if hours > 0.0 else 0.0

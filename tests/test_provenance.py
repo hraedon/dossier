@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from conftest import login as _login
+from helpers import AGENT_R
 from regista import Event
 
 from dossier.provenance import (
@@ -27,8 +28,6 @@ from dossier.provenance import (
     read_session_detail,
     read_session_summaries,
 )
-
-from helpers import AGENT_R
 
 _SESSION_ID = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
 _SESSION_UUID = uuid.UUID(_SESSION_ID)

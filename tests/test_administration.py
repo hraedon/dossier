@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from conftest import login as _login
 from helpers import ALICE
 

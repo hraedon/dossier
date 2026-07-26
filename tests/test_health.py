@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dossier.config import Settings
 
-
 _PROJECT = "dossier_test"
 
 

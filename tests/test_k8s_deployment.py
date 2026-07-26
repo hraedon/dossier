@@ -12,7 +12,6 @@ from types import ModuleType
 
 import pytest
 
-
 _ROOT = Path(__file__).resolve().parents[1]
 _GENERATOR = _ROOT / "scripts" / "gen-k8s-secret.py"
 _PROCESS_OVERRIDES = (

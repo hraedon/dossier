@@ -7,10 +7,10 @@ import os
 from pathlib import Path
 
 import pytest
+from conftest import extract_csrf, login
 from fastapi.testclient import TestClient
 from regista.testing import InMemoryRegista
 
-from conftest import extract_csrf, login
 from dossier.actors import Actor
 from dossier.app import create_app
 from dossier.auth.backends import GroupIdentity, LocalBackend, Principal
@@ -20,8 +20,7 @@ from dossier.authz import (
     load_project_access_policy,
     parse_bootstrap_administrators,
 )
-from dossier.config import Settings
-from dossier.config import load_settings
+from dossier.config import Settings, load_settings
 from dossier.gateway import RegistaGateway
 from dossier.health import build_health
 from dossier.keys import generate_keyset

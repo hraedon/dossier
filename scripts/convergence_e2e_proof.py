@@ -26,10 +26,9 @@ import sys
 import uuid
 
 import regista
-from regista.testing import drop_project_schema
-
 from agent_notes.core.actor import Actor as AgentActor
 from agent_notes.core.regista_face import RegistaFace
+from regista.testing import drop_project_schema
 
 from dossier.actors import Actor as HumanActor
 from dossier.gateway import RegistaGateway

@@ -13,11 +13,12 @@ import uuid
 from pathlib import Path
 
 import pytest
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 from fastapi.testclient import TestClient
 from regista import Regista
-from regista.testing import drop_project_schema, InMemoryRegista
+from regista.testing import InMemoryRegista, drop_project_schema
 
-from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.auth.passwords import hash_password

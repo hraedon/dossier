@@ -6,10 +6,9 @@ import threading
 import uuid
 from typing import TYPE_CHECKING, Any, cast
 
-import yaml
-
 import regista
-from regista import Event, QueryPage, Regista, ErrorCode, RegistaError, ReplayReport, WorkItem
+import yaml
+from regista import ErrorCode, Event, QueryPage, Regista, RegistaError, ReplayReport, WorkItem
 
 from .actors import Actor
 
@@ -98,7 +97,7 @@ class RegistaGateway:
     def close(self) -> None:
         self._reg.close()
 
-    def describe_work(self) -> "ProviderDescriptor":
+    def describe_work(self) -> ProviderDescriptor:
         from .contracts import CONTRACT_VERSION, ProviderDescriptor
         from .shell import Availability
 
@@ -109,7 +108,7 @@ class RegistaGateway:
             capabilities=("create", "transition", "comment", "history", "search"),
         )
 
-    def describe_identity(self) -> "ProviderDescriptor":
+    def describe_identity(self) -> ProviderDescriptor:
         from .contracts import CONTRACT_VERSION, ProviderDescriptor
         from .shell import Availability
 

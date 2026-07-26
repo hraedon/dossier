@@ -47,8 +47,9 @@ from __future__ import annotations
 import atexit
 import os
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any
 
 # Providers whose prefix marks a value as a *remote* backend ref requiring
 # materialization to a temp file (the manifest cannot live on the local FS in
@@ -87,7 +88,7 @@ _atexit_registered = False
 # ---------------------------------------------------------------------------
 
 
-def _provider_prefix(value: str) -> Optional[str]:
+def _provider_prefix(value: str) -> str | None:
     """Return the lowercase provider prefix if ``value`` has a recognised one.
 
     ``postgresql://...`` → ``None`` (literal DSN, no resolution). ``env:FOO`` →
@@ -116,7 +117,7 @@ def _normalize_for_regista(value: str) -> str:
     return f"{prefix.lower()}{sep}{rest}"
 
 
-def is_backend_ref(value: Optional[str]) -> bool:
+def is_backend_ref(value: str | None) -> bool:
     """True if ``value`` carries a recognised secret-backend provider prefix."""
     if not value:
         return False
@@ -144,7 +145,7 @@ def _resolver() -> Any:
 # ---------------------------------------------------------------------------
 
 
-def resolve_dsn(value: Optional[str]) -> Optional[str]:
+def resolve_dsn(value: str | None) -> str | None:
     """Resolve a DSN-or-ref to the DSN string.
 
     - ``None`` / empty → ``None`` (caller treats absence as "not configured").
@@ -184,7 +185,7 @@ def resolve_dsn(value: Optional[str]) -> Optional[str]:
     return str(result)
 
 
-def resolve_secret_bytes(value: Optional[str]) -> Optional[bytes]:
+def resolve_secret_bytes(value: str | None) -> bytes | None:
     """Resolve a required-ref secret without permitting an implicit literal.
 
     Notification signing keys cross a process boundary and must not be stored
@@ -230,8 +231,8 @@ def resolve_secret_bytes(value: Optional[str]) -> Optional[bytes]:
 
 
 def materialize_key_manifest(
-    value: Optional[str],
-) -> tuple[Optional[str], Optional[CleanupFn]]:
+    value: str | None,
+) -> tuple[str | None, CleanupFn | None]:
     """Resolve the signing key-set path, materializing a remote ref to a temp file.
 
     Returns ``(path_or_none, cleanup_or_none)``:

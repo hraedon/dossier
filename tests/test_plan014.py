@@ -14,17 +14,18 @@ import json
 import uuid
 
 import pytest
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 from fastapi.testclient import TestClient
+from helpers import AGENT_GLM, ALICE, BOB, CAROL
 from regista.testing import InMemoryRegista
 
-from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
 from dossier.gateway import RegistaGateway
 from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
-from helpers import ALICE, BOB, CAROL, AGENT_GLM
 
 _PROJECT_A = "dossier_test"
 _PROJECT_B = "cert_watch"
@@ -144,7 +145,7 @@ def _gw(client, project_name):
 # ── 1. Authz seam ────────────────────────────────────────────────────────
 
 
-def test_authz_seam_has_no_permissive_default(): 
+def test_authz_seam_has_no_permissive_default():
     """WI-017: the seam denies unless a posture and policy say otherwise.
 
     The v1 behaviour (True for any authenticated actor) is now reachable only

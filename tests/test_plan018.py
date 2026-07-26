@@ -17,10 +17,12 @@ import uuid
 from typing import Any
 
 import pytest
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 from fastapi.testclient import TestClient
+from helpers import AGENT_GLM, ALICE, BOB
 from regista.testing import InMemoryRegista
 
-from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
@@ -29,13 +31,11 @@ from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 from dossier.notifications import NotificationEmitter, NotificationEvent, notification_health_check
 from dossier.views import (
+    build_digest,
     read_activity_feed,
     read_my_work,
     read_review_queue,
-    build_digest,
 )
-
-from helpers import ALICE, BOB, AGENT_GLM
 
 _PROJECT = "dossier_test"
 _PROJECT_SLUG = "dossier-test"
@@ -360,7 +360,7 @@ def test_my_work_excludes_other_peoples_items(client):
     _login(client)
     gw = _gw(client)
     from helpers import BOB
-    wi, _ = gw.create_issue(
+    _wi, _ = gw.create_issue(
         actor=BOB, work_item_type="bug", custom_fields={"title": "Bob's item"}
     )
     resp = client.get("/my-work")

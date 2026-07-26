@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .gateway import RegistaGateway
@@ -40,7 +40,7 @@ class EventVerification:
 
 def _to_utc(ts: datetime) -> datetime:
     if ts.tzinfo is None:
-        return ts.replace(tzinfo=timezone.utc)
+        return ts.replace(tzinfo=UTC)
     return ts
 
 

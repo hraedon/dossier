@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from helpers import ALICE
 from regista.testing import InMemoryRegista
 
 from dossier.app import create_app
@@ -18,8 +19,6 @@ from dossier.config import Settings
 from dossier.gateway import RegistaGateway
 from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
-
-from helpers import ALICE
 
 _CRLF_RE = re.compile(r'name="csrf_token"\s+value="([^"]+)"')
 

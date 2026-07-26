@@ -277,9 +277,9 @@ def test_compute_assurance_level_is_the_verdict_level() -> None:
 def test_issue_detail_renders_the_degradation_reason(client, gateway) -> None:
     """A degraded verdict is visible in the UI, with its reason."""
     from conftest import login as _login
+    from helpers import AGENT_KIMI
 
     from dossier.actors import Actor
-    from helpers import AGENT_KIMI
 
     undeclared_agent = Actor(
         actor_id="agent-anonymous",

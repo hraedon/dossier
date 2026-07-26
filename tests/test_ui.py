@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 
-from conftest import extract_csrf as _extract_csrf, login as _login
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 
 
 def test_unauthenticated_get_root_redirects_to_login(client):
@@ -157,6 +158,7 @@ def test_transition_self_review_error_renders(client):
     issue_url = resp.headers["location"]
 
     from helpers import ALICE
+
     from dossier.gateway import RegistaGateway
 
     gw: RegistaGateway = client.app.state.registry.get("dossier_test")
@@ -198,9 +200,11 @@ def test_review_note_visibility_toggles_on_transition_select(client):
     )
     issue_url = resp.headers["location"]
 
-    from helpers import ALICE
-    from dossier.gateway import RegistaGateway
     import uuid
+
+    from helpers import ALICE
+
+    from dossier.gateway import RegistaGateway
 
     gw: RegistaGateway = client.app.state.registry.get("dossier_test")
     wi_id = uuid.UUID(issue_url.split("/")[-1])

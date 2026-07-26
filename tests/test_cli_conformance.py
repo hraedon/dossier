@@ -76,15 +76,15 @@ BROKEN_PIPE_CASES = [
 
 
 @pytest.mark.parametrize("case", ERROR_CASES, ids=lambda c: c.name)
-def test_error_conformance(case: "ErrorCase") -> None:
+def test_error_conformance(case: ErrorCase) -> None:
     assert run_error_case(case) == []
 
 
 @pytest.mark.parametrize("case", USAGE_CASES, ids=lambda c: c.name)
-def test_usage_conformance(case: "UsageCase") -> None:
+def test_usage_conformance(case: UsageCase) -> None:
     assert run_usage_case(case) == []
 
 
 @pytest.mark.parametrize("case", BROKEN_PIPE_CASES, ids=lambda c: c.name)
-def test_broken_pipe_conformance(case: "BrokenPipeCase") -> None:
+def test_broken_pipe_conformance(case: BrokenPipeCase) -> None:
     assert run_broken_pipe_case(case) == []

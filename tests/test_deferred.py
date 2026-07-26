@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import pytest
-from regista import RegistaError
-
-from conftest import extract_csrf as _extract_csrf, login as _login
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 from helpers import ALICE, BOB
+from regista import RegistaError
 
 # --------------------------------------------------------------------------- #
 # Gateway-level: defer / resume / start cycle + invariants

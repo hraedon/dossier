@@ -5,10 +5,11 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from conftest import extract_csrf as _extract_csrf, login as _login
-from dossier.keys import generate_ed25519_keypair
 from _doubles import InMemoryPrincipalKeyStore, inject_test_store
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
+
+from dossier.keys import generate_ed25519_keypair
 
 # These tests exercise the file-backend key-custody path (regista Plan 029's
 # FileProvider: 0o600 atomic writes, 0o700 parent dirs, Unix mode assertions).
@@ -671,7 +672,7 @@ def test_enroll_principal_failure_logs_warning(caplog):
     assert result is None
     assert "enroll_principal failed" in caplog.text
     assert "bad principal" not in caplog.text
-    record = [r for r in caplog.records if "enroll_principal failed" in r.getMessage()][0]
+    record = next(r for r in caplog.records if "enroll_principal failed" in r.getMessage())
     assert record.error_code == "INVALID_ARGUMENT"
     assert record.principal_id == "alice"
 
@@ -711,8 +712,8 @@ def test_gateway_test_store_guard_requires_testing_flag(gateway):
 
 
 def test_inmemory_rotation_works_without_custody(tmp_path, monkeypatch):
-    from regista.testing import InMemoryRegista
     from fastapi.testclient import TestClient
+    from regista.testing import InMemoryRegista
 
     from dossier.app import _configure_admin_ids, create_app
     from dossier.auth.backends import LocalBackend

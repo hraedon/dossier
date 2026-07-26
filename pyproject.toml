@@ -27,7 +27,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",             # test client
-    "ruff>=0.5,<0.16",
+    "ruff>=0.16,<1",
     "mypy>=1.10",
     "ldap3>=2.9",              # LDAP/AD auth tests (mocked + integration)
     # CLI contract v1 conformance kit (Plan 018 WI-2 / Plan 019 B1). A published
@@ -48,6 +48,19 @@ packages = ["src/dossier"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# Deliberate, explicit selection — ruff 0.16 expanded its default rule set
+# (TRY/BLE/PLW/SIM/S), flagging ~190 pre-existing lines. We adopt the family's
+# valuable rules (isort, pyupgrade, naming, warnings, ruff-specific) plus
+# ruff's E4/E7/E9 + F core, and deliberately exclude the noisy expanded rules
+# and E501 (line-length never repo-wide enforced; deferred follow-up).
+select = ["E4", "E7", "E9", "F", "I", "N", "W", "UP", "RUF"]
+# Naming rules dossier deliberately doesn't follow in spots: function-local
+# constant-style names (N806), a test convenience acronym alias (N817), and an
+# established exception name without the Error suffix (N818). Renaming is real
+# churn tracked separately; ignored here so CI is green on 0.16.
+ignore = ["N806", "N817", "N818"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

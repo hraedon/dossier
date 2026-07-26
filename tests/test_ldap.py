@@ -15,7 +15,6 @@ import pytest
 from dossier.auth.backends import GroupIdentity, LdapBackend, Principal, _guid_bytes_to_str
 from dossier.config import LdapConfig, load_ldap_config
 
-
 # ── mock helpers ─────────────────────────────────────────────────────────
 
 
@@ -686,7 +685,7 @@ def test_load_ldap_config_strict_requires_ca_cert(monkeypatch):
 
 def test_load_ldap_config_rejects_bad_group_strategy(monkeypatch):
     monkeypatch.setenv("DOSSIER_LDAP_GROUP_STRATEGY", "invalid")
-    with pytest.raises(ValueError, match="direct.*nested"):
+    with pytest.raises(ValueError, match=r"direct.*nested"):
         load_ldap_config(strict=False)
 
 

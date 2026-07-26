@@ -17,7 +17,6 @@ from regista import Event
 
 from dossier.assurance import compute_assurance_level
 
-
 # ── WI-014: assurance level fails open ────────────────────────────────────
 
 

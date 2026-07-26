@@ -16,9 +16,9 @@ is committed to this repo.
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
-import getpass
 import subprocess
 import sys
 import tempfile

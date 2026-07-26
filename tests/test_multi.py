@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 from fastapi.testclient import TestClient
 from regista.testing import InMemoryRegista
 
-from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings

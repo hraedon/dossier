@@ -26,16 +26,16 @@ Event classes (immediate vs digest routing is config, not code):
 
 from __future__ import annotations
 
-import json
 import hashlib
 import hmac
+import json
 import logging
 import re
 import urllib.error
 import urllib.request
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -498,7 +498,7 @@ class NotificationEmitter:
             item_key=item_key,
             item_title=item_title,
             deep_link=self.deep_link_for(event_type, project_slug, work_item_id),
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             detail=detail,
             event_id=str(uuid.uuid4()),
         )

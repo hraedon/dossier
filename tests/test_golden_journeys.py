@@ -1,4 +1,4 @@
-"""WI-1.2: Work and knowledge golden journeys (Plan 015 Gate 1, GJ-1–GJ-4).
+"""WI-1.2: Work and knowledge golden journeys (Plan 015 Gate 1, GJ-1-GJ-4).
 
 End-to-end behavioral tests that exercise the full journey through dossier's
 public HTTP surface. Two synthetic principals complete the strict review
@@ -11,9 +11,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastapi.testclient import TestClient
-
 from conftest import extract_csrf, login
+from fastapi.testclient import TestClient
 from helpers import AGENT_R, ALICE, BOB
 
 

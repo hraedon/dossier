@@ -23,9 +23,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import extract_csrf as _extract_csrf
+from conftest import login as _login
 from fastapi.testclient import TestClient
+from regista.testing import InMemoryRegista
 
-from conftest import extract_csrf as _extract_csrf, login as _login
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
@@ -41,7 +43,6 @@ from dossier.notifications import (
     _preference_from_dict,
     default_preference,
 )
-from regista.testing import InMemoryRegista
 
 _PROJECT = "dossier_test"
 _PROJECT_SLUG = "dossier-test"
@@ -396,7 +397,7 @@ class _MockResponse:
     def read(self) -> bytes:
         return self.body
 
-    def __enter__(self) -> "_MockResponse":
+    def __enter__(self) -> _MockResponse:
         return self
 
     def __exit__(self, *args: Any) -> None:

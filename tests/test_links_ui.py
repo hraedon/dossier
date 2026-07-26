@@ -12,6 +12,7 @@ import uuid
 from types import SimpleNamespace
 
 from conftest import login as _login
+
 from dossier.web import (
     is_cross_project_link,
     link_target_label,

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from ..actors import Actor
 from collections.abc import Sequence
 
-from .backends import GroupIdentity, Principal
+from ..actors import Actor
 from ..authz import encode_group_claim
+from .backends import GroupIdentity, Principal
 
 
 def principal_to_actor(

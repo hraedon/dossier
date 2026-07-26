@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 
 import pytest
+from helpers import ALICE
 
 from dossier.shell import (
     ActionRisk,
@@ -14,7 +15,6 @@ from dossier.shell import (
     area_for_path,
     build_shell,
 )
-from helpers import ALICE
 
 
 def test_shell_contract_enums_are_closed() -> None:

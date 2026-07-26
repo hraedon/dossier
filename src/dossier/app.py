@@ -13,7 +13,14 @@ from regista import ErrorCode, RegistaError, WorkItem
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
+from . import web
 from .actors import Actor
+from .administration import (
+    AdminSummary,
+    read_access_policy,
+    read_admin_summary,
+    read_project_list,
+)
 from .assurance import (
     assurance_class,
     assurance_label,
@@ -29,41 +36,15 @@ from .authz import (
     can_read_project,
 )
 from .config import Settings
-from .gateway import RegistaGateway, packaged_workflow_version
-from .keys import _validate_principal_id
-from .multi import GatewayRegistry, project_to_slug, slug_to_project
-from . import web
-from .provenance import (
-    SessionSummary,
-    read_session_detail,
-    read_session_summaries,
-)
-from .notifications import (
-    EVENT_CLASSES,
-    FilePreferenceStore,
-    MemoryPreferenceStore,
-    NotificationEmitter,
-    NotificationPreference,
-    NotificationPreferenceStore,
-)
 from .evidence import (
-    EvidenceSummary,
     EventVerification,
-    read_evidence_summary,
+    EvidenceSummary,
     read_event_verifications,
+    read_evidence_summary,
     read_integrity_report,
 )
-from .operations import (
-    EstateSummary,
-    read_estate_summary,
-    read_operations_findings,
-)
-from .administration import (
-    AdminSummary,
-    read_admin_summary,
-    read_project_list,
-    read_access_policy,
-)
+from .gateway import RegistaGateway, packaged_workflow_version
+from .keys import _validate_principal_id
 from .knowledge import (
     NoteDetail,
     NoteSummary,
@@ -72,6 +53,25 @@ from .knowledge import (
     list_notes,
     search_notes,
     verify_note,
+)
+from .multi import GatewayRegistry, project_to_slug, slug_to_project
+from .notifications import (
+    EVENT_CLASSES,
+    FilePreferenceStore,
+    MemoryPreferenceStore,
+    NotificationEmitter,
+    NotificationPreference,
+    NotificationPreferenceStore,
+)
+from .operations import (
+    EstateSummary,
+    read_estate_summary,
+    read_operations_findings,
+)
+from .provenance import (
+    SessionSummary,
+    read_session_detail,
+    read_session_summaries,
 )
 from .shell import build_shell
 from .views import (

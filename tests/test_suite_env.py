@@ -125,7 +125,7 @@ def test_inject_env_file_rejects_world_writable(tmp_path):
     f = tmp_path / "suite.env"
     f.write_text("FOO=bar\n")
     os.chmod(f, 0o666)
-    with pytest.raises(PermissionError, match="world-writable|group"):
+    with pytest.raises(PermissionError, match=r"world-writable|group"):
         _inject_env_file(str(f))
 
 

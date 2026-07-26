@@ -416,7 +416,7 @@ def read_chain_integrity(gateway: RegistaGateway) -> ChainIntegrity:
     """
     try:
         report = gateway.integrity()
-    except Exception as exc:  # noqa: BLE001 — any store failure is 'unknown'
+    except Exception as exc:
         return ChainIntegrity(
             CHAIN_UNKNOWN,
             "the chain integrity check could not be run "
@@ -460,7 +460,7 @@ def verify_session_signatures(
     for event in events:
         try:
             info = gateway.verify_event(event)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             findings.append(
                 f"signature for the {event.transition} event could not be "
                 f"checked ({type(exc).__name__})"

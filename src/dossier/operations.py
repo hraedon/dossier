@@ -7,7 +7,7 @@ deployment operations — that is agent-suite's boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .gateway import RegistaGateway
@@ -33,7 +33,7 @@ class EstateSummary:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _check_pool_health(reg: Any) -> ComponentHealth:

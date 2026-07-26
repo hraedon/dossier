@@ -4,8 +4,8 @@ import logging
 import threading
 from typing import TYPE_CHECKING, Any
 
-from .gateway import RegistaGateway
 from . import secrets as suite_secrets
+from .gateway import RegistaGateway
 
 if TYPE_CHECKING:
     from .config import Settings

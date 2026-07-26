@@ -29,9 +29,9 @@ read a project must not guess.
 
 from __future__ import annotations
 
-import json
 import hashlib
 import hmac
+import json
 import logging
 import os
 import stat
