@@ -857,21 +857,43 @@ def create_app(
         assignee: str | None = Query(default=None),
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
+        import logging
+
+        logger = logging.getLogger("dossier.work")
         gw = resolve_gateway(project, actor)
-        page = gw.list_issues(current_states=states, assignee=assignee)
-        catalog_entry = gw.get_project_catalog_entry()
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
+        # The work store (list_issues) and the catalog entry (owner/display
+        # name) are independent reads. A catalog failure must not hide
+        # successfully fetched work — only a work-store failure renders the
+        # explicit "unreachable" state; a catalog failure degrades the owner
+        # chip to "unassigned" while the issue list is still shown.
+        unreachable = False
+        try:
+            page = gw.list_issues(current_states=states, assignee=assignee)
+            issues = list(page.items)
+        except Exception:
+            logger.warning("project_index: project %s unreachable", project, exc_info=True)
+            issues = []
+            unreachable = True
+        try:
+            catalog_entry = gw.get_project_catalog_entry()
+        except Exception:
+            logger.warning(
+                "project_index: catalog entry for %s unreadable", project, exc_info=True
+            )
+            catalog_entry = None
         return templates.TemplateResponse(
             request,
             "index.html",
             {
                 **ctx,
-                "issues": list(page.items),
+                "issues": issues,
                 "filter_states": states or [],
                 "filter_assignee": assignee or "",
                 "project_slug": project,
                 "catalog_entry": catalog_entry,
+                "unreachable": unreachable,
             },
         )
 
@@ -1925,6 +1947,7 @@ def create_app(
 
         logger = logging.getLogger("dossier.knowledge")
         all_notes: list[NoteSummary] = []
+        unreachable_projects: list[str] = []
 
         for project in registry.list_projects():
             if not _can_read_project(actor, project):
@@ -1935,6 +1958,7 @@ def create_app(
                 all_notes.extend(notes)
             except Exception:
                 logger.warning("knowledge: project %s unreachable", project, exc_info=True)
+                unreachable_projects.append(project)
 
         all_notes.sort(key=lambda n: n.updated_at, reverse=True)
 
@@ -1946,6 +1970,7 @@ def create_app(
                 **ctx,
                 "notes": all_notes,
                 "note_count": len(all_notes),
+                "unreachable_projects": unreachable_projects,
             },
         )
 
@@ -1959,6 +1984,7 @@ def create_app(
 
         logger = logging.getLogger("dossier.knowledge")
         all_results: list[NoteSummary] = []
+        unreachable_projects: list[str] = []
 
         if q.strip():
             for project in registry.list_projects():
@@ -1974,6 +2000,7 @@ def create_app(
                         project,
                         exc_info=True,
                     )
+                    unreachable_projects.append(project)
 
         all_results.sort(key=lambda n: n.updated_at, reverse=True)
 
@@ -1986,6 +2013,7 @@ def create_app(
                 "results": all_results,
                 "query": q,
                 "result_count": len(all_results),
+                "unreachable_projects": unreachable_projects,
             },
         )
 

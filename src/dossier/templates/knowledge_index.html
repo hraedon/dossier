@@ -14,6 +14,15 @@
   </div>
 </div>
 
+{% if unreachable_projects %}
+<div class="ds-panel ds-panel--pad ds-warn" role="alert">
+  <strong>knowledge store unreachable.</strong>
+  The backing regista project(s) for {{ unreachable_projects | join(", ") }}
+  could not be read, so their notes are not shown. This is a named unavailable
+  state, not an empty knowledge base — retry, or check the operations page.
+</div>
+{% endif %}
+
 {% if notes %}
 <div class="ds-table-wrap">
   <table class="ds-table">

@@ -11,6 +11,15 @@
   <a href="/p/{{ project_slug }}/issues/new" class="ds-btn ds-btn--primary">new issue</a>
 </div>
 
+{% if unreachable %}
+<div class="ds-panel ds-panel--pad ds-warn" role="alert">
+  <strong>work store unreachable.</strong>
+  The backing regista project for {{ project_slug }} could not be read, so its
+  issues are not shown. This is a named unavailable state, not an empty
+  project — retry, or check the operations page for the store's health.
+</div>
+{% else %}
+
 <div class="ds-panel ds-panel--pad">
   <form method="post" action="/p/{{ project_slug }}/owner" class="ds-form ds-form--inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -78,5 +87,6 @@
   <div class="ds-empty__title">no issues</div>
   <div class="ds-empty__sub">create one to get started</div>
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}

@@ -5,43 +5,50 @@
     "work": {
       "owner": "regista",
       "dossier_module": "dossier.gateway",
-      "methods": ["list_work_items", "get_work_item", "create_work_item", "transition_work_item", "comment_on_work_item", "work_item_history", "valid_transitions"],
+      "implementation": "class:RegistaGateway",
+      "methods": ["describe_work", "list_issues", "get_issue", "create_issue", "transition", "comment", "history", "transitions_from"],
       "golden_journeys": ["GJ-1", "GJ-2", "GJ-4"]
     },
     "knowledge": {
       "owner": "agent-notes",
       "dossier_module": "dossier.knowledge",
-      "methods": ["list_notes", "get_note", "search_notes", "verify_note"],
+      "implementation": "class:KnowledgeProviderAdapter",
+      "methods": ["describe_knowledge", "create_note", "list_notes", "get_note", "search_notes", "verify_note"],
       "golden_journeys": ["GJ-3"]
     },
     "activity": {
       "owner": "agent-provenance",
       "dossier_module": "dossier.provenance",
-      "methods": ["list_sessions", "get_session", "activity_feed"],
+      "implementation": "module",
+      "methods": ["describe_activity", "list_sessions", "get_session", "activity_feed"],
       "golden_journeys": ["GJ-5"]
     },
     "evidence": {
       "owner": "regista",
       "dossier_module": "dossier.evidence",
-      "methods": ["evidence_summary", "event_verifications", "integrity_report"],
+      "implementation": "module",
+      "methods": ["describe_evidence", "evidence_summary", "event_verifications", "integrity_report"],
       "golden_journeys": ["GJ-8"]
     },
     "operations": {
       "owner": "agent-suite",
       "dossier_module": "dossier.operations",
-      "methods": ["estate_summary", "operations_findings"],
+      "implementation": "module",
+      "methods": ["describe_operations", "estate_summary", "operations_findings"],
       "golden_journeys": ["GJ-9"]
     },
     "identity": {
       "owner": "regista",
       "dossier_module": "dossier.gateway",
-      "methods": ["list_principals", "get_principal_key", "enroll_principal", "revoke_principal"],
+      "implementation": "class:RegistaGateway",
+      "methods": ["describe_identity", "list_principals", "get_principal_key", "enroll_principal", "revoke_principal"],
       "golden_journeys": ["GJ-1"]
     },
     "delivery": {
       "owner": "agent-wake",
       "dossier_module": "dossier.notifications",
-      "methods": ["get_preferences", "save_preferences"],
+      "implementation": "module",
+      "methods": ["describe_delivery", "get_preferences", "save_preferences"],
       "golden_journeys": ["GJ-7"],
       "profile": "C",
       "support_level": "preview"

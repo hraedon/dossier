@@ -8,6 +8,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from dossier.knowledge import (
+    NOTE_FILED,
+    NOTE_SUPERSEDED,
     create_note,
     get_note,
     list_notes,
@@ -24,7 +26,7 @@ from dossier.knowledge_verify import (
 def _make_event(
     *,
     event_seq: int = 1,
-    transition: str = "created",
+    transition: str = NOTE_FILED,
     actor_id: str = "test-user",
     timestamp: datetime | None = None,
     payload: dict[str, Any] | None = None,
@@ -90,7 +92,7 @@ class TestListNotes:
     def test_returns_notes_from_events(self) -> None:
         entity_id = uuid.uuid4()
         ev = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "My Note", "body": "content"},
             work_item_id=entity_id,
         )
@@ -105,13 +107,13 @@ class TestListNotes:
         note_entity = uuid.uuid4()
         work_item_entity = uuid.uuid4()
         note_ev = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Note", "body": ""},
             work_item_id=note_entity,
             entity_kind="note",
         )
         work_ev = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Bug", "body": ""},
             work_item_id=work_item_entity,
             entity_kind="work_item",
@@ -125,13 +127,13 @@ class TestListNotes:
         entity_id = uuid.uuid4()
         created = _make_event(
             event_seq=1,
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Old Note", "body": "old"},
             work_item_id=entity_id,
         )
         superseded = _make_event(
             event_seq=2,
-            transition="superseded",
+            transition=NOTE_SUPERSEDED,
             timestamp=datetime(2026, 7, 12, 13, 0, tzinfo=UTC),
             payload={"title": "Old Note", "body": "old"},
             work_item_id=entity_id,
@@ -156,7 +158,7 @@ class TestGetNote:
     def test_returns_detail_with_events(self) -> None:
         entity_id = uuid.uuid4()
         ev = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Detail", "body": "body text"},
             work_item_id=entity_id,
         )
@@ -170,6 +172,84 @@ class TestGetNote:
         assert result.note_id == str(entity_id)
 
 
+class TestLegacyNoteTransitions:
+    """Notes filed before regista reserved the ``created`` transition (and the
+    matching ``superseded`` label) must still render correctly. The knowledge
+    module recognises these legacy labels on read so historical chains do not
+    silently break when the canonical ``note_filed`` / ``note_superseded``
+    vocabulary is the only thing newly written."""
+
+    def test_legacy_created_event_renders_active(self) -> None:
+        entity_id = uuid.uuid4()
+        ev = _make_event(
+            transition="created",  # legacy, pre-reservation
+            payload={"title": "Legacy Note", "body": "old body"},
+            work_item_id=entity_id,
+        )
+        gw = _make_gateway(events=[ev])
+        result = list_notes(gw)
+        assert len(result) == 1
+        assert result[0].state == "active"
+        assert result[0].title == "Legacy Note"
+
+    def test_legacy_superseded_event_renders_superseded(self) -> None:
+        entity_id = uuid.uuid4()
+        created = _make_event(
+            event_seq=1,
+            transition="created",  # legacy
+            payload={"title": "Legacy Note", "body": "old"},
+            work_item_id=entity_id,
+        )
+        superseded = _make_event(
+            event_seq=2,
+            transition="superseded",  # legacy
+            timestamp=datetime(2026, 7, 12, 13, 0, tzinfo=UTC),
+            payload={"title": "Legacy Note", "body": "old"},
+            work_item_id=entity_id,
+        )
+        gw = _make_gateway(events=[created, superseded])
+        result = list_notes(gw)
+        assert len(result) == 1
+        assert result[0].state == "superseded"
+
+    def test_legacy_created_detail_renders_active(self) -> None:
+        entity_id = uuid.uuid4()
+        ev = _make_event(
+            transition="created",  # legacy
+            payload={"title": "Legacy Detail", "body": "legacy body"},
+            work_item_id=entity_id,
+        )
+        gw = _make_gateway(note_events=[ev])
+        result = get_note(gw, str(entity_id))
+        assert result is not None
+        assert result.state == "active"
+        assert result.title == "Legacy Detail"
+        assert result.body == "legacy body"
+
+    def test_mixed_legacy_and_canonical_chain_renders_superseded(self) -> None:
+        """A chain filed with the legacy label and superseded with the
+        canonical label (a note that spans the vocabulary change-over) still
+        resolves to the superseded state."""
+        entity_id = uuid.uuid4()
+        created = _make_event(
+            event_seq=1,
+            transition="created",  # legacy
+            payload={"title": "Span Note", "body": "b"},
+            work_item_id=entity_id,
+        )
+        superseded = _make_event(
+            event_seq=2,
+            transition=NOTE_SUPERSEDED,  # canonical
+            timestamp=datetime(2026, 7, 12, 14, 0, tzinfo=UTC),
+            payload={"title": "Span Note", "body": "b"},
+            work_item_id=entity_id,
+        )
+        gw = _make_gateway(events=[created, superseded])
+        result = list_notes(gw)
+        assert len(result) == 1
+        assert result[0].state == "superseded"
+
+
 class TestSearchNotes:
     def test_empty_query_returns_empty(self) -> None:
         gw = _make_gateway()
@@ -180,12 +260,12 @@ class TestSearchNotes:
         entity1 = uuid.uuid4()
         entity2 = uuid.uuid4()
         ev1 = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Python Guide", "body": ""},
             work_item_id=entity1,
         )
         ev2 = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Deployment Notes", "body": ""},
             work_item_id=entity2,
         )
@@ -203,13 +283,25 @@ class TestCreateNote:
         uuid.UUID(result)
         gw.append_note_event.assert_called_once()
 
-    def test_create_passes_correct_payload(self, actor: MagicMock) -> None:
+    def test_create_passes_canonical_payload(self, actor: MagicMock) -> None:
+        """dossier must emit the canonical note payload shared with
+        agent-notes (``name``/``memory_type``/``note_subtype``/``body``/
+        ``attributes``/``links``), not the legacy ``{title, body}`` shape —
+        so an agent-notes rebuild reconstructs the note with the right name."""
         gw = _make_gateway()
         create_note(gw, actor=actor, title="Title", body="Body")
         call_kwargs = gw.append_note_event.call_args.kwargs
-        assert call_kwargs["transition"] == "created"
-        assert call_kwargs["payload"]["title"] == "Title"
-        assert call_kwargs["payload"]["body"] == "Body"
+        assert call_kwargs["transition"] == NOTE_FILED
+        payload = call_kwargs["payload"]
+        # Canonical fields (agent-notes vocabulary)
+        assert payload["name"] == "Title"
+        assert payload["memory_type"] == "note"
+        assert payload["note_subtype"] == "memory"
+        assert payload["body"] == "Body"
+        assert payload["attributes"] == {}
+        assert payload["links"] == []
+        # No legacy title field leaked into a freshly-filed note
+        assert "title" not in payload
         assert call_kwargs["entity_kind"] if "entity_kind" in call_kwargs else True
 
 
@@ -223,7 +315,7 @@ class TestVerifyNote:
 
     def test_returns_verified_for_valid_note(self) -> None:
         entity_id = uuid.uuid4()
-        ev = _make_event(transition="created", work_item_id=entity_id)
+        ev = _make_event(transition=NOTE_FILED, work_item_id=entity_id)
         gw = _make_gateway(note_events=[ev])
         result = verify_note(gw, str(entity_id))
         assert result["verified"] is True
@@ -232,7 +324,7 @@ class TestVerifyNote:
 
     def test_returns_unverified_for_bad_signature(self) -> None:
         entity_id = uuid.uuid4()
-        ev = _make_event(transition="created", work_item_id=entity_id)
+        ev = _make_event(transition=NOTE_FILED, work_item_id=entity_id)
         gw = _make_gateway(
             note_events=[ev],
             verify_result={
@@ -248,7 +340,7 @@ class TestVerifyNote:
 
     def test_detects_chain_drift(self) -> None:
         entity_id = uuid.uuid4()
-        ev = _make_event(transition="created", work_item_id=entity_id)
+        ev = _make_event(transition=NOTE_FILED, work_item_id=entity_id)
         gw = _make_gateway(note_events=[ev], replay_drift=2)
         result = verify_note(gw, str(entity_id))
         assert result["chain_intact"] is False
@@ -258,7 +350,7 @@ class TestVerifyNote:
 class TestVerifyNoteChain:
     def test_returns_verification_result(self) -> None:
         entity_id = uuid.uuid4()
-        ev = _make_event(transition="created", work_item_id=entity_id)
+        ev = _make_event(transition=NOTE_FILED, work_item_id=entity_id)
         gw = _make_gateway(note_events=[ev])
         result = verify_note_chain(gw, str(entity_id))
         assert isinstance(result, VerificationResult)
@@ -277,7 +369,7 @@ class TestVerifyAllNotes:
     def test_returns_results_for_notes(self) -> None:
         entity_id = uuid.uuid4()
         ev = _make_event(
-            transition="created",
+            transition=NOTE_FILED,
             payload={"title": "Note", "body": ""},
             work_item_id=entity_id,
         )

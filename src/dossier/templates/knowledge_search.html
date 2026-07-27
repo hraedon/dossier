@@ -18,6 +18,16 @@
   <button type="submit" class="ds-btn ds-btn--ghost">search</button>
 </form>
 
+{% if unreachable_projects %}
+<div class="ds-panel ds-panel--pad ds-warn" role="alert">
+  <strong>knowledge store unreachable.</strong>
+  The backing regista project(s) for {{ unreachable_projects | join(", ") }}
+  could not be read, so their notes were excluded from this search. This is a
+  named unavailable state, not an empty result — retry, or check the
+  operations page.
+</div>
+{% endif %}
+
 {% if results %}
 <div class="ds-table-wrap">
   <table class="ds-table">

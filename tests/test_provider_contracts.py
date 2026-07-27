@@ -7,7 +7,10 @@ boundaries reject private production imports and direct private-store access.
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +18,36 @@ import pytest
 
 from dossier.contracts import (
     CONTRACT_VERSION,
+    PROVIDER_CONTRACTS,
     IdentityProvider,
+    KnowledgeProvider,
     ProviderDescriptor,
     WorkProvider,
 )
 from dossier.shell import Availability
 
+# Public API on Python 3.13+; fall back to the CPython implementation-detail
+# attribute on 3.12 (the attribute is stable across the 3.12 line). This keeps
+# the drift guard off private names where the public helper exists.
+if sys.version_info >= (3, 13):
+    from typing import get_protocol_members
+else:  # pragma: no cover - exercised on the 3.12 CI lane
+
+    def get_protocol_members(tp: type) -> frozenset[str]:
+        return frozenset(getattr(tp, "__protocol_attrs__", frozenset()))
+
+
 CONTRACTS_PATH = (
     Path(__file__).resolve().parent.parent / "data" / "contracts" / "provider-contracts.json"
 )
+
+# Providers whose implementations fully satisfy their declared Protocol today.
+# The mechanical drift guard below enforces that *every* declared method exists
+# on these implementations. The remaining providers (activity, evidence,
+# operations, delivery) declare their contract surface in the Protocol/JSON but
+# their module function names have not yet converged on the Protocol vocabulary
+# — that gap is a tracked Gate 1 follow-up, not silently passing here.
+_FULLY_IMPLEMENTED_PROVIDERS = frozenset({"work", "identity", "knowledge"})
 
 
 class TestContractDescriptors:
@@ -72,6 +96,167 @@ class TestContractFile:
             )
 
 
+def _load_contract_data() -> dict[str, Any]:
+    return json.loads(CONTRACTS_PATH.read_text(encoding="utf-8"))
+
+
+def _resolve_implementation(spec: str, module_name: str) -> Any:
+    """Resolve the object a contract's ``implementation`` field points at.
+
+    ``class:Name`` -> the named class on the ``dossier_module``.
+    ``module``     -> the ``dossier_module`` itself (free functions).
+    """
+    module = importlib.import_module(module_name)
+    if spec.startswith("class:"):
+        return getattr(module, spec.split(":", 1)[1])
+    return module
+
+
+class TestContractMethodDriftGuard:
+    """Mechanically validate that the contract file's method vocabulary
+    matches the Protocol interfaces, and that the focus providers'
+    implementations actually expose every declared method — so the
+    ``list_work_items``-vs-``list_issues`` kind of drift cannot recur.
+
+    Plan 015 WI-1.1: the contract file and the Protocols are the two
+    declarations of dossier's provider surface; this test pins them together
+    and pins both to the implementations for the providers dossier relies on
+    in Gate 1 (work, identity, knowledge).
+    """
+
+    def test_json_methods_match_protocol_methods_for_every_provider(self) -> None:
+        data = _load_contract_data()
+        for name, spec in data["providers"].items():
+            proto = PROVIDER_CONTRACTS[name]
+            protocol_methods = set(get_protocol_members(proto))
+            json_methods = set(spec["methods"])
+            assert json_methods == protocol_methods, (
+                f"provider {name!r}: contract file methods {sorted(json_methods)} "
+                f"!= Protocol methods {sorted(protocol_methods)}"
+            )
+
+    def test_every_json_method_has_a_descriptor_on_the_protocol(self) -> None:
+        data = _load_contract_data()
+        for name, spec in data["providers"].items():
+            proto = PROVIDER_CONTRACTS[name]
+            protocol_methods = set(get_protocol_members(proto))
+            assert f"describe_{name}" in protocol_methods, (
+                f"provider {name!r}: Protocol has no describe_{name}() descriptor"
+            )
+            assert f"describe_{name}" in set(spec["methods"]), (
+                f"provider {name!r}: contract file omits describe_{name}()"
+            )
+
+    @pytest.mark.parametrize("name", sorted(_FULLY_IMPLEMENTED_PROVIDERS))
+    def test_focus_provider_implementation_exposes_every_declared_method(
+        self, name: str
+    ) -> None:
+        data = _load_contract_data()
+        spec = data["providers"][name]
+        target = _resolve_implementation(spec["implementation"], spec["dossier_module"])
+        for method in spec["methods"]:
+            assert hasattr(target, method), (
+                f"provider {name!r}: implementation {spec['dossier_module']} "
+                f"({spec['implementation']}) is missing declared method {method!r}"
+            )
+
+    def test_knowledge_descriptor_is_honest(self) -> None:
+        """The knowledge provider's descriptor is a free function (no gateway
+        state required), so it can be exercised directly. The gateway-backed
+        descriptors (work, identity) are exercised through the ``gateway``
+        fixture in :class:`TestGatewaySatisfiesContracts`."""
+        from dossier.knowledge import describe_knowledge
+
+        descriptor = describe_knowledge()
+        assert isinstance(descriptor, ProviderDescriptor)
+        assert descriptor.name == "knowledge"
+        assert descriptor.contract_version == CONTRACT_VERSION
+        assert descriptor.availability is Availability.AVAILABLE
+
+
+def _param_shape(fn: Any) -> list[tuple[str, inspect._ParameterKind, Any]]:
+    """Parameter names, kinds, and defaults (excluding ``self``)."""
+    sig = inspect.signature(fn)
+    return [
+        (p.name, p.kind, p.default)
+        for p in sig.parameters.values()
+        if p.name != "self"
+    ]
+
+
+_KNOWLEDGE_MEMBERS = sorted(get_protocol_members(KnowledgeProvider))
+
+
+class TestKnowledgeProviderAdapterConformance:
+    """The knowledge provider is a real Protocol-satisfying object, not a
+    name-only module claim. The :class:`~dossier.knowledge.KnowledgeProviderAdapter`
+    binds the module functions to a gateway and is checked here for runtime
+    Protocol satisfaction and signature conformance — so a method rename or a
+    dropped parameter on either side is caught mechanically."""
+
+    def test_adapter_satisfies_knowledge_provider_protocol_at_runtime(
+        self, gateway: Any
+    ) -> None:
+        from dossier.knowledge import KnowledgeProviderAdapter
+
+        adapter = KnowledgeProviderAdapter(gateway)
+        assert isinstance(adapter, KnowledgeProvider), (
+            "KnowledgeProviderAdapter must structurally satisfy the "
+            "KnowledgeProvider Protocol (runtime_checkable)"
+        )
+
+    def test_adapter_exposes_every_protocol_member(self, gateway: Any) -> None:
+        from dossier.knowledge import KnowledgeProviderAdapter
+
+        adapter = KnowledgeProviderAdapter(gateway)
+        for member in get_protocol_members(KnowledgeProvider):
+            assert hasattr(adapter, member), f"adapter missing Protocol member {member!r}"
+
+    @pytest.mark.parametrize("member", _KNOWLEDGE_MEMBERS)
+    def test_adapter_method_signature_conforms_to_protocol(
+        self, member: str, gateway: Any
+    ) -> None:
+        """Each adapter method accepts the same parameters (name, kind, and
+        default) the Protocol declares — a structural signature check that
+        catches drift in either direction."""
+        from dossier.knowledge import KnowledgeProviderAdapter
+
+        proto_sig = _param_shape(getattr(KnowledgeProvider, member))
+        adapter_sig = _param_shape(getattr(KnowledgeProviderAdapter, member))
+        assert proto_sig == adapter_sig, (
+            f"signature drift on {member!r}: Protocol expects {proto_sig}, "
+            f"adapter has {adapter_sig}"
+        )
+
+    def test_adapter_delegates_to_module_functions(
+        self, gateway: Any, make_issue: Any
+    ) -> None:
+        """Round-trip through the adapter's public surface: create → list →
+        get → search → verify. Proves the adapter delegates to the real
+        module functions (and is not a stub or a recursive no-op)."""
+        from dossier.actors import Actor
+        from dossier.knowledge import KnowledgeProviderAdapter
+
+        adapter = KnowledgeProviderAdapter(gateway)
+        alice = Actor(actor_id="alice", actor_kind="human", display_name="Alice")
+
+        note_id = adapter.create_note(actor=alice, title="Adapter note", body="body")
+        assert isinstance(note_id, str)
+
+        listed = adapter.list_notes()
+        assert any(n.note_id == note_id and n.title == "Adapter note" for n in listed)
+
+        detail = adapter.get_note(note_id)
+        assert detail is not None
+        assert detail.body == "body"
+
+        found = adapter.search_notes("Adapter")
+        assert any(n.note_id == note_id for n in found)
+
+        verdict = adapter.verify_note(note_id)
+        assert "verified" in verdict and "chain_intact" in verdict
+
+
 class TestGatewaySatisfiesContracts:
     def test_gateway_is_work_provider(self, gateway: Any) -> None:
         assert isinstance(gateway, WorkProvider)
@@ -104,6 +289,22 @@ class TestGatewaySatisfiesContracts:
     ) -> None:
         principals = gateway.list_principals()
         assert isinstance(principals, list)
+
+    def test_gateway_work_descriptor_is_honest(self, gateway: Any) -> None:
+        descriptor = gateway.describe_work()
+        assert isinstance(descriptor, ProviderDescriptor)
+        assert descriptor.name == "work"
+        assert descriptor.contract_version == CONTRACT_VERSION
+        assert descriptor.availability is Availability.AVAILABLE
+
+    def test_gateway_identity_descriptor_is_honest(self, gateway: Any) -> None:
+        descriptor = gateway.describe_identity()
+        assert isinstance(descriptor, ProviderDescriptor)
+        assert descriptor.name == "identity"
+        assert descriptor.contract_version == CONTRACT_VERSION
+        # InMemoryRegista has no principal-key ops, so identity honestly
+        # reports NOT_CONFIGURED rather than over-claiming AVAILABLE.
+        assert descriptor.availability is Availability.NOT_CONFIGURED
 
 
 class TestDegradedProviderRendering:
