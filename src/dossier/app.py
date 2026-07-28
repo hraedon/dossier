@@ -40,6 +40,13 @@ from .assurance import (
 from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
+from .auth.step_up import (
+    ProtectedOperation,
+    is_auth_recent,
+    produce_step_up_evidence,
+    requires_step_up,
+    verify_step_up_evidence,
+)
 from .auth.throttle import LoginThrottler, _normalize_identifier
 from .authz import (
     ProjectAccessPolicy,
@@ -98,6 +105,26 @@ from .views import (
 logger = logging.getLogger("dossier.app")
 
 _ACTOR_SESSION_KEY = "actor"
+_AUTH_TIME_SESSION_KEY = "auth_time"
+_USERNAME_SESSION_KEY = "username"
+
+_PROTECTED_OP_FOR_LIFECYCLE: Final = {
+    "enrollment": ProtectedOperation.KEY_ENROLLMENT,
+    "rotation": ProtectedOperation.KEY_ROTATION,
+    "revocation": ProtectedOperation.KEY_REVOCATION,
+}
+
+
+def _session_auth_time(request: Request) -> datetime | None:
+    raw = request.session.get(_AUTH_TIME_SESSION_KEY)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
 _STATIC_DIR = Path(__file__).parent / "static"
 _TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -617,6 +644,8 @@ def create_app(
         request.session.clear()
         new_csrf = issue_csrf_token(request.session)
         request.session[_ACTOR_SESSION_KEY] = asdict(actor)
+        request.session[_AUTH_TIME_SESSION_KEY] = datetime.now(UTC).isoformat()
+        request.session[_USERNAME_SESSION_KEY] = username
 
         if form_req:
             return RedirectResponse(url="/", status_code=status.HTTP_302_FOUND)
@@ -634,6 +663,60 @@ def create_app(
         if _is_form_request(request) or _wants_html(request):
             return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
         return {"ok": True}
+
+    @app.post("/auth/step-up", response_model=None)
+    async def step_up_reentry(
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        """Password re-entry for step-up authentication (Plan 020 Phase 3).
+
+        Refreshes the session's last-proven-authentication time so protected
+        operations (key lifecycle approvals) can require recent auth. This is
+        honest about its assurance level: it proves the user knows the
+        password *now*; it is not MFA. The password is verified against the
+        configured credential backend for the *session's own* username — a
+        different account's password never refreshes this session.
+        """
+        form_req = _is_form_request(request)
+        if form_req:
+            password = str((await request.form()).get("password", ""))
+        else:
+            body = _require_json_object(await _read_json(request))
+            password = _require_str(body, "password")
+
+        username = request.session.get(_USERNAME_SESSION_KEY)
+        if not isinstance(username, str) or not username:
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "session invalid; please re-authenticate"
+            )
+
+        throttle_key = _normalize_identifier(f"stepup:{username}")
+        if throttler.is_locked(throttle_key):
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "too many failed attempts; try again later",
+            )
+
+        principal = backend.authenticate(username, password)
+        if principal is None or principal.stable_id != actor.actor_id:
+            throttler.record_failure(throttle_key)
+            if form_req:
+                csrf = issue_csrf_token(request.session)
+                return templates.TemplateResponse(
+                    request,
+                    "login.html",
+                    {"csrf_token": csrf, "error": "invalid credentials"},
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+
+        throttler.record_success(throttle_key)
+        request.session[_AUTH_TIME_SESSION_KEY] = datetime.now(UTC).isoformat()
+        if form_req:
+            return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/me")
     def me(actor: Actor = Depends(current_actor)) -> dict[str, Any]:
@@ -1818,11 +1901,61 @@ def create_app(
                 "approval digest does not match the server operation",
             )
 
+        # Step-up (Plan 020 Phase 3): key-lifecycle approvals are protected
+        # operations and require recent authentication. A fresh login counts;
+        # an old session must re-authenticate via POST /auth/step-up.
+        #
+        # Trust model: the enforcement gate is *recency of authentication*
+        # (from the server-signed session); the evidence is the audit artifact
+        # of that gate, bound to this exact operation digest and approver.
+        # Evidence is produced AND verified server-side in one step — the
+        # verifier stays live on the enforcement path, and there is no
+        # client-supplied-evidence parameter to misuse.
+        protected_op = _PROTECTED_OP_FOR_LIFECYCLE.get(operation.operation_type.value)
+        if protected_op is None:
+            # A lifecycle operation type with no protected-operation mapping
+            # is a code defect, not a "not protected" answer: fail closed.
+            raise HTTPException(
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                f"no protected-operation mapping for lifecycle operation "
+                f"{operation.operation_type.value!r}",
+            )
+        step_up_json: str | None = None
+        if requires_step_up(protected_op.value):
+            auth_time = _session_auth_time(request)
+            if auth_time is None or not is_auth_recent(auth_time):
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    "step-up authentication required: re-authenticate via "
+                    "POST /auth/step-up before approving this operation",
+                )
+            evidence = produce_step_up_evidence(
+                settings.session_secret,
+                auth_time,
+                server_digest,
+                actor.actor_id,
+            )
+            valid, verify_error = verify_step_up_evidence(
+                settings.session_secret,
+                evidence,
+                expected_operation_digest=server_digest,
+                expected_principal_id=actor.actor_id,
+            )
+            if not valid:
+                # Produce/verify disagreeing in one process is a server-side
+                # defect; it must never surface as an approval.
+                raise HTTPException(
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    f"step-up evidence self-check failed: {verify_error}",
+                )
+            step_up_json = json.dumps(evidence.to_dict())
+
         try:
             gw.approve_operation(
                 operation_id,
                 approver=actor,
                 approval_digest=server_digest,
+                step_up_evidence=step_up_json,
                 reason=approval_reason,
             )
         except LifecycleContractError as exc:
