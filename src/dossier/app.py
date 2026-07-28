@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import hmac
 import logging
 import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
-from regista import ErrorCode, RegistaError, WorkItem
+from regista import ErrorCode, LifecycleContractError, LifecycleErrorCode, RegistaError, WorkItem
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -72,6 +73,7 @@ from .provenance import (
     SessionSummary,
     read_session_detail,
     read_session_summaries,
+    unverifiable_session_detail,
 )
 from .shell import build_shell
 from .views import (
@@ -99,7 +101,10 @@ def _is_form_request(request: Request) -> bool:
 
 def _wants_html(request: Request) -> bool:
     accept = request.headers.get("accept", "")
-    return "text/html" in accept
+    if "text/html" in accept:
+        return True
+    content_type = request.headers.get("content-type", "")
+    return "application/x-www-form-urlencoded" in content_type
 
 
 class LoginRequiredError(Exception):
@@ -132,6 +137,45 @@ def _configure_admin_ids() -> None:
     ids = {s.strip() for s in raw.split(",") if s.strip()}
     _ADMIN_ACTOR_IDS.clear()
     _ADMIN_ACTOR_IDS.update(ids)
+
+
+def _http_status_for_lifecycle_error(code: LifecycleErrorCode) -> int:
+    if code is LifecycleErrorCode.OPERATION_NOT_FOUND:
+        return status.HTTP_404_NOT_FOUND
+    if code is LifecycleErrorCode.APPROVAL_DIGEST_MISMATCH:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.OPERATION_DIGEST_MISMATCH:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.OPERATION_EXPIRED:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.INVALID_OPERATION_STATE:
+        return status.HTTP_409_CONFLICT
+    if code is LifecycleErrorCode.DURABLE_OPERATION_REQUIRED:
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    if code is LifecycleErrorCode.INVALID_REQUEST:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.UNSUPPORTED_SCHEME:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.CHALLENGE_NOT_FOUND:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.CHALLENGE_EXPIRED:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.CHALLENGE_ALREADY_USED:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.PROOF_BINDING_MISMATCH:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.PROOF_VERIFICATION_FAILED:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.OPERATION_ALREADY_COMMITTED:
+        return status.HTTP_409_CONFLICT
+    assert_never(code)
+
+
+def _handle_lifecycle_error(exc: LifecycleContractError) -> None:
+    raise HTTPException(
+        _http_status_for_lifecycle_error(exc.code),
+        exc.message,
+    )
 
 
 async def _credential_login(
@@ -643,6 +687,7 @@ def create_app(
 
         logger = logging.getLogger("dossier.sessions")
         all_sessions: list[SessionSummary] = []
+        unreachable_projects: list[str] = []
 
         for project in registry.list_projects():
             if not _can_read_project(actor, project):
@@ -656,6 +701,7 @@ def create_app(
                 sessions = read_session_summaries(gw, project_to_slug(project))
             except Exception:
                 logger.warning("sessions: project %s unreachable", project, exc_info=True)
+                unreachable_projects.append(project)
                 sessions = []
             all_sessions.extend(sessions)
 
@@ -669,6 +715,7 @@ def create_app(
                 **ctx,
                 "sessions": all_sessions,
                 "filter_project": filter_project or "",
+                "unreachable_projects": unreachable_projects,
             },
         )
 
@@ -680,7 +727,13 @@ def create_app(
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
         gw = resolve_gateway(project, actor)
-        detail = read_session_detail(gw, session_id, project)
+        try:
+            detail = read_session_detail(gw, session_id, project)
+        except Exception as exc:
+            logger.warning(
+                "session detail unreadable for %s/%s", project, session_id, exc_info=True
+            )
+            detail = unverifiable_session_detail(session_id, project, exc)
         if detail is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "session not found")
 
@@ -1496,32 +1549,81 @@ def create_app(
         _: None = Depends(verify_csrf),
     ) -> Response:
         require_admin(actor)
-        reason = "revoked by admin"
+        form = await request.form()
+        reason = " ".join(str(form.get("reason", "")).strip().split())
+        if not reason:
+            reason = "revoked by admin"
+        if len(reason) > 500:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "reason must be 500 characters or fewer"
+            )
 
-        success_count = 0
+        prepared: list[dict[str, Any]] = []
         errors: list[str] = []
+        fallback_revoked: list[str] = []
         for project in registry.list_projects():
             if not _can_read_project(actor, project):
                 continue
             try:
                 gw = registry.get(project)
                 key_info = gw.get_principal_key(principal_id)
-                if key_info:
-                    gw.revoke_principal(
-                        principal_id, key_info["key_id"], reason=reason
+                if key_info is None:
+                    continue
+                if gw.has_lifecycle_ops():
+                    operation = gw.prepare_revocation_operation(
+                        principal_id,
+                        key_info["key_id"],
+                        actor=actor,
+                        reason=reason,
                     )
-                    success_count += 1
+                    prepared.append({
+                        **operation,
+                        "project": project,
+                        "project_slug": project_to_slug(project),
+                    })
+                else:
+                    gw.revoke_principal(
+                        principal_id,
+                        key_info["key_id"],
+                        reason=reason,
+                    )
+                    fallback_revoked.append(project)
+            except LifecycleContractError as exc:
+                errors.append(f"{project}: {exc.message}")
+            except RegistaError as exc:
+                errors.append(f"{project}: {exc.message}")
             except Exception as exc:
-                errors.append(f"{project}: {exc}")
+                errors.append(f"{project}: {type(exc).__name__}")
 
-        if success_count == 0:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR, "principal revocation failed"
+        if not prepared and not fallback_revoked:
+            if errors:
+                detail = errors[0] if errors else "principal revocation failed"
+                raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, detail)
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "principal not found")
+
+        if fallback_revoked and not prepared:
+            return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
+
+        if _wants_html(request):
+            ctx = actor_context(request, actor)
+            ctx["principal_id"] = principal_id
+            ctx["operations"] = prepared
+            ctx["errors"] = errors
+            return templates.TemplateResponse(
+                request,
+                "lifecycle_pending.html",
+                ctx,
             )
-
-        return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
+        return JSONResponse({"operations": prepared, "errors": errors})
 
     # ---- break-glass (Plan 015 WI-2.3) ----
+    #
+    # Break-glass registration of a new signing key requires a client-side
+    # possession proof from a key-custody helper that does not exist yet.  Until
+    # that helper lands, the web process must not generate or hold private keys.
+    # The honest first-increment behavior is to fail closed with a clear
+    # "not yet available" response rather than simulate dual control with a
+    # soft confirmer_id text field.
 
     @app.get("/admin/break-glass")
     def break_glass_form(
@@ -1530,6 +1632,7 @@ def create_app(
     ) -> Response:
         require_admin(actor)
         ctx = actor_context(request, actor)
+        ctx["not_available"] = True
         return templates.TemplateResponse(
             request,
             "break_glass.html",
@@ -1543,106 +1646,66 @@ def create_app(
         _: None = Depends(verify_csrf),
     ) -> Response:
         require_admin(actor)
+        message = (
+            "break-glass key registration is not yet available: it requires the "
+            "key-custody signing helper that produces a client-side possession "
+            "proof without the web process holding private keys"
+        )
+        if _wants_html(request):
+            ctx = actor_context(request, actor)
+            ctx["not_available"] = True
+            ctx["not_available_message"] = message
+            return templates.TemplateResponse(
+                request,
+                "break_glass.html",
+                ctx,
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            )
+        raise HTTPException(status.HTTP_501_NOT_IMPLEMENTED, message)
+
+    @app.post("/admin/p/{project}/lifecycle/{operation_id}/approve", response_model=None)
+    async def approve_lifecycle_operation(
+        project: str,
+        operation_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
         form = await request.form()
-        principal_id = str(form.get("principal_id", "")).strip()
-        raw_reason = str(form.get("reason", "")).strip()
-        confirmer_id = str(form.get("confirmer_id", "")).strip()
-
-        if not principal_id or not raw_reason or not confirmer_id:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "all fields are required")
-
-        if confirmer_id == actor.actor_id:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "dual-control requires a different confirmer",
-            )
-
-        if confirmer_id not in _ADMIN_ACTOR_IDS:
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "confirmer must be an admin",
-            )
-
-        reason = " ".join(raw_reason.split())[:500]
+        approval_reason = str(form.get("reason", "")).strip()
+        form_digest = str(form.get("approval_digest", "")).strip()
 
         try:
-            _validate_principal_id(principal_id)
-        except ValueError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-
-        private_key_dir = settings.principal_key_dir or None
-
-        success_count = 0
-        errors: list[str] = []
-        for project in registry.list_projects():
-            if not _can_read_project(actor, project):
-                continue
-            try:
-                gw = registry.get(project)
-                old_key = gw.get_principal_key(principal_id)
-                result = gw.register_principal(
-                    principal_id,
-                    actor=actor,
-                    private_key_dir=private_key_dir,
-                )
-                if not result:
-                    errors.append(f"{project}: break-glass returned no result")
-                    continue
-                if old_key is not None:
-                    try:
-                        gw.revoke_principal(
-                            principal_id,
-                            old_key["key_id"],
-                            reason=f"break-glass: {reason}",
-                        )
-                    except Exception as exc:
-                        errors.append(
-                            f"{project}: break-glass registered the new key but "
-                            f"failed to revoke old key {old_key['key_id']} "
-                            f"({type(exc).__name__}) — the old key remains "
-                            f"superseded but is not marked revoked"
-                        )
-                success_count += 1
-            except RegistaError as exc:
-                if exc.code in (
-                    ErrorCode.SECRET_WRITE_UNSUPPORTED,
-                    ErrorCode.SECRET_WRITE_EXTERNAL,
-                ):
-                    raise HTTPException(
-                        status.HTTP_400_BAD_REQUEST,
-                        exc.message,
-                    )
-                errors.append(f"{project}: {type(exc).__name__}")
-            except Exception as exc:
-                errors.append(f"{project}: {type(exc).__name__}")
-
-        if errors:
-            logger.warning("break_glass.partial_failure", extra={
-                "principal_id": principal_id,
-                "actor_id": actor.actor_id,
-                "success_count": success_count,
-                "errors": errors,
-            })
-
-        if success_count == 0:
+            operation = gw.principal_lifecycle.get_operation(operation_id)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        server_digest = operation.digest.value
+        if form_digest and not hmac.compare_digest(form_digest, server_digest):
             raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                "break-glass key rotation failed",
+                status.HTTP_400_BAD_REQUEST,
+                "approval digest does not match the server operation",
             )
 
-        logger.warning(
-            "break_glass.executed",
-            extra={
-                "principal_id": principal_id,
-                "actor_id": actor.actor_id,
-                "confirmer_id": confirmer_id,
-                "reason": reason,
-                "projects_succeeded": success_count,
-                "errors": errors,
-            },
-        )
-
-        return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
+        try:
+            gw.approve_operation(
+                operation_id,
+                approver=actor,
+                approval_digest=server_digest,
+                reason=approval_reason,
+            )
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        try:
+            gw.commit_operation(operation_id, expected_digest=server_digest)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        if _wants_html(request):
+            return RedirectResponse(
+                url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER
+            )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- evidence area (Plan 024 Phase 2) ----
 
@@ -1905,6 +1968,7 @@ def create_app(
         logger = logging.getLogger("dossier.activity")
         all_sessions: list[SessionSummary] = []
         all_entries: list[ActivityEntry] = []
+        unreachable_projects: list[str] = []
 
         for project in registry.list_projects():
             if not _can_read_project(actor, project):
@@ -1918,6 +1982,7 @@ def create_app(
                 all_entries.extend(entries)
             except Exception:
                 logger.warning("activity: project %s unreachable", project, exc_info=True)
+                unreachable_projects.append(project)
 
         all_sessions.sort(key=lambda s: s.attested_at or datetime.min, reverse=True)
         all_entries.sort(key=lambda e: e.timestamp, reverse=True)
@@ -1933,6 +1998,7 @@ def create_app(
                 "entries": all_entries,
                 "session_count": len(all_sessions),
                 "entry_count": len(all_entries),
+                "unreachable_projects": unreachable_projects,
             },
         )
 

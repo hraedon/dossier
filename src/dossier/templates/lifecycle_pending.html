@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}revocation pending approval — dossier{% endblock %}
+{% block content %}
+<div class="ds-pagehead">
+  <h1 class="ds-pagehead__title">revocation pending approval</h1>
+</div>
+
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose">
+    Revocation is pending approval. A protected key operation requires dual control: a <strong>different</strong> admin must approve and commit each operation before it takes effect.
+  </p>
+</div>
+
+{% if errors %}
+<div class="ds-panel ds-panel--pad">
+  <h2 class="ds-section__title">partial failures</h2>
+  <ul class="ds-findings">
+    {% for error in errors %}
+    <li class="ds-finding ds-finding--crit">{{ error }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% for op in operations %}
+<div class="ds-section">
+  <h2 class="ds-section__title">{{ op.project }} — {{ op.operation_id }}</h2>
+  <div class="ds-card-row">
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">operation_id</div>
+      <div class="ds-card__value mono">{{ op.operation_id }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">state</div>
+      <div class="ds-card__value mono">{{ op.state }}</div>
+    </div>
+    <div class="ds-card ds-card--compact">
+      <div class="ds-card__label">digest</div>
+      <div class="ds-card__value mono">{{ op.digest }}</div>
+    </div>
+  </div>
+
+  <div class="ds-panel ds-panel--pad">
+    <form method="post" action="/admin/p/{{ op.project_slug }}/lifecycle/{{ op.operation_id }}/approve" class="ds-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="approval_digest" value="{{ op.digest }}">
+      <div class="ds-field">
+        <label class="ds-label" for="reason-{{ loop.index }}">approval reason</label>
+        <textarea class="ds-input ds-input--area" id="reason-{{ loop.index }}" name="reason" rows="3" required></textarea>
+      </div>
+      <button type="submit" class="ds-btn ds-btn--crit">approve and commit</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+
+{% if not operations %}
+<div class="ds-empty">
+  <div class="ds-empty__title">no pending operations</div>
+</div>
+{% endif %}
+{% endblock %}

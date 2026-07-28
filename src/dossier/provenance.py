@@ -569,6 +569,49 @@ def read_session_summaries(
     return summaries
 
 
+def unverifiable_session_detail(
+    session_id: str,
+    project_slug: str,
+    exc: Exception,
+) -> SessionDetail:
+    """Build a synthetic detail that honestly reports a store/read failure.
+
+    The verification model treats an input that could not be obtained as
+    ``unverifiable`` — never ``broken`` or ``verified``. The returned detail
+    renders the same ``could not be verified`` verdict as the list view's
+    ``unreachable`` state, with the exception type named in the reason.
+    """
+    verification = VerificationStatus(
+        status=UNVERIFIABLE,
+        chain_intact=False,
+        chain_state=CHAIN_UNKNOWN,
+        chain_reason=(
+            "the session could not be read "
+            f"({type(exc).__name__}); its provenance is unverifiable, not verified"
+        ),
+    )
+    summary = SessionSummary(
+        session_id=session_id,
+        principal_id="unknown",
+        principal_display_name=None,
+        harnesses=[],
+        attested_at=None,
+        event_count=0,
+        start_time=None,
+        end_time=None,
+        degraded=False,
+        project_slug=project_slug,
+        chain_intact=False,
+        verification=verification,
+    )
+    return SessionDetail(
+        summary=summary,
+        tool_calls=[],
+        verification=verification,
+        attestation_event=None,
+    )
+
+
 def read_session_detail(
     gateway: RegistaGateway,
     session_id: str,

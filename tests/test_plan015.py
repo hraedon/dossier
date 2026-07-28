@@ -8,6 +8,7 @@ import pytest
 from _doubles import InMemoryPrincipalKeyStore, inject_test_store
 from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
+from regista import LifecycleContractError
 
 from dossier.keys import generate_ed25519_keypair
 
@@ -32,17 +33,6 @@ _NEW_PRINCIPAL_ID = "33333333-3333-3333-3333-333333333333"
 @pytest.fixture
 def admin_env(monkeypatch):
     monkeypatch.setenv("DOSSIER_ADMIN_IDS", _ALICE_ID)
-    from dossier.app import _configure_admin_ids
-
-    _configure_admin_ids()
-    yield
-    monkeypatch.delenv("DOSSIER_ADMIN_IDS", raising=False)
-    _configure_admin_ids()
-
-
-@pytest.fixture
-def admin_env_dual(monkeypatch):
-    monkeypatch.setenv("DOSSIER_ADMIN_IDS", f"{_ALICE_ID},{_SECOND_ADMIN_ID}")
     from dossier.app import _configure_admin_ids
 
     _configure_admin_ids()
@@ -263,118 +253,63 @@ def test_revoked_principal_history_still_verifies(client, principal_store, admin
 
 # ---- /admin/break-glass ----
 
+# Break-glass registration of a new signing key requires a client-side
+# possession proof from a key-custody helper that does not exist yet.  The
+# web process must not generate or hold private keys, so the route is
+# intentionally fail-closed (HTTP 501) in this increment.
 
-def test_break_glass_form_renders(client, principal_store, admin_env):
+
+def test_break_glass_form_shows_not_available(client, principal_store, admin_env):
     _login(client)
     resp = client.get("/admin/break-glass")
     assert resp.status_code == 200
-    assert 'name="principal_id"' in resp.text
-    assert 'name="reason"' in resp.text
-    assert 'name="confirmer_id"' in resp.text
+    assert "not yet available" in resp.text.lower()
+    assert 'name="confirmer_id"' not in resp.text
+    assert "execute break-glass" not in resp.text.lower()
 
 
-def test_break_glass_requires_all_fields(client, principal_store, admin_env):
+def test_break_glass_action_returns_not_implemented(client, principal_store, admin_env):
     _login(client)
     bg_page = client.get("/admin/break-glass")
     csrf = _extract_csrf(bg_page.text)
     resp = client.post(
         "/admin/break-glass",
-        data={"principal_id": "", "reason": "", "confirmer_id": "", "csrf_token": csrf},
+        data={"csrf_token": csrf},
         follow_redirects=False,
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 501
+    assert "not yet available" in resp.text.lower()
 
 
-def test_break_glass_requires_different_confirmer(client, principal_store, admin_env):
-    _login(client)
-    bg_page = client.get("/admin/break-glass")
-    csrf = _extract_csrf(bg_page.text)
-    resp = client.post(
-        "/admin/break-glass",
-        data={
-            "principal_id": _NEW_PRINCIPAL_ID,
-            "reason": "emergency",
-            "confirmer_id": _ALICE_ID,
-            "csrf_token": csrf,
-        },
-        follow_redirects=False,
-    )
-    assert resp.status_code == 400
-
-
-def test_break_glass_requires_admin_confirmer(client, principal_store, admin_env):
-    _login(client)
-    bg_page = client.get("/admin/break-glass")
-    csrf = _extract_csrf(bg_page.text)
-    resp = client.post(
-        "/admin/break-glass",
-        data={
-            "principal_id": _NEW_PRINCIPAL_ID,
-            "reason": "emergency",
-            "confirmer_id": "non-admin-id",
-            "csrf_token": csrf,
-        },
-        follow_redirects=False,
-    )
-    assert resp.status_code == 403
-
-
-def test_break_glass_success(client, principal_store, admin_env_dual):
+def test_break_glass_does_not_register_or_revoke(client, principal_store, admin_env):
     _enroll(principal_store, _NEW_PRINCIPAL_ID)
     old_key = principal_store.get_active(_NEW_PRINCIPAL_ID)
     _login(client)
     bg_page = client.get("/admin/break-glass")
     csrf = _extract_csrf(bg_page.text)
-    resp = client.post(
-        "/admin/break-glass",
-        data={
-            "principal_id": _NEW_PRINCIPAL_ID,
-            "reason": "emergency access",
-            "confirmer_id": _SECOND_ADMIN_ID,
-            "csrf_token": csrf,
-        },
-        follow_redirects=False,
-    )
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/admin/principals"
-
-    # Break-glass should have revoked the old key and registered a new one
-    new_key = principal_store.get_active(_NEW_PRINCIPAL_ID)
-    assert new_key["key_id"] != old_key["key_id"]
-    assert new_key["public_key"] != old_key["public_key"]
-
-    # Old key should be revoked with the break-glass reason
-    all_entries = principal_store.list(principal_id=_NEW_PRINCIPAL_ID)
-    old_entries = [e for e in all_entries if e["key_id"] == old_key["key_id"]]
-    assert len(old_entries) == 1
-    assert old_entries[0]["status"] == "revoked"
-    assert "break-glass" in (old_entries[0]["revoked_reason"] or "")
-
-
-def test_break_glass_generates_valid_ed25519_key(client, principal_store, admin_env_dual, tmp_path):
-    _login(client)
-    bg_page = client.get("/admin/break-glass")
-    csrf = _extract_csrf(bg_page.text)
     client.post(
         "/admin/break-glass",
-        data={
-            "principal_id": _NEW_PRINCIPAL_ID,
-            "reason": "emergency access",
-            "confirmer_id": _SECOND_ADMIN_ID,
-            "csrf_token": csrf,
-        },
+        data={"csrf_token": csrf},
         follow_redirects=False,
     )
+    # No break-glass key was minted; the existing key is unchanged.
+    assert principal_store.get_active(_NEW_PRINCIPAL_ID)["key_id"] == old_key["key_id"]
 
-    new_key = principal_store.get_active(_NEW_PRINCIPAL_ID)
-    public_key = bytes.fromhex(new_key["public_key"])
-    assert len(public_key) == 32
 
-    import nacl.signing
+def test_approve_operation_seam_requires_durable_backend(gateway, principal_store):
+    from dossier.actors import Actor
 
-    nacl.signing.VerifyKey(public_key)
-    priv_path = tmp_path / "principals" / f"{_NEW_PRINCIPAL_ID}_ed25519.key"
-    assert not priv_path.exists()
+    approver = Actor(
+        actor_id="second-admin",
+        actor_kind="human",
+        display_name="Second Admin",
+    )
+    with pytest.raises(LifecycleContractError):
+        gateway.approve_operation(
+            "any-operation-id",
+            approver=approver,
+            approval_digest="any-digest",
+        )
 
 
 # ---- auth required ----
@@ -539,25 +474,6 @@ def test_principal_key_manager_rejects_invalid_principal_id(tmp_path):
         mgr.generate_and_store("")
 
 
-def test_break_glass_does_not_store_private_key(client, principal_store, admin_env_dual, tmp_path):
-    _login(client)
-    bg_page = client.get("/admin/break-glass")
-    csrf = _extract_csrf(bg_page.text)
-    client.post(
-        "/admin/break-glass",
-        data={
-            "principal_id": _NEW_PRINCIPAL_ID,
-            "reason": "emergency access",
-            "confirmer_id": _SECOND_ADMIN_ID,
-            "csrf_token": csrf,
-        },
-        follow_redirects=False,
-    )
-
-    key_path = tmp_path / "principals" / f"{_NEW_PRINCIPAL_ID}_ed25519.key"
-    assert not key_path.exists()
-
-
 # ---- adversarial review fixes (Plan 015 follow-up) ----
 
 
@@ -617,39 +533,6 @@ def test_rotate_rolls_back_on_registration_failure(client, principal_store, admi
     assert resp.status_code == 500
     active = principal_store.get_active(_ALICE_ID)
     assert active["public_key"] == entry["public_key"]
-
-
-def test_break_glass_rolls_back_on_registration_failure(
-    client, principal_store, admin_env_dual, monkeypatch
-):
-    entry = _enroll(principal_store, _NEW_PRINCIPAL_ID)
-    old_public_key = entry["public_key"]
-    _login(client)
-
-    def _fail(*args, **kwargs):
-        raise RuntimeError("registration failed")
-
-    monkeypatch.setattr(
-        "dossier.gateway.RegistaGateway._generate_and_register",
-        _fail,
-    )
-
-    bg_page = client.get("/admin/break-glass")
-    csrf = _extract_csrf(bg_page.text)
-    resp = client.post(
-        "/admin/break-glass",
-        data={
-            "principal_id": _NEW_PRINCIPAL_ID,
-            "reason": "emergency access",
-            "confirmer_id": _SECOND_ADMIN_ID,
-            "csrf_token": csrf,
-        },
-        follow_redirects=False,
-    )
-
-    assert resp.status_code == 500
-    active = principal_store.get_active(_NEW_PRINCIPAL_ID)
-    assert active["public_key"] == old_public_key
 
 
 def test_enroll_principal_failure_logs_warning(caplog):

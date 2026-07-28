@@ -19,6 +19,16 @@
   </p>
 </div>
 
+{% if unreachable_projects %}
+<div class="ds-panel ds-panel--pad ds-warn" role="alert">
+  <strong>activity store unreachable.</strong>
+  The backing regista project(s) for {{ unreachable_projects | join(", ") }}
+  could not be read, so their sessions and transitions are not shown. This is a
+  named unavailable state, not an empty project — retry, or check the
+  operations page.
+</div>
+{% endif %}
+
 <div class="ds-section">
   <h2 class="ds-section__title">recent transitions</h2>
   {% if entries %}

@@ -17,6 +17,15 @@
   </p>
 </div>
 
+{% if unreachable_projects %}
+<div class="ds-panel ds-panel--pad ds-warn" role="alert">
+  <strong>activity store unreachable.</strong>
+  The backing regista project(s) for {{ unreachable_projects | join(", ") }}
+  could not be read, so their sessions are not shown. This is a named unavailable
+  state, not an empty project — retry, or check the operations page.
+</div>
+{% endif %}
+
 {% if filter_project %}
 <form method="get" action="/sessions" class="ds-filters">
   <div class="ds-field ds-field--inline">

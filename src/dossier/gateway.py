@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import threading
@@ -8,9 +9,24 @@ from typing import TYPE_CHECKING, Any, cast
 
 import regista
 import yaml
-from regista import ErrorCode, Event, QueryPage, Regista, RegistaError, ReplayReport, WorkItem
+from regista import (
+    Approval,
+    ErrorCode,
+    Event,
+    LifecycleContractError,
+    LifecycleErrorCode,
+    PrincipalKind,
+    PrincipalLifecycle,
+    QueryPage,
+    Regista,
+    RegistaError,
+    ReplayReport,
+    RevocationRequest,
+    WorkItem,
+)
+from regista.principal_lifecycle import CONTRACT_VERSION
 
-from .actors import Actor
+from .actors import SYSTEM_ACTOR, Actor
 
 if TYPE_CHECKING:
     from .contracts import ProviderDescriptor
@@ -399,6 +415,20 @@ class RegistaGateway:
         """True when the backend is real regista with principal-key ops."""
         return hasattr(self._reg, "principals")
 
+    def has_lifecycle_ops(self) -> bool:
+        """True when the backend exposes a durable principal lifecycle facade."""
+        return hasattr(self._reg, "principal_lifecycle")
+
+    @property
+    def principal_lifecycle(self) -> PrincipalLifecycle:
+        """Return the regista principal lifecycle facade, or raise if absent."""
+        if not self.has_lifecycle_ops():
+            raise LifecycleContractError(
+                LifecycleErrorCode.DURABLE_OPERATION_REQUIRED,
+                "principal lifecycle is not available on this backend",
+            )
+        return cast(PrincipalLifecycle, self._reg.principal_lifecycle)
+
     def _test_store(self) -> Any | None:
         if not _TESTING:
             return None
@@ -649,10 +679,134 @@ class RegistaGateway:
             rotate=True,
         )
 
+    def approve_operation(
+        self,
+        operation_id: str,
+        *,
+        approver: Actor,
+        approval_digest: str,
+        step_up_evidence: str | None = None,
+        reason: str = "",
+    ) -> Any:
+        """Record a dual-control approval for a prepared lifecycle operation.
+
+        The approver is a server-resolved :class:`Actor`; dossier enforces
+        separation of duties by refusing self-approval (the approver must not
+        be the operation's initiator).  This is the real approval seam; it
+        does not generate, hold, or return private key material.
+        """
+        lifecycle = self.principal_lifecycle
+        operation = lifecycle.get_operation(operation_id)
+        if operation.actor_id == approver.actor_id:
+            raise LifecycleContractError(
+                LifecycleErrorCode.INVALID_REQUEST,
+                "dual-control approval requires a different approver than the initiator",
+            )
+        approval = Approval(
+            approver_id=approver.actor_id,
+            approver_kind=approver.actor_kind,
+            approval_digest=approval_digest,
+            step_up_evidence=step_up_evidence,
+            reason=reason,
+        )
+        return lifecycle.record_approval(operation_id, approval)
+
+    def _resolve_principal_kind(self, principal_id: str) -> PrincipalKind:
+        """Resolve the principal kind from the durable lifecycle registry.
+
+        Revocation must record the actual kind of the principal in the
+        operation digest and the signed audit event.  Dossier does not
+        default to HUMAN when the kind is unknown; it asks regista's
+        lifecycle descriptor and fails closed if the kind cannot be
+        determined.
+        """
+        lifecycle = self.principal_lifecycle
+        try:
+            descriptor = lifecycle.describe(principal_id)
+        except Exception as exc:
+            raise LifecycleContractError(
+                LifecycleErrorCode.INVALID_REQUEST,
+                f"cannot determine principal kind for {principal_id}",
+            ) from exc
+        return descriptor.principal_kind
+
+    def prepare_revocation_operation(
+        self,
+        principal_id: str,
+        key_id: str,
+        *,
+        actor: Actor | None = None,
+        reason: str = "unspecified",
+    ) -> dict[str, Any]:
+        """Prepare a revocation lifecycle operation.
+
+        Returns the prepared operation metadata (operation_id, digest, state,
+        principal, project).  The caller must obtain approval from a different
+        admin and then commit the operation; this method does not approve or
+        commit, so it never self-approves.
+        """
+        lifecycle = self.principal_lifecycle
+        initiator = actor or SYSTEM_ACTOR
+        principal_kind = self._resolve_principal_kind(principal_id)
+        idempotency_key = self._lifecycle_idempotency_key(
+            "revoke", initiator.actor_id, principal_id, key_id
+        )
+        request = RevocationRequest(
+            principal_id=principal_id,
+            principal_kind=principal_kind,
+            actor_id=initiator.actor_id,
+            key_id=key_id,
+            reason=reason,
+            requested_authority="admin",
+            policy_version=CONTRACT_VERSION,
+        )
+        operation = lifecycle.prepare_revocation(request, idempotency_key=idempotency_key)
+        return {
+            "operation_id": operation.operation_id,
+            "digest": operation.digest.value,
+            "state": operation.state.value,
+            "principal_id": principal_id,
+            "project": self._project_name,
+        }
+
+    def commit_operation(
+        self,
+        operation_id: str,
+        *,
+        expected_digest: str,
+    ) -> dict[str, Any]:
+        """Commit an approved lifecycle operation."""
+        lifecycle = self.principal_lifecycle
+        receipt = lifecycle.commit(
+            operation_id, expected_digest=expected_digest
+        )
+        return cast(dict[str, Any], receipt.to_dict())
+
     def revoke_principal(
-        self, principal_id: str, key_id: str, *, reason: str = "unspecified"
+        self,
+        principal_id: str,
+        key_id: str,
+        *,
+        actor: Actor | None = None,
+        approver: Actor | None = None,
+        reason: str = "unspecified",
     ) -> dict[str, Any] | None:
-        """Revoke a principal's key (Plan 015 WI-2.2)."""
+        """Revoke a principal's key.
+
+        Against a durable regista lifecycle backend this method is disabled:
+        revocation is a protected operation that requires two-phase dual
+        control (prepare → approve → commit), so callers must use
+        :meth:`prepare_revocation_operation`, :meth:`approve_operation`, and
+        :meth:`commit_operation`.  Against the InMemoryRegista test backend it
+        falls back to the injected test store or the legacy
+        ``principals.revoke`` path.
+        """
+        _ = actor, approver  # retained for compatibility; ignored on lifecycle path
+        if self.has_lifecycle_ops():
+            raise LifecycleContractError(
+                LifecycleErrorCode.DURABLE_OPERATION_REQUIRED,
+                "revocation requires the two-phase prepare/approve/commit flow",
+            )
         store = self._test_store()
         if store is not None:
             return cast(dict[str, Any], store.revoke(principal_id, key_id, reason=reason))
@@ -662,6 +816,16 @@ class RegistaGateway:
                 self._reg.principals.revoke(principal_id, key_id, reason=reason),
             )
         return None
+
+    def _lifecycle_idempotency_key(
+        self,
+        operation_type: str,
+        actor_id: str,
+        principal_id: str,
+        key_id: str,
+    ) -> str:
+        payload = f"{operation_type}:{actor_id}:{principal_id}:{key_id}"
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def transitions_from(self, state: str, workflow_version: int) -> list[Any]:
         """Return the ``TransitionDef``s whose ``from_state == state`` for the

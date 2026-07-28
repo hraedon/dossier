@@ -19,6 +19,8 @@ import pytest
 from dossier.contracts import (
     CONTRACT_VERSION,
     PROVIDER_CONTRACTS,
+    ActivityProvider,
+    EvidenceProvider,
     IdentityProvider,
     KnowledgeProvider,
     ProviderDescriptor,
@@ -43,11 +45,13 @@ CONTRACTS_PATH = (
 
 # Providers whose implementations fully satisfy their declared Protocol today.
 # The mechanical drift guard below enforces that *every* declared method exists
-# on these implementations. The remaining providers (activity, evidence,
-# operations, delivery) declare their contract surface in the Protocol/JSON but
-# their module function names have not yet converged on the Protocol vocabulary
-# — that gap is a tracked Gate 1 follow-up, not silently passing here.
-_FULLY_IMPLEMENTED_PROVIDERS = frozenset({"work", "identity", "knowledge"})
+# on these implementations. The remaining providers (operations, delivery) still
+# declare their contract surface in the Protocol/JSON but have not yet converged
+# on adapter-backed implementations — that gap is a tracked Gate 1 follow-up,
+# not silently passing here.
+_FULLY_IMPLEMENTED_PROVIDERS = frozenset(
+    {"work", "identity", "knowledge", "activity", "evidence"}
+)
 
 
 class TestContractDescriptors:
@@ -257,6 +261,116 @@ class TestKnowledgeProviderAdapterConformance:
         assert "verified" in verdict and "chain_intact" in verdict
 
 
+_ACTIVITY_MEMBERS = sorted(get_protocol_members(ActivityProvider))
+
+
+class TestActivityProviderAdapterConformance:
+    """The activity provider adapter is a real Protocol-satisfying object,
+    binding session/feed reads to a gateway."""
+
+    def test_adapter_satisfies_activity_provider_protocol_at_runtime(
+        self, gateway: Any
+    ) -> None:
+        from dossier.activity import ActivityProviderAdapter
+
+        adapter = ActivityProviderAdapter(gateway, project_slug="dossier-test")
+        assert isinstance(adapter, ActivityProvider)
+
+    def test_adapter_exposes_every_protocol_member(self, gateway: Any) -> None:
+        from dossier.activity import ActivityProviderAdapter
+
+        adapter = ActivityProviderAdapter(gateway, project_slug="dossier-test")
+        for member in get_protocol_members(ActivityProvider):
+            assert hasattr(adapter, member), (
+                f"adapter missing Protocol member {member!r}"
+            )
+
+    @pytest.mark.parametrize("member", _ACTIVITY_MEMBERS)
+    def test_adapter_method_signature_conforms_to_protocol(
+        self, member: str, gateway: Any
+    ) -> None:
+        from dossier.activity import ActivityProviderAdapter
+
+        proto_sig = _param_shape(getattr(ActivityProvider, member))
+        adapter_sig = _param_shape(getattr(ActivityProviderAdapter, member))
+        assert proto_sig == adapter_sig, (
+            f"signature drift on {member!r}: Protocol expects {proto_sig}, "
+            f"adapter has {adapter_sig}"
+        )
+
+    def test_adapter_delegates_to_module_functions(self, gateway: Any) -> None:
+        """A round-trip through the adapter proves it delegates to real read
+        functions and returns the dict shapes the Protocol declares."""
+        from dossier.activity import ActivityProviderAdapter
+
+        adapter = ActivityProviderAdapter(gateway, project_slug="dossier-test")
+
+        listed = adapter.list_sessions()
+        assert isinstance(listed, list)
+
+        fetched = adapter.get_session("no-such-session")
+        assert fetched is None
+
+        feed = adapter.activity_feed()
+        assert isinstance(feed, list)
+
+
+_EVIDENCE_MEMBERS = sorted(get_protocol_members(EvidenceProvider))
+
+
+class TestEvidenceProviderAdapterConformance:
+    """The evidence provider adapter is a real Protocol-satisfying object,
+    binding integrity/verification reads to a gateway."""
+
+    def test_adapter_satisfies_evidence_provider_protocol_at_runtime(
+        self, gateway: Any
+    ) -> None:
+        from dossier.evidence import EvidenceProviderAdapter
+
+        adapter = EvidenceProviderAdapter(gateway, project_slug="dossier-test")
+        assert isinstance(adapter, EvidenceProvider)
+
+    def test_adapter_exposes_every_protocol_member(self, gateway: Any) -> None:
+        from dossier.evidence import EvidenceProviderAdapter
+
+        adapter = EvidenceProviderAdapter(gateway, project_slug="dossier-test")
+        for member in get_protocol_members(EvidenceProvider):
+            assert hasattr(adapter, member), (
+                f"adapter missing Protocol member {member!r}"
+            )
+
+    @pytest.mark.parametrize("member", _EVIDENCE_MEMBERS)
+    def test_adapter_method_signature_conforms_to_protocol(
+        self, member: str, gateway: Any
+    ) -> None:
+        from dossier.evidence import EvidenceProviderAdapter
+
+        proto_sig = _param_shape(getattr(EvidenceProvider, member))
+        adapter_sig = _param_shape(getattr(EvidenceProviderAdapter, member))
+        assert proto_sig == adapter_sig, (
+            f"signature drift on {member!r}: Protocol expects {proto_sig}, "
+            f"adapter has {adapter_sig}"
+        )
+
+    def test_adapter_delegates_to_module_functions(self, gateway: Any) -> None:
+        """A round-trip through the adapter proves it delegates to real read
+        functions and returns the dict/list shapes the Protocol declares."""
+        from dossier.evidence import EvidenceProviderAdapter
+
+        adapter = EvidenceProviderAdapter(gateway, project_slug="dossier-test")
+
+        summary = adapter.evidence_summary()
+        assert isinstance(summary, dict)
+        assert "project_slug" in summary
+
+        events = adapter.event_verifications()
+        assert isinstance(events, list)
+
+        report = adapter.integrity_report()
+        assert isinstance(report, dict)
+        assert "chain_intact" in report
+
+
 class TestGatewaySatisfiesContracts:
     def test_gateway_is_work_provider(self, gateway: Any) -> None:
         assert isinstance(gateway, WorkProvider)
@@ -361,6 +475,7 @@ class TestArchitectureBoundary:
             "dossier.knowledge",
             "dossier.provenance",
             "dossier.evidence",
+            "dossier.activity",
             "dossier.operations",
             "dossier.administration",
             "dossier.views",
@@ -386,6 +501,7 @@ class TestArchitectureBoundary:
             "dossier.knowledge",
             "dossier.provenance",
             "dossier.evidence",
+            "dossier.activity",
             "dossier.operations",
             "dossier.administration",
             "dossier.views",

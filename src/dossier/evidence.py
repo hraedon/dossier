@@ -7,11 +7,13 @@ recompute cryptographic verdicts — delegates to regista's signed event log.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from .contracts import CONTRACT_VERSION, ProviderDescriptor
 from .gateway import RegistaGateway
+from .shell import Availability
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,3 +175,45 @@ def read_integrity_report(
         "chain_intact": chain_intact,
         "work_item_id": str(work_item_id) if work_item_id else None,
     }
+
+
+def describe_evidence() -> ProviderDescriptor:
+    """Self-description for the evidence provider (Plan 015 WI-1.1)."""
+    return ProviderDescriptor(
+        name="evidence",
+        contract_version=CONTRACT_VERSION,
+        availability=Availability.AVAILABLE,
+        capabilities=("summary", "events", "integrity"),
+    )
+
+
+class EvidenceProviderAdapter:
+    """Thin adapter binding the evidence module functions to a gateway and
+    project, satisfying the :class:`~dossier.contracts.EvidenceProvider`
+    Protocol.
+
+    The adapter delegates to :func:`read_evidence_summary`,
+    :func:`read_event_verifications`, and :func:`read_integrity_report`,
+    converting dataclass results into the plain dicts/lists the Protocol
+    declares.
+    """
+
+    def __init__(self, gateway: RegistaGateway, project_slug: str) -> None:
+        self._gateway = gateway
+        self._project_slug = project_slug
+
+    def describe_evidence(self) -> ProviderDescriptor:
+        return describe_evidence()
+
+    def evidence_summary(self) -> dict[str, Any]:
+        return asdict(read_evidence_summary(self._gateway, self._project_slug))
+
+    def event_verifications(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        return [asdict(v) for v in read_event_verifications(
+            self._gateway, limit=limit
+        )]
+
+    def integrity_report(self, *, work_item_id: Any = None) -> dict[str, Any]:
+        return read_integrity_report(
+            self._gateway, work_item_id=work_item_id
+        )

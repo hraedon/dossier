@@ -18,15 +18,15 @@
     },
     "activity": {
       "owner": "agent-provenance",
-      "dossier_module": "dossier.provenance",
-      "implementation": "module",
+      "dossier_module": "dossier.activity",
+      "implementation": "class:ActivityProviderAdapter",
       "methods": ["describe_activity", "list_sessions", "get_session", "activity_feed"],
       "golden_journeys": ["GJ-5"]
     },
     "evidence": {
       "owner": "regista",
       "dossier_module": "dossier.evidence",
-      "implementation": "module",
+      "implementation": "class:EvidenceProviderAdapter",
       "methods": ["describe_evidence", "evidence_summary", "event_verifications", "integrity_report"],
       "golden_journeys": ["GJ-8"]
     },

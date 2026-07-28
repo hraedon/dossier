@@ -69,6 +69,11 @@ class TestInitProvisionCheck:
         monkeypatch.setenv("REGISTA_KEY_PATH", "/nonexistent/keys.json")
         monkeypatch.setenv("DOSSIER_PROJECT", f"nonexist_{uuid.uuid4().hex[:8]}")
         monkeypatch.setenv("DOSSIER_SESSION_SECRET", "a" * 40)
+        # The local test Postgres has no SSL; require_ssl defaults on in prod
+        # mode, which would fail the connection before the provision check is
+        # reached. Match the sibling tests above (require_ssl=False) so this
+        # exercises the intended "unprovisioned" path, not an SSL error.
+        monkeypatch.setenv("DOSSIER_REQUIRE_SSL", "false")
 
         from dossier.cli import main
 
