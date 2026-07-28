@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import threading
@@ -24,7 +25,14 @@ from regista import (
     RevocationRequest,
     WorkItem,
 )
-from regista.principal_lifecycle import CONTRACT_VERSION
+from regista.principal_lifecycle import (
+    CONTRACT_VERSION,
+    CustodyMode,
+    EffectiveReceipt,
+    EnrollmentRequest,
+    PossessionProof,
+    RotationRequest,
+)
 
 from .actors import SYSTEM_ACTOR, Actor
 
@@ -132,9 +140,7 @@ class RegistaGateway:
             name="identity",
             contract_version=CONTRACT_VERSION,
             availability=(
-                Availability.AVAILABLE
-                if self.has_principal_ops()
-                else Availability.NOT_CONFIGURED
+                Availability.AVAILABLE if self.has_principal_ops() else Availability.NOT_CONFIGURED
             ),
             capabilities=("enroll", "revoke", "list", "get_active"),
         )
@@ -679,6 +685,172 @@ class RegistaGateway:
             rotate=True,
         )
 
+    def prepare_enrollment_with_key(
+        self,
+        principal_id: str,
+        public_key: bytes,
+        *,
+        actor: Actor | None = None,
+        principal_kind: PrincipalKind = PrincipalKind.HUMAN,
+        custody_mode: str = "file",
+        reason: str = "initial enrollment",
+    ) -> dict[str, Any]:
+        """Prepare an enrollment lifecycle operation with a client-provided key.
+
+        Plan 031 §5: the client generates the keypair out-of-process (via the
+        client signer) and sends only the public key. Dossier prepares the
+        lifecycle operation and returns the operation metadata plus a
+        possession challenge for the client to sign.
+
+        Returns a dict with ``operation_id``, ``digest``, ``state``, and
+        ``challenge`` (the possession challenge as a dict).
+        """
+        if len(public_key) != 32:
+            raise LifecycleContractError(
+                LifecycleErrorCode.INVALID_REQUEST,
+                f"Ed25519 public key must be 32 bytes, got {len(public_key)}",
+            )
+        lifecycle = self.principal_lifecycle
+        initiator = actor or SYSTEM_ACTOR
+        idempotency_key = self._lifecycle_idempotency_key(
+            "enroll",
+            initiator.actor_id,
+            principal_id,
+            public_key.hex(),
+        )
+        request = EnrollmentRequest(
+            principal_id=principal_id,
+            principal_kind=principal_kind,
+            actor_id=initiator.actor_id,
+            public_key=public_key,
+            scheme="ed25519",
+            custody_mode=CustodyMode(custody_mode),
+            reason=reason,
+            requested_authority="admin",
+            policy_version=CONTRACT_VERSION,
+        )
+        operation = lifecycle.prepare_enrollment(
+            request,
+            idempotency_key=idempotency_key,
+        )
+        challenge = lifecycle.issue_possession_challenge(operation.operation_id)
+        return {
+            "operation_id": operation.operation_id,
+            "digest": operation.digest.value,
+            "state": operation.state.value,
+            "principal_id": principal_id,
+            "project": self._project_name,
+            "challenge": challenge.to_dict(),
+        }
+
+    def prepare_rotation_with_key(
+        self,
+        principal_id: str,
+        public_key: bytes,
+        old_key_id: str,
+        *,
+        actor: Actor | None = None,
+        principal_kind: PrincipalKind = PrincipalKind.HUMAN,
+        custody_mode: str = "file",
+        reason: str = "key rotation",
+    ) -> dict[str, Any]:
+        """Prepare a rotation lifecycle operation with a client-provided key.
+
+        Like :meth:`prepare_enrollment_with_key`, but for rotation. The client
+        generates a new keypair and sends the new public key; the old key is
+        superseded on commit.
+        """
+        if len(public_key) != 32:
+            raise LifecycleContractError(
+                LifecycleErrorCode.INVALID_REQUEST,
+                f"Ed25519 public key must be 32 bytes, got {len(public_key)}",
+            )
+        lifecycle = self.principal_lifecycle
+        initiator = actor or SYSTEM_ACTOR
+        idempotency_key = self._lifecycle_idempotency_key(
+            "rotate",
+            initiator.actor_id,
+            principal_id,
+            f"{old_key_id}:{public_key.hex()}",
+        )
+        request = RotationRequest(
+            principal_id=principal_id,
+            principal_kind=principal_kind,
+            actor_id=initiator.actor_id,
+            public_key=public_key,
+            scheme="ed25519",
+            custody_mode=CustodyMode(custody_mode),
+            reason=reason,
+            requested_authority="admin",
+            policy_version=CONTRACT_VERSION,
+            old_key_id=old_key_id,
+        )
+        operation = lifecycle.prepare_rotation(
+            request,
+            idempotency_key=idempotency_key,
+        )
+        challenge = lifecycle.issue_possession_challenge(operation.operation_id)
+        return {
+            "operation_id": operation.operation_id,
+            "digest": operation.digest.value,
+            "state": operation.state.value,
+            "principal_id": principal_id,
+            "project": self._project_name,
+            "challenge": challenge.to_dict(),
+        }
+
+    def submit_possession_proof(
+        self,
+        operation_id: str,
+        proof: PossessionProof,
+    ) -> dict[str, Any]:
+        """Submit a client-signed possession proof for a prepared operation.
+
+        The client signs the possession challenge (via the client signer) and
+        sends the proof. Dossier verifies it and advances the operation to
+        ``awaiting_approval``.
+        """
+        lifecycle = self.principal_lifecycle
+        operation = lifecycle.submit_possession(operation_id, proof)
+        return {
+            "operation_id": operation.operation_id,
+            "state": operation.state.value,
+            "digest": operation.digest.value,
+        }
+
+    def record_effective_receipt(
+        self,
+        operation_id: str,
+        receipt: EffectiveReceipt,
+    ) -> dict[str, Any]:
+        """Record a client-produced effective-use receipt after commit.
+
+        After commit, the client signs a post-commit challenge (via the client
+        signer) and produces an effective-use receipt. Without it the operation
+        stays ``committed_not_effective``.
+        """
+        lifecycle = self.principal_lifecycle
+        operation = lifecycle.record_effective_receipt(operation_id, receipt)
+        return {
+            "operation_id": operation.operation_id,
+            "state": operation.state.value,
+        }
+
+    def issue_effective_challenge(
+        self,
+        operation_id: str,
+    ) -> dict[str, Any]:
+        """Issue a post-commit effective-use challenge for the client to sign.
+
+        The operation must be committed. The client signer signs the returned
+        challenge and submits the resulting receipt via
+        :meth:`record_effective_receipt`.
+        """
+        lifecycle = self.principal_lifecycle
+        challenge = lifecycle.issue_effective_challenge(operation_id)
+        result: dict[str, Any] = challenge.to_dict()
+        return result
+
     def approve_operation(
         self,
         operation_id: str,
@@ -777,9 +949,7 @@ class RegistaGateway:
     ) -> dict[str, Any]:
         """Commit an approved lifecycle operation."""
         lifecycle = self.principal_lifecycle
-        receipt = lifecycle.commit(
-            operation_id, expected_digest=expected_digest
-        )
+        receipt = lifecycle.commit(operation_id, expected_digest=expected_digest)
         return cast(dict[str, Any], receipt.to_dict())
 
     def revoke_principal(
@@ -824,7 +994,20 @@ class RegistaGateway:
         principal_id: str,
         key_id: str,
     ) -> str:
-        payload = f"{operation_type}:{actor_id}:{principal_id}:{key_id}"
+        # Key derivation v2 (2026-07-28): canonical JSON, eliminating the old
+        # f-string form's `:`-delimiter collision surface. Idempotency keys
+        # are not stable across this change; operations in flight under the
+        # old scheme are not recognized as idempotent after deploy.
+        payload = json.dumps(
+            {
+                "operation_type": operation_type,
+                "actor_id": actor_id,
+                "principal_id": principal_id,
+                "key_id": key_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def transitions_from(self, state: str, workflow_version: int) -> list[Any]:
@@ -880,7 +1063,7 @@ class RegistaGateway:
         pfx = f"{prefix}-"
         for key in existing:
             if key.startswith(pfx):
-                suffix = key[len(pfx):]
+                suffix = key[len(pfx) :]
                 try:
                     n = int(suffix)
                     if n > max_n:

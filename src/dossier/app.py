@@ -1,16 +1,26 @@
 from __future__ import annotations
 
+import base64
 import hmac
+import json
 import logging
 import uuid
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, assert_never
+from typing import Any, Final, NoReturn, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
 from regista import ErrorCode, LifecycleContractError, LifecycleErrorCode, RegistaError, WorkItem
+from regista.principal_lifecycle import (
+    CustodyMode,
+    EffectiveReceipt,
+    EffectiveReceiptStatus,
+    PossessionProof,
+    PrincipalKind,
+    ProofFormat,
+)
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -171,10 +181,120 @@ def _http_status_for_lifecycle_error(code: LifecycleErrorCode) -> int:
     assert_never(code)
 
 
-def _handle_lifecycle_error(exc: LifecycleContractError) -> None:
+def _handle_lifecycle_error(exc: LifecycleContractError) -> NoReturn:
     raise HTTPException(
         _http_status_for_lifecycle_error(exc.code),
         exc.message,
+    )
+
+
+def _require_json_object(body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "a JSON object body is required")
+    return body
+
+
+def _require_str(body: dict[str, Any], field: str) -> str:
+    value = body.get(field)
+    if not isinstance(value, str) or not value:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{field} is required")
+    return value
+
+
+def _optional_str(body: dict[str, Any], field: str) -> str | None:
+    value = body.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{field} must be a string")
+    return value
+
+
+def _decode_b64(raw: str, field: str) -> bytes:
+    try:
+        return base64.b64decode(raw, validate=True)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{field} must be base64")
+
+
+def _decode_public_key(raw: str) -> bytes:
+    key = _decode_b64(raw, "public_key")
+    if len(key) != 32:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"public_key must decode to 32 bytes, got {len(key)}",
+        )
+    return key
+
+
+def _parse_possession_proof(body: dict[str, Any]) -> PossessionProof:
+    fmt = _require_str(body, "format")
+    try:
+        proof_format = ProofFormat(fmt)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported proof format {fmt!r}")
+    return PossessionProof(
+        format=proof_format,
+        challenge_id=_require_str(body, "challenge_id"),
+        operation_id=_require_str(body, "operation_id"),
+        operation_digest=_require_str(body, "operation_digest"),
+        signature=_decode_b64(_require_str(body, "signature"), "signature"),
+    )
+
+
+async def _read_json(request: Request) -> Any:
+    try:
+        return await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "a JSON body is required")
+
+
+def _parse_principal_kind(body: dict[str, Any]) -> PrincipalKind:
+    raw = _optional_str(body, "principal_kind") or PrincipalKind.HUMAN.value
+    try:
+        return PrincipalKind(raw)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported principal_kind {raw!r}")
+
+
+def _parse_custody_mode(body: dict[str, Any]) -> str:
+    raw = _optional_str(body, "custody_mode") or CustodyMode.FILE.value
+    try:
+        CustodyMode(raw)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported custody_mode {raw!r}")
+    return raw
+
+
+def _parse_effective_receipt(body: dict[str, Any]) -> EffectiveReceipt:
+    status_raw = _require_str(body, "status")
+    try:
+        receipt_status = EffectiveReceiptStatus(status_raw)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"unsupported receipt status {status_raw!r}"
+        )
+    observed_raw = _require_str(body, "observed_at")
+    try:
+        observed_at = datetime.fromisoformat(observed_raw)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "observed_at must be an ISO-8601 timestamp"
+        )
+    signature_raw = _optional_str(body, "signature")
+    signature = _decode_b64(signature_raw, "signature") if signature_raw else None
+    return EffectiveReceipt(
+        operation_id=_require_str(body, "operation_id"),
+        operation_digest=_require_str(body, "operation_digest"),
+        project=_require_str(body, "project"),
+        principal_id=_require_str(body, "principal_id"),
+        fingerprint=_require_str(body, "fingerprint"),
+        client_type=_require_str(body, "client_type"),
+        client_version=_require_str(body, "client_version"),
+        status=receipt_status,
+        observed_at=observed_at,
+        challenge_id=_optional_str(body, "challenge_id"),
+        signature=signature,
     )
 
 
@@ -341,9 +461,7 @@ def create_app(
     if settings.allowed_hosts:
         from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-        app.add_middleware(
-            TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts)
-        )
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
     @app.exception_handler(LoginRequiredError)
     async def _login_required_handler(
@@ -571,34 +689,37 @@ def create_app(
                 catalog_entry = None
                 items = []
             slug = project_to_slug(project)
-            project_rows.append({
-                "slug": slug,
-                "name": project,
-                "open_count": count,
-                "catalog_entry": catalog_entry,
-                "unreachable": unreachable,
-            })
+            project_rows.append(
+                {
+                    "slug": slug,
+                    "name": project,
+                    "open_count": count,
+                    "catalog_entry": catalog_entry,
+                    "unreachable": unreachable,
+                }
+            )
             if filter_project and slug != filter_project:
                 continue
             for wi in items:
                 title = web.issue_title(wi)
                 if search_query:
                     searchable = (
-                        f"{web.display_key(wi)} {title} "
-                        f"{web.issue_field(wi, 'assignee', '')}"
+                        f"{web.display_key(wi)} {title} {web.issue_field(wi, 'assignee', '')}"
                     ).lower()
                     if search_query.lower() not in searchable:
                         continue
-                all_items.append({
-                    "key": web.display_key(wi),
-                    "title": title,
-                    "project_slug": slug,
-                    "state": wi.current_state,
-                    "assignee": web.issue_field(wi, "assignee", ""),
-                    "updated": web.last_event_time(wi),
-                    "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
-                    "project_url": f"/p/{slug}",
-                })
+                all_items.append(
+                    {
+                        "key": web.display_key(wi),
+                        "title": title,
+                        "project_slug": slug,
+                        "state": wi.current_state,
+                        "assignee": web.issue_field(wi, "assignee", ""),
+                        "updated": web.last_event_time(wi),
+                        "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
+                        "project_url": f"/p/{slug}",
+                    }
+                )
 
         total_count = len(all_items)
         dashboard_items = all_items[:_dashboard_max_items]
@@ -648,15 +769,17 @@ def create_app(
                         searchable = f"{key} {title} {assignee}".lower()
                         if query in searchable:
                             slug = project_to_slug(project)
-                            results.append({
-                                "key": key,
-                                "title": title,
-                                "project_slug": slug,
-                                "state": wi.current_state,
-                                "assignee": assignee,
-                                "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
-                                "project_url": f"/p/{slug}",
-                            })
+                            results.append(
+                                {
+                                    "key": key,
+                                    "title": title,
+                                    "project_slug": slug,
+                                    "state": wi.current_state,
+                                    "assignee": assignee,
+                                    "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
+                                    "project_url": f"/p/{slug}",
+                                }
+                            )
                 except Exception:
                     logger.warning("search: project %s unreachable", project, exc_info=True)
 
@@ -817,12 +940,15 @@ def create_app(
         for entry in all_entries:
             grouped.setdefault(entry.state, []).append(entry)
         state_order = [
-            "in_review", "in_human_review", "in_progress", "open",
-            "blocked", "deferred", "done",
+            "in_review",
+            "in_human_review",
+            "in_progress",
+            "open",
+            "blocked",
+            "deferred",
+            "done",
         ]
-        ordered_groups = [
-            (state, grouped[state]) for state in state_order if state in grouped
-        ]
+        ordered_groups = [(state, grouped[state]) for state in state_order if state in grouped]
         for state in sorted(grouped):
             if state not in state_order:
                 ordered_groups.append((state, grouped[state]))
@@ -932,9 +1058,7 @@ def create_app(
         try:
             catalog_entry = gw.get_project_catalog_entry()
         except Exception:
-            logger.warning(
-                "project_index: catalog entry for %s unreadable", project, exc_info=True
-            )
+            logger.warning("project_index: catalog entry for %s unreadable", project, exc_info=True)
             catalog_entry = None
         return templates.TemplateResponse(
             request,
@@ -1247,9 +1371,7 @@ def create_app(
                             "transition": web.transition_label(getattr(ev, "transition", "")),
                             "timestamp": web.format_timestamp(getattr(ev, "timestamp", None)),
                             "key_id": (
-                                ev.payload.get("key_id")
-                                if isinstance(ev.payload, dict)
-                                else None
+                                ev.payload.get("key_id") if isinstance(ev.payload, dict) else None
                             ),
                             "fingerprint": (
                                 ev.payload.get("fingerprint")
@@ -1315,16 +1437,17 @@ def create_app(
                 errors.append(f"{project}: {type(exc).__name__}")
 
         if errors:
-            logger.warning("key.rotation_partial_failure", extra={
-                "actor_id": actor.actor_id,
-                "success_count": success_count,
-                "errors": errors,
-            })
+            logger.warning(
+                "key.rotation_partial_failure",
+                extra={
+                    "actor_id": actor.actor_id,
+                    "success_count": success_count,
+                    "errors": errors,
+                },
+            )
 
         if success_count == 0:
-            raise HTTPException(
-                status.HTTP_500_INTERNAL_SERVER_ERROR, "key rotation failed"
-            )
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "key rotation failed")
 
         _record_rotation(actor.actor_id)
         return RedirectResponse(url="/me/identity", status_code=status.HTTP_303_SEE_OTHER)
@@ -1358,15 +1481,21 @@ def create_app(
                         except Exception:
                             verified = False
                         slug = project_to_slug(project)
-                        signed_events.append({
-                            "timestamp": web.format_timestamp(getattr(event, "timestamp", None)),
-                            "project_slug": slug,
-                            "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
-                            "display_key": web.display_key(wi),
-                            "title": web.issue_title(wi),
-                            "transition": web.transition_label(getattr(event, "transition", "")),
-                            "verified": verified,
-                        })
+                        signed_events.append(
+                            {
+                                "timestamp": web.format_timestamp(
+                                    getattr(event, "timestamp", None)
+                                ),
+                                "project_slug": slug,
+                                "issue_url": f"/p/{slug}/issues/{wi.work_item_id}",
+                                "display_key": web.display_key(wi),
+                                "title": web.issue_title(wi),
+                                "transition": web.transition_label(
+                                    getattr(event, "transition", "")
+                                ),
+                                "verified": verified,
+                            }
+                        )
             except Exception:
                 logger.warning("signing history: project %s unreachable", project, exc_info=True)
 
@@ -1426,14 +1555,10 @@ def create_app(
             # A checkbox is present in the POST body only when checked, so
             # absence means the principal opted out of that class.
             enabled[ec.event_type] = f"{ec.event_type}_enabled" in form
-            routing[ec.event_type] = str(
-                form.get(f"{ec.event_type}_routing", ec.default_routing)
-            )
+            routing[ec.event_type] = str(form.get(f"{ec.event_type}_routing", ec.default_routing))
         app.state.preference_store.save(
             actor.actor_id,
-            NotificationPreference(
-                principal_id=actor.actor_id, enabled=enabled, routing=routing
-            ),
+            NotificationPreference(principal_id=actor.actor_id, enabled=enabled, routing=routing),
         )
         return RedirectResponse(
             url="/me/notifications",
@@ -1527,12 +1652,15 @@ def create_app(
                 errors.append(f"{project}: {type(exc).__name__}")
 
         if errors:
-            logger.warning("key.enrollment_partial_failure", extra={
-                "principal_id": principal_id,
-                "actor_id": actor.actor_id,
-                "success_count": success_count,
-                "errors": errors,
-            })
+            logger.warning(
+                "key.enrollment_partial_failure",
+                extra={
+                    "principal_id": principal_id,
+                    "actor_id": actor.actor_id,
+                    "success_count": success_count,
+                    "errors": errors,
+                },
+            )
 
         if success_count == 0:
             raise HTTPException(
@@ -1576,11 +1704,13 @@ def create_app(
                         actor=actor,
                         reason=reason,
                     )
-                    prepared.append({
-                        **operation,
-                        "project": project,
-                        "project_slug": project_to_slug(project),
-                    })
+                    prepared.append(
+                        {
+                            **operation,
+                            "project": project,
+                            "project_slug": project_to_slug(project),
+                        }
+                    )
                 else:
                     gw.revoke_principal(
                         principal_id,
@@ -1702,10 +1832,151 @@ def create_app(
         except LifecycleContractError as exc:
             _handle_lifecycle_error(exc)
         if _wants_html(request):
-            return RedirectResponse(
-                url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER
-            )
+            return RedirectResponse(url="/admin/principals", status_code=status.HTTP_303_SEE_OTHER)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # ---- client-signer lifecycle exchange (Plan 031 §5 / Plan 015 v1) ----
+    #
+    # The web process never generates or holds private keys. The client signer
+    # (`regista signer …`) generates the keypair, custodies the private key,
+    # and signs the challenges these endpoints issue; dossier initiates and
+    # approves. Each endpoint accepts and returns the same versioned JSON the
+    # signer CLI emits, so an operator pipes CLI output straight to curl
+    # (after `GET /csrf`, sending the token as the X-CSRF-Token header).
+
+    @app.post("/admin/p/{project}/lifecycle/enroll/prepare", response_model=None)
+    async def prepare_enrollment_with_key_route(
+        project: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        body = _require_json_object(await _read_json(request))
+        principal_id = _require_str(body, "principal_id")
+        try:
+            _validate_principal_id(principal_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+        public_key = _decode_public_key(_require_str(body, "public_key"))
+        principal_kind = _parse_principal_kind(body)
+        custody_mode = _parse_custody_mode(body)
+        reason = _optional_str(body, "reason") or "initial enrollment"
+        try:
+            result = gw.prepare_enrollment_with_key(
+                principal_id,
+                public_key,
+                actor=actor,
+                principal_kind=principal_kind,
+                custody_mode=custody_mode,
+                reason=reason,
+            )
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(result)
+
+    @app.post("/admin/p/{project}/lifecycle/rotate/prepare", response_model=None)
+    async def prepare_rotation_with_key_route(
+        project: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        body = _require_json_object(await _read_json(request))
+        principal_id = _require_str(body, "principal_id")
+        try:
+            _validate_principal_id(principal_id)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+        public_key = _decode_public_key(_require_str(body, "public_key"))
+        old_key_id = _require_str(body, "old_key_id")
+        principal_kind = _parse_principal_kind(body)
+        custody_mode = _parse_custody_mode(body)
+        reason = _optional_str(body, "reason") or "key rotation"
+        try:
+            result = gw.prepare_rotation_with_key(
+                principal_id,
+                public_key,
+                old_key_id,
+                actor=actor,
+                principal_kind=principal_kind,
+                custody_mode=custody_mode,
+                reason=reason,
+            )
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(result)
+
+    @app.post("/admin/p/{project}/lifecycle/{operation_id}/possession", response_model=None)
+    async def submit_possession_proof_route(
+        project: str,
+        operation_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        body = _require_json_object(await _read_json(request))
+        proof = _parse_possession_proof(body)
+        if proof.operation_id != operation_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "proof operation_id does not match the request path",
+            )
+        try:
+            result = gw.submit_possession_proof(operation_id, proof)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(result)
+
+    @app.post(
+        "/admin/p/{project}/lifecycle/{operation_id}/effective-challenge",
+        response_model=None,
+    )
+    async def issue_effective_challenge_route(
+        project: str,
+        operation_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        try:
+            challenge = gw.issue_effective_challenge(operation_id)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(challenge)
+
+    @app.post(
+        "/admin/p/{project}/lifecycle/{operation_id}/effective-receipt",
+        response_model=None,
+    )
+    async def record_effective_receipt_route(
+        project: str,
+        operation_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        body = _require_json_object(await _read_json(request))
+        receipt = _parse_effective_receipt(body)
+        if receipt.operation_id != operation_id:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "receipt operation_id does not match the request path",
+            )
+        try:
+            result = gw.record_effective_receipt(operation_id, receipt)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(result)
 
     # ---- evidence area (Plan 024 Phase 2) ----
 
