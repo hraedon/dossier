@@ -213,7 +213,7 @@ wheels = [
 
 [[package]]
 name = "dossier-hraedon"
-version = "0.0.1"
+version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -254,7 +254,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "regista-hraedon", specifier = ">=0.5.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
 provides-extras = ["auth-ldap", "dev"]
