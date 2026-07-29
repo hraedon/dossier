@@ -19,7 +19,7 @@ make dev            # or: python scripts/dev-install.py
 ```
 
 installs `regista-hraedon==<SUITE.lock [spine].version>` from PyPI (today
-`0.5.3`), then `ruff` and `-e ".[dev]"` (pytest, httpx, mypy, ldap3, and the
+`0.5.4`), then `ruff` and `-e ".[dev]"` (pytest, httpx, mypy, ldap3, and the
 pinned `agent-suite-conformance` kit). CI runs the **same**
 `scripts/dev-install.py` in both the Linux (`check`) and `windows-test` lanes,
 so "works on my machine" means "works in CI".

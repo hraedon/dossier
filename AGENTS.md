@@ -59,7 +59,7 @@ make lint typecheck # ruff + mypy
 ```
 
 `make dev` (and both CI test lanes, and the container image) install regista at
-the released version `SUITE.lock` `[spine]` pins — today `0.5.3` — not `main` or
+the released version `SUITE.lock` `[spine]` pins — today `0.5.4` — not `main` or
 an editable checkout, so integration skew surfaces before interop time. For
 deliberate cross-member work, set `DEV_AGAINST=main|<ref>|sibling`. See
 `docs/develop-against-lock.md`.

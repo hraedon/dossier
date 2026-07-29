@@ -38,7 +38,7 @@ spec:
       containers:
         - name: dossier
           # Keep this pair aligned with SUITE.lock [component]/[spine].
-          image: ghcr.io/hraedon/dossier:0.1.0-0.5.3
+          image: ghcr.io/hraedon/dossier:0.1.0-0.5.4
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

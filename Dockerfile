@@ -7,7 +7,7 @@
 # --build-arg REGISTA_VERSION from the lock; update both together.
 
 ARG PYTHON_VERSION=3.13
-ARG REGISTA_VERSION=0.5.3
+ARG REGISTA_VERSION=0.5.4
 
 # ── Stage 1: builder ─────────────────────────────────────────────────────────
 # regista-hraedon installs from PyPI (a wheel), so no git is needed here — the
@@ -33,7 +33,7 @@ ENV PATH="/venv/bin:$PATH"
 
 # Install the regista spine from PyPI at the locked version, then dossier.
 # (regista-hraedon >= 0.5.2 fixes importlib.metadata.version() post-rename, so
-# no version-lookup patch is needed — the lock pins 0.5.3.)
+# no version-lookup patch is needed — the lock pins 0.5.4.)
 RUN pip install "regista-hraedon==${REGISTA_VERSION}"
 
 COPY pyproject.toml .

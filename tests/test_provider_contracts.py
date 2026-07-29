@@ -458,7 +458,7 @@ class TestDegradedProviderRendering:
             name="regista",
             contract_version="0.4.0",
             availability=Availability.DEGRADED,
-            detail="spine version 0.4.0 is behind the lock (0.5.3)",
+            detail="spine version 0.4.0 is behind the lock (0.5.4)",
         )
         assert d.availability is Availability.DEGRADED
 

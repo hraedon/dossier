@@ -34,7 +34,7 @@ The review-assurance level — "was this self-reviewed, independently reviewed, 
 human-accepted?" — is a **provenance judgment**, so it belongs to the engine, not
 the face. dossier calls `regista.gate_rationale(events, "strict")` (regista's
 public API since 0.5.3, regista Plan 027) and renders the answer. `SUITE.lock`'s
-spine version and `pyproject.toml`'s floor are both `0.5.3` for this reason.
+spine version and `pyproject.toml`'s floor are both `0.5.4` for this reason.
 
 `src/dossier/assurance.py` is the only seam. It does two things and nothing else:
 
