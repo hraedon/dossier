@@ -3,6 +3,7 @@
 {% block content %}
 <div class="ds-pagehead">
   <div>
+    <p class="ds-kicker">actor in flight</p>
     <h1 class="ds-pagehead__title">my work</h1>
     <div class="ds-pagehead__meta">
       <span class="ds-chip mono">{{ total_count }} items</span>
@@ -10,12 +11,10 @@
   </div>
 </div>
 
-<div class="ds-panel ds-panel--pad">
-  <p class="ds-prose" style="font-size: var(--fs-sm);">
-    Items where you are the actor-in-flight: created by you, assigned to you,
-    or last transitioned by your agents on your behalf. Grouped by state.
-  </p>
-</div>
+<p class="ds-intro">
+  Items where you are the actor-in-flight: created by you, assigned to you,
+  or last transitioned by your agents on your behalf. Grouped by state.
+</p>
 
 {% if groups %}
 {% for state, entries in groups %}
@@ -25,7 +24,7 @@
     <span class="ds-chip mono">{{ entries | length }}</span>
   </div>
   <div class="ds-table-wrap">
-    <table class="ds-table">
+    <table class="ds-table ds-table--stack">
       <thead>
         <tr>
           <th>key</th>
@@ -40,10 +39,10 @@
       <tbody>
         {% for e in entries %}
         <tr>
-          <td class="mono"><a href="{{ e.issue_url }}">{{ e.key }}</a></td>
-          <td><a href="{{ e.issue_url }}">{{ e.title }}</a></td>
-          <td class="mono"><a href="{{ e.project_url }}">{{ e.project_slug }}</a></td>
-          <td>
+          <td class="mono ds-cell--lead"><a href="{{ e.issue_url }}">{{ e.key }}</a></td>
+          <td class="ds-cell--lead ds-cell--title"><a href="{{ e.issue_url }}">{{ e.title }}</a></td>
+          <td class="mono" data-th="project"><a href="{{ e.project_url }}">{{ e.project_slug }}</a></td>
+          <td data-th="relation">
             {% if e.relation == 'agent-on-behalf' %}
             <span class="ds-badge ds-badge--agent">agent</span>
             {{ e.relation_label }}
@@ -52,9 +51,9 @@
             {{ e.relation_label }}
             {% endif %}
           </td>
-          <td class="mono">{{ e.last_action }}</td>
-          <td class="mono tnum">{{ e.last_action_time }}</td>
-          <td>{{ e.assignee or '—' }}</td>
+          <td class="mono" data-th="last action">{{ e.last_action }}</td>
+          <td class="mono tnum" data-th="when">{{ e.last_action_time }}</td>
+          <td data-th="assignee">{{ e.assignee or '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>

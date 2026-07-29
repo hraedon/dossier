@@ -3,7 +3,14 @@
 **Status:** In Progress — Phase 0 implemented 2026-07-12: reference shell,
 closed typed shell view models, semantic template macros, six-area production
 navigation, compatibility Work navigation, responsive/focus foundation, and
-rendered accessibility tests. Provider-backed areas remain.  
+rendered accessibility tests. Provider-backed areas remain. 2026-07-29: early
+Phase-5-style visual pass on branch `feat/ui-visual-pass` — dossier-owned
+component layer (ds-*) replaced wholesale behind the unchanged Phase 0 semantic
+contract (landmarks, selectors, route/view tests all green): metric strip,
+verified-chain signature view (kind-coded spine nodes, seq numbers, per-event
+signature marks), narrow-screen stacked tables, quiet in-table status pills,
+print remap to paper. A vision-capable second reviewer signed off after three
+iteration rounds. Provider and action logic unchanged.
 **Owner:** dossier.  
 **Coordinates:** agent-suite Plan 013; dossier Plans 009, 015, and 017–023;
 regista Plan 031.  

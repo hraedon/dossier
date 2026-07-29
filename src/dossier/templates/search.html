@@ -22,7 +22,7 @@
 
 {% if search_results %}
 <div class="ds-table-wrap">
-  <table class="ds-table">
+  <table class="ds-table ds-table--stack">
     <thead>
       <tr>
         <th>key</th>
@@ -35,11 +35,11 @@
     <tbody>
       {% for item in search_results %}
       <tr>
-        <td class="mono"><a href="{{ item.issue_url }}">{{ item.key }}</a></td>
-        <td><a href="{{ item.issue_url }}">{{ item.title }}</a></td>
-        <td class="mono"><a href="{{ item.project_url }}">{{ item.project_slug }}</a></td>
-        <td><span class="ds-pill {{ status_pill_class(item.state) }}"><span class="ds-pill__dot"></span>{{ item.state }}</span></td>
-        <td>{{ item.assignee or '—' }}</td>
+        <td class="mono ds-cell--lead"><a href="{{ item.issue_url }}">{{ item.key }}</a></td>
+        <td class="ds-cell--lead ds-cell--title"><a href="{{ item.issue_url }}">{{ item.title }}</a></td>
+        <td class="mono" data-th="project"><a href="{{ item.project_url }}">{{ item.project_slug }}</a></td>
+        <td data-th="state"><span class="ds-pill {{ status_pill_class(item.state) }}"><span class="ds-pill__dot"></span>{{ item.state }}</span></td>
+        <td data-th="assignee">{{ item.assignee or '—' }}</td>
       </tr>
       {% endfor %}
     </tbody>
