@@ -160,7 +160,7 @@ class TestVerifyEvidence:
         assert "stale" in (error or "")
 
     def test_future_auth_time(self):
-        future_time = NOW + timedelta(seconds=60)
+        future_time = datetime.now(UTC) + timedelta(seconds=60)
         evidence = produce_step_up_evidence(SECRET, future_time, "digest1", "alice")
         valid, error = verify_step_up_evidence(
             SECRET,
@@ -206,7 +206,7 @@ class TestIsAuthRecent:
         assert is_auth_recent(old) is False
 
     def test_future_auth(self):
-        future = NOW + timedelta(seconds=60)
+        future = datetime.now(UTC) + timedelta(seconds=60)
         assert is_auth_recent(future) is False
 
     def test_custom_max_age(self):
