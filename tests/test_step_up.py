@@ -225,3 +225,89 @@ class TestEvidenceSerialization:
         assert restored.principal_id == evidence.principal_id
         assert restored.signature == evidence.signature
         assert restored.method == evidence.method
+
+
+class TestDossierApprovalVerifier:
+    """Unit tests for the regista ApprovalVerifier implementation."""
+
+    def _make_verifier(self):
+        from dossier.auth.step_up import DossierApprovalVerifier
+
+        return DossierApprovalVerifier(SECRET)
+
+    def _make_operation(self, digest_value: str = "digest1"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(digest=SimpleNamespace(value=digest_value))
+
+    def _make_approval(self, approver_id: str = "alice", evidence_json: str | None = None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(approver_id=approver_id, step_up_evidence=evidence_json)
+
+    def test_valid_evidence_returns_true(self):
+        import json
+
+        verifier = self._make_verifier()
+        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        approval = self._make_approval("alice", json.dumps(evidence.to_dict()))
+        assert verifier.verify_approval(self._make_operation("digest1"), approval) is True
+
+    def test_missing_evidence_returns_false(self):
+        verifier = self._make_verifier()
+        approval = self._make_approval("alice", None)
+        assert verifier.verify_approval(self._make_operation(), approval) is False
+
+    def test_empty_string_evidence_returns_false(self):
+        verifier = self._make_verifier()
+        approval = self._make_approval("alice", "")
+        assert verifier.verify_approval(self._make_operation(), approval) is False
+
+    def test_malformed_json_returns_false(self):
+        verifier = self._make_verifier()
+        approval = self._make_approval("alice", "not-json{{{")
+        assert verifier.verify_approval(self._make_operation(), approval) is False
+
+    def test_wrong_digest_returns_false(self):
+        import json
+
+        verifier = self._make_verifier()
+        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        approval = self._make_approval("alice", json.dumps(evidence.to_dict()))
+        # Operation has a different digest.
+        assert verifier.verify_approval(self._make_operation("digest2"), approval) is False
+
+    def test_wrong_principal_returns_false(self):
+        import json
+
+        verifier = self._make_verifier()
+        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        # Approval claims bob, but evidence is bound to alice.
+        approval = self._make_approval("bob", json.dumps(evidence.to_dict()))
+        assert verifier.verify_approval(self._make_operation("digest1"), approval) is False
+
+    def test_forged_signature_returns_false(self):
+        import json
+
+        verifier = self._make_verifier()
+        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        data = evidence.to_dict()
+        data["signature"] = "forged" * 8
+        approval = self._make_approval("alice", json.dumps(data))
+        assert verifier.verify_approval(self._make_operation("digest1"), approval) is False
+
+    def test_stale_evidence_returns_false(self):
+        import json
+
+        verifier = self._make_verifier()
+        old_time = NOW - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
+        evidence = produce_step_up_evidence(SECRET, old_time, "digest1", "alice")
+        approval = self._make_approval("alice", json.dumps(evidence.to_dict()))
+        assert verifier.verify_approval(self._make_operation("digest1"), approval) is False
+
+    def test_never_raises(self):
+        """The verifier must never raise — any unexpected input returns False."""
+        verifier = self._make_verifier()
+        # Completely wrong types.
+        assert verifier.verify_approval(None, None) is False  # type: ignore[arg-type]
+        assert verifier.verify_approval(42, "string") is False  # type: ignore[arg-type]

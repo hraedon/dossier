@@ -53,8 +53,15 @@ def pg_client(tmp_path_factory):
     prev_admin_ids = os.environ.get("DOSSIER_ADMIN_IDS", "")
     os.environ["DOSSIER_ADMIN_IDS"] = f"{_ALICE_ID},{_BOB_ID}"
 
+    from dossier.auth.step_up import DossierApprovalVerifier
+
     try:
-        reg = Regista.create_project(_DSN, project, hmac_key_path=str(key_path))
+        reg = Regista.create_project(
+            _DSN,
+            project,
+            hmac_key_path=str(key_path),
+            approval_verifier=DossierApprovalVerifier("test-session-secret-not-for-prod"),
+        )
     except Exception as exc:
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
         pytest.skip(f"Postgres unavailable: {exc}")
@@ -511,3 +518,96 @@ def test_possession_operation_id_mismatch_rejected(pg_client: TestClient):
     mismatched["operation_id"] = str(uuid.uuid4())
     resp = _submit_possession(pg_client, prepared["operation_id"], mismatched)
     assert resp.status_code == 400
+
+
+def test_effective_receipt_rejects_future_observed_at(pg_client: TestClient):
+    """A receipt with observed_at after the challenge window is rejected by
+    regista core chronology validation (RECEIPT_OBSERVED_AT_INVALID → 400)."""
+    principal = f"signer-future-{uuid.uuid4().hex[:8]}"
+    signer = _new_signer(pg_client, principal)
+
+    _login_as(pg_client, "alice")
+    prepared = _prepare_enrollment(pg_client, signer, principal)
+    proof = signer.sign_possession(_possession_challenge(prepared["challenge"]))
+    resp = _submit_possession(pg_client, prepared["operation_id"], proof.to_dict())
+    assert resp.status_code == 200, resp.text
+    _approve_and_commit(pg_client, prepared["operation_id"], prepared["digest"])
+
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{prepared['operation_id']}/effective-challenge",
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 200, resp.text
+    challenge = _effective_challenge(resp.json())
+    receipt = signer.sign_effective(challenge).to_dict()
+    # Tamper observed_at to far future — outside the challenge window.
+    receipt["observed_at"] = "2099-01-01T00:00:00+00:00"
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{prepared['operation_id']}/effective-receipt",
+        json=receipt,
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 400
+    assert "observed_at" in resp.text.lower()
+
+
+def test_effective_receipt_rejects_predated_observed_at(pg_client: TestClient):
+    """A receipt with observed_at before the challenge window is rejected by
+    regista core chronology validation (RECEIPT_OBSERVED_AT_INVALID → 400)."""
+    principal = f"signer-predated-{uuid.uuid4().hex[:8]}"
+    signer = _new_signer(pg_client, principal)
+
+    _login_as(pg_client, "alice")
+    prepared = _prepare_enrollment(pg_client, signer, principal)
+    proof = signer.sign_possession(_possession_challenge(prepared["challenge"]))
+    resp = _submit_possession(pg_client, prepared["operation_id"], proof.to_dict())
+    assert resp.status_code == 200, resp.text
+    _approve_and_commit(pg_client, prepared["operation_id"], prepared["digest"])
+
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{prepared['operation_id']}/effective-challenge",
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 200, resp.text
+    challenge = _effective_challenge(resp.json())
+    receipt = signer.sign_effective(challenge).to_dict()
+    # Tamper observed_at to before the challenge was issued.
+    receipt["observed_at"] = "2020-01-01T00:00:00+00:00"
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{prepared['operation_id']}/effective-receipt",
+        json=receipt,
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 400
+    assert "observed_at" in resp.text.lower()
+
+
+def test_effective_receipt_rejects_naive_observed_at(pg_client: TestClient):
+    """A receipt with a timezone-naive observed_at is rejected (dossier parsing
+    layer requires timezone-aware timestamps)."""
+    principal = f"signer-naive-{uuid.uuid4().hex[:8]}"
+    signer = _new_signer(pg_client, principal)
+
+    _login_as(pg_client, "alice")
+    prepared = _prepare_enrollment(pg_client, signer, principal)
+    proof = signer.sign_possession(_possession_challenge(prepared["challenge"]))
+    resp = _submit_possession(pg_client, prepared["operation_id"], proof.to_dict())
+    assert resp.status_code == 200, resp.text
+    _approve_and_commit(pg_client, prepared["operation_id"], prepared["digest"])
+
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{prepared['operation_id']}/effective-challenge",
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 200, resp.text
+    challenge = _effective_challenge(resp.json())
+    receipt = signer.sign_effective(challenge).to_dict()
+    # Tamper observed_at to be timezone-naive.
+    receipt["observed_at"] = "2026-07-29T12:00:00"
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{prepared['operation_id']}/effective-receipt",
+        json=receipt,
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 400
+    assert "timezone" in resp.text.lower()

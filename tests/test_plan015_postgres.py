@@ -3,14 +3,19 @@
 These tests exercise the production code path where regista's principal-key
 registry is available: enroll/rotate/revoke/idempotency. They skip cleanly when
 Postgres is not reachable.
+
+Enrollment setup uses the client-signer exchange (the supported custody-isolated
+flow) — the legacy in-process enrollment is fail-closed against real regista.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -18,6 +23,8 @@ from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
 from fastapi.testclient import TestClient
 from regista import Regista
+from regista.client_signer import ClientSigner
+from regista.principal_lifecycle import PossessionChallenge
 from regista.testing import InMemoryRegista, drop_project_schema
 
 from dossier.app import create_app
@@ -42,8 +49,15 @@ def pg_client(tmp_path_factory):
     prev_admin_ids = os.environ.get("DOSSIER_ADMIN_IDS", "")
     os.environ["DOSSIER_ADMIN_IDS"] = f"{_ALICE_ID},{_BOB_ID}"
 
+    from dossier.auth.step_up import DossierApprovalVerifier
+
     try:
-        reg = Regista.create_project(_DSN, project, hmac_key_path=str(key_path))
+        reg = Regista.create_project(
+            _DSN,
+            project,
+            hmac_key_path=str(key_path),
+            approval_verifier=DossierApprovalVerifier("test-session-secret-not-for-prod"),
+        )
     except Exception as exc:
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
         pytest.skip(f"Postgres unavailable: {exc}")
@@ -140,7 +154,88 @@ def _extract_operation_id(html: str) -> str:
     return m.group(1)
 
 
-def test_pg_enroll_principal_emits_event_and_shows_fingerprint(pg_client):
+def _csrf_token(client: TestClient) -> str:
+    return client.get("/csrf").json()["csrf_token"]
+
+
+_SESSION_SECRET = "test-session-secret-not-for-prod"
+
+
+def _step_up_evidence_json(digest: str, approver_id: str) -> str:
+    """Produce valid step-up evidence JSON for direct gateway approval calls."""
+    from datetime import UTC, datetime
+
+    from dossier.auth.step_up import produce_step_up_evidence
+
+    evidence = produce_step_up_evidence(
+        _SESSION_SECRET,
+        datetime.now(UTC),
+        digest,
+        approver_id,
+    )
+    return json.dumps(evidence.to_dict())
+
+
+def _enroll_via_signer(client: TestClient, principal: str) -> dict:
+    """Enroll a principal via the client-signer exchange (custody-isolated).
+
+    Drives the full flow: prepare → possession proof → approve+commit (bob).
+    Returns the prepared operation dict (operation_id, digest, state, etc.).
+    The principal has an active key in the registry after this call.
+    """
+    key_dir = Path("/tmp/opencode") / f"signer-{principal}-{uuid.uuid4().hex[:6]}"
+    signer = ClientSigner.generate(principal, backend="file", private_key_dir=str(key_dir))
+
+    _login_as(client, "alice")
+    slug = project_to_slug(_project(client))
+    resp = client.post(
+        f"/admin/p/{slug}/lifecycle/enroll/prepare",
+        json={
+            "principal_id": principal,
+            "public_key": base64.b64encode(signer.identity.public_key).decode("ascii"),
+        },
+        headers={"X-CSRF-Token": _csrf_token(client)},
+    )
+    assert resp.status_code == 200, resp.text
+    prepared = resp.json()
+
+    challenge = PossessionChallenge(
+        **{
+            k: v
+            for k, v in prepared["challenge"].items()
+            if k not in ("domain", "issued_at", "expires_at")
+        },
+        issued_at=datetime.fromisoformat(prepared["challenge"]["issued_at"]),
+        expires_at=datetime.fromisoformat(prepared["challenge"]["expires_at"]),
+    )
+    proof = signer.sign_possession(challenge)
+    resp = client.post(
+        f"/admin/p/{slug}/lifecycle/{prepared['operation_id']}/possession",
+        json=proof.to_dict(),
+        headers={"X-CSRF-Token": _csrf_token(client)},
+    )
+    assert resp.status_code == 200, resp.text
+
+    _login_as(client, "bob")
+    resp = client.post(
+        f"/admin/p/{slug}/lifecycle/{prepared['operation_id']}/approve",
+        data={
+            "csrf_token": _csrf_token(client),
+            "approval_digest": prepared["digest"],
+            "reason": "test enrollment",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    return prepared
+
+
+def test_pg_legacy_enroll_is_fail_closed(pg_client):
+    """The legacy in-process enrollment route is rejected against real regista.
+
+    Production enrollment uses the client-signer exchange; the web process
+    must never generate private key material.
+    """
     _login(pg_client)
     roster_page = pg_client.get("/admin/principals")
     csrf = _extract_csrf(roster_page.text)
@@ -151,8 +246,20 @@ def test_pg_enroll_principal_emits_event_and_shows_fingerprint(pg_client):
         data={"principal_id": new_principal, "csrf_token": csrf},
         follow_redirects=False,
     )
-    assert resp.status_code == 303
+    assert resp.status_code == 400
+    assert "client-signer" in resp.text.lower() or "disabled" in resp.text.lower()
 
+    # No key was registered.
+    gw = _gw(pg_client)
+    assert gw.get_principal_key(new_principal) is None
+
+
+def test_pg_enroll_via_signer_emits_event_and_shows_fingerprint(pg_client):
+    """The client-signer enrollment flow registers the key and emits an event."""
+    new_principal = f"new-user-{uuid.uuid4().hex[:8]}"
+    _enroll_via_signer(pg_client, new_principal)
+
+    _login(pg_client)
     roster = pg_client.get("/admin/principals")
     assert roster.status_code == 200
 
@@ -165,68 +272,55 @@ def test_pg_enroll_principal_emits_event_and_shows_fingerprint(pg_client):
     assert entry["fingerprint"][:32] in roster.text
     assert entry["key_id"] in roster.text
     assert entry["public_key"] not in roster.text
-    assert "private" not in roster.text.lower()
 
     events = gw.read_principal_enrollment_events(new_principal)
-    assert len(events) == 1
-    assert events[0].transition == "principal_enrolled"
-    payload = events[0].payload
+    enroll_events = [e for e in events if e.transition == "principal_enrolled"]
+    assert len(enroll_events) == 1
+    payload = enroll_events[0].payload
     assert payload["principal_id"] == new_principal
-    assert payload["key_id"] == entry["key_id"]
     assert payload["fingerprint"] == entry["fingerprint"]
 
 
 def test_pg_rotate_is_fail_closed(pg_client):
     # Web key rotation is disabled against real regista until the client-side
     # custody helper can produce a possession proof. See Foundation B.
-    _login(pg_client)
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": _ALICE_ID, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    principal = f"rotate-fc-{uuid.uuid4().hex[:8]}"
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
-    old = gw.get_principal_key(_ALICE_ID)
+    old = gw.get_principal_key(principal)
     assert old is not None
     old_key_id = old["key_id"]
 
-    identity_page = pg_client.get("/me/identity")
-    csrf = _extract_csrf(identity_page.text)
+    # The /me/key/rotate route is for the session's own identity; we test the
+    # gateway-level fail-closed directly since the session user differs from
+    # the enrolled principal.
+    from regista import ErrorCode, RegistaError
 
-    resp = pg_client.post(
-        "/me/key/rotate",
-        data={"csrf_token": csrf},
-        follow_redirects=False,
-    )
-    assert resp.status_code == 400
-    assert "not yet available" in resp.text.lower() or "disabled" in resp.text.lower()
+    from dossier.actors import Actor
+
+    actor = Actor(actor_id=principal, actor_kind="human", display_name="Test")
+    with pytest.raises(RegistaError) as exc_info:
+        gw.rotate_principal(principal, actor=actor)
+    assert exc_info.value.code == ErrorCode.SECRET_WRITE_UNSUPPORTED
 
     # No new key was registered; the enrolled key remains active.
-    new = gw.get_principal_key(_ALICE_ID)
+    new = gw.get_principal_key(principal)
     assert new is not None
     assert new["key_id"] == old_key_id
 
 
 def test_pg_revoke_key(pg_client):
-    _login(pg_client)
     principal = f"revoke-user-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
     assert active is not None
 
-    # Phase 1: an admin initiates revocation. The operation is prepared, not
+    # Phase 1: alice initiates revocation. The operation is prepared, not
     # approved or committed, so the key is still active.
+    _login_as(pg_client, "alice")
     roster_page = pg_client.get("/admin/principals")
     csrf = _extract_csrf(roster_page.text)
     resp = pg_client.post(
@@ -276,20 +370,14 @@ def test_pg_revoke_key(pg_client):
 
 def test_pg_revoke_self_approval_rejected_http(pg_client):
     # The same admin cannot initiate and approve a protected revocation.
-    _login(pg_client)
     principal = f"revoke-self-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
     assert active is not None
 
+    _login_as(pg_client, "alice")
     roster_page = pg_client.get("/admin/principals")
     csrf = _extract_csrf(roster_page.text)
     resp = pg_client.post(
@@ -321,20 +409,15 @@ def test_pg_revoke_self_approval_rejected_http(pg_client):
 
 def test_pg_revoke_digest_binding_is_server_authoritative(pg_client):
     # A tampered client-supplied digest is rejected before approval.
-    _login(pg_client)
     principal = f"revoke-digest-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
     assert active is not None
 
+    _login_as(pg_client, "alice")
+    csrf = _extract_csrf(pg_client.get("/admin/principals").text)
     resp = pg_client.post(
         f"/admin/principals/{principal}/revoke",
         data={"csrf_token": csrf, "reason": "digest binding test"},
@@ -360,45 +443,27 @@ def test_pg_revoke_digest_binding_is_server_authoritative(pg_client):
     assert gw.get_principal_key(principal) is not None
 
 
-def test_pg_enroll_idempotent(pg_client):
-    _login(pg_client)
+def test_pg_enroll_idempotent_via_signer(pg_client):
+    """The client-signer enrollment produces exactly one enrolled event."""
     principal = f"idempotent-user-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
+    _enroll_via_signer(pg_client, principal)
 
-    def enroll() -> None:
-        pg_client.post(
-            "/admin/principals/enroll",
-            data={"principal_id": principal, "csrf_token": csrf},
-            follow_redirects=False,
-        )
-
-    enroll()
     gw = _gw(pg_client)
-    events_after_first = gw.read_principal_enrollment_events(principal)
-    assert len(events_after_first) == 1
-    first_key_id = events_after_first[0].payload["key_id"]
+    events = gw.read_principal_enrollment_events(principal)
+    enroll_events = [e for e in events if e.transition == "principal_enrolled"]
+    assert len(enroll_events) == 1
+    first_fingerprint = enroll_events[0].payload["fingerprint"]
 
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    enroll()
-
-    events_after_second = gw.read_principal_enrollment_events(principal)
-    assert len(events_after_second) == 1
-    assert events_after_second[0].payload["key_id"] == first_key_id
+    # The active key matches the enrolled fingerprint.
+    active = gw.get_principal_key(principal)
+    assert active is not None
+    assert active["fingerprint"] == first_fingerprint
 
 
 def test_pg_revoke_principal_lifecycle_returns_receipt_and_revokes(pg_client):
     # Drive the gateway directly so we can inspect the registry receipt.
-    _login(pg_client)
     principal = f"revoke-lifecycle-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
@@ -434,6 +499,7 @@ def test_pg_revoke_principal_lifecycle_returns_receipt_and_revokes(pg_client):
         operation["operation_id"],
         approver=approver,
         approval_digest=operation["digest"],
+        step_up_evidence=_step_up_evidence_json(operation["digest"], _BOB_ID),
         reason="approved",
     )
     assert approved.state.value == "approved"
@@ -453,15 +519,8 @@ def test_pg_revoke_principal_lifecycle_returns_receipt_and_revokes(pg_client):
 
 
 def test_pg_revocation_is_idempotent(pg_client):
-    _login(pg_client)
     principal = f"revoke-idem-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
@@ -483,6 +542,7 @@ def test_pg_revocation_is_idempotent(pg_client):
         operation1["operation_id"],
         approver=approver,
         approval_digest=operation1["digest"],
+        step_up_evidence=_step_up_evidence_json(operation1["digest"], _BOB_ID),
     )
     gw.commit_operation(
         operation1["operation_id"], expected_digest=operation1["digest"]
@@ -494,15 +554,8 @@ def test_pg_revocation_is_idempotent(pg_client):
 
 
 def test_pg_approve_operation_seam_requires_dual_control(pg_client):
-    _login(pg_client)
     principal = f"approve-dual-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
@@ -533,7 +586,7 @@ def test_pg_approve_operation_seam_requires_dual_control(pg_client):
         )
     assert "different approver" in str(exc_info.value).lower()
 
-    # A different approver with the correct digest succeeds.
+    # A different approver with the correct digest and valid evidence succeeds.
     approver = Actor(
         actor_id=_BOB_ID,
         actor_kind="human",
@@ -543,6 +596,7 @@ def test_pg_approve_operation_seam_requires_dual_control(pg_client):
         operation["operation_id"],
         approver=approver,
         approval_digest=operation["digest"],
+        step_up_evidence=_step_up_evidence_json(operation["digest"], _BOB_ID),
         reason="approved",
     )
     assert approved.state.value == "approved"
@@ -556,15 +610,8 @@ def test_pg_approve_operation_seam_requires_dual_control(pg_client):
 
 
 def test_pg_approve_operation_seam_rejects_digest_mismatch(pg_client):
-    _login(pg_client)
     principal = f"approve-digest-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
@@ -603,15 +650,8 @@ def test_pg_approve_operation_seam_rejects_digest_mismatch(pg_client):
 
 def test_pg_lifecycle_contract_error_is_not_500(pg_client):
     # A mismatched digest on the approval seam maps to HTTP 400, not 500.
-    _login(pg_client)
     principal = f"lifecycle-http-{uuid.uuid4().hex[:8]}"
-    roster_page = pg_client.get("/admin/principals")
-    csrf = _extract_csrf(roster_page.text)
-    pg_client.post(
-        "/admin/principals/enroll",
-        data={"principal_id": principal, "csrf_token": csrf},
-        follow_redirects=False,
-    )
+    _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     active = gw.get_principal_key(principal)
@@ -641,9 +681,97 @@ def test_pg_lifecycle_contract_error_is_not_500(pg_client):
         request, idempotency_key=f"http-mapping:{principal}"
     )
 
+    _login_as(pg_client, "bob")
+    csrf = _extract_csrf(pg_client.get("/admin/principals").text)
     resp = pg_client.post(
         f"/admin/p/{project_to_slug(_project(pg_client))}/lifecycle/{operation.operation_id}/approve",
         data={"approval_digest": "wrong", "csrf_token": csrf, "reason": "test"},
         follow_redirects=False,
     )
     assert resp.status_code == 400
+
+
+def test_pg_approve_requires_explicit_digest(pg_client):
+    """Approval without an explicit digest is rejected (Fix 2 regression)."""
+    principal = f"approve-nodigest-{uuid.uuid4().hex[:8]}"
+    _enroll_via_signer(pg_client, principal)
+
+    gw = _gw(pg_client)
+    active = gw.get_principal_key(principal)
+    assert active is not None
+
+    _login_as(pg_client, "alice")
+    csrf = _extract_csrf(pg_client.get("/admin/principals").text)
+    resp = pg_client.post(
+        f"/admin/principals/{principal}/revoke",
+        data={"csrf_token": csrf, "reason": "digest-required test"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    operation_id = _extract_operation_id(resp.text)
+
+    # Approve without supplying approval_digest — must be rejected.
+    _login_as(pg_client, "bob")
+    approve_csrf = _extract_csrf(pg_client.get("/admin/principals").text)
+    resp = pg_client.post(
+        f"/admin/p/{project_to_slug(_project(pg_client))}/lifecycle/{operation_id}/approve",
+        data={"csrf_token": approve_csrf, "reason": "no digest"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "approval_digest is required" in resp.text
+
+    # The operation is still awaiting approval.
+    operation = gw.principal_lifecycle.get_operation(operation_id)
+    assert operation.state.value == "awaiting_approval"
+
+
+def test_pg_approve_rejects_stale_digest(pg_client):
+    """Approval with a digest from a different operation is rejected."""
+    principal = f"approve-stale-{uuid.uuid4().hex[:8]}"
+    prepared = _enroll_via_signer(pg_client, principal)
+
+    gw = _gw(pg_client)
+    active = gw.get_principal_key(principal)
+    assert active is not None
+
+    _login_as(pg_client, "alice")
+    csrf = _extract_csrf(pg_client.get("/admin/principals").text)
+    resp = pg_client.post(
+        f"/admin/principals/{principal}/revoke",
+        data={"csrf_token": csrf, "reason": "stale digest test"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    operation_id = _extract_operation_id(resp.text)
+
+    # Use the enrollment digest (from a different operation) — must be rejected.
+    _login_as(pg_client, "bob")
+    approve_csrf = _extract_csrf(pg_client.get("/admin/principals").text)
+    resp = pg_client.post(
+        f"/admin/p/{project_to_slug(_project(pg_client))}/lifecycle/{operation_id}/approve",
+        data={
+            "csrf_token": approve_csrf,
+            "approval_digest": prepared["digest"],
+            "reason": "stale digest",
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "digest" in resp.text.lower()
+
+
+def test_pg_roster_page_disables_legacy_enrollment_on_durable_backend(pg_client):
+    """The principal roster page renders the legacy form as disabled when a
+    durable lifecycle backend is configured (Item 4 regression)."""
+    _login_as(pg_client, "alice")
+    resp = pg_client.get("/admin/principals")
+    assert resp.status_code == 200
+    # Normalize whitespace for multi-line template text assertions.
+    normalized = " ".join(resp.text.split()).lower()
+    # The page must clearly state client-signer integration is required.
+    assert "client-signer integration required" in normalized
+    # The form inputs must be disabled.
+    assert "disabled" in resp.text
+    # The page must NOT present the form as an actionable production control.
+    assert "not supported through this page" in normalized

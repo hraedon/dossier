@@ -189,6 +189,24 @@ artifact + local validation is delivered; the live validation is owner-gated:
 - **Real certificate provisioning** — the cert+key pair. Self-signed is used
   for local validation; production uses a CA-signed cert.
 
+## Multi-worker lifecycle challenges: schema 44 / DURABLE_ONE_USE required
+
+The key-lifecycle exchange (enrollment, rotation, effective-use) requires
+`ChallengeStorageScope.DURABLE_ONE_USE` for multi-worker correctness: challenges
+are persisted to the database (schema ≥ 44) and rehydratable by any worker.
+This is the **only supported path** for production multi-worker deployments.
+
+**Requirement:** the `SUITE.lock` `[spine].version` must pin a regista release
+that ships schema 44 and `DURABLE_ONE_USE`. If the pinned release exposes only
+`PROCESS_LOCAL_FOUNDATION`, multi-worker deployment is **not supported** and
+the operator must run a single worker (`--workers 1`) until the spine is
+upgraded. Sticky sessions are not a supported workaround — they mask a
+correctness gap and create silent failure modes on worker restart.
+
+Doctor does not yet compare challenge storage scope with worker count. Until
+that check lands, operators must verify `DURABLE_ONE_USE` during deployment;
+this missing automated check remains a production-qualification gap.
+
 ## No plaintext secret on the host
 
 - `suite.env`, `certs/`, `secrets/` are gitignored — nothing real is committed.

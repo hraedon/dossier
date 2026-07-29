@@ -52,8 +52,15 @@ def pg_client(tmp_path_factory):
     prev_admin_ids = os.environ.get("DOSSIER_ADMIN_IDS", "")
     os.environ["DOSSIER_ADMIN_IDS"] = f"{_ALICE_ID},{_BOB_ID}"
 
+    from dossier.auth.step_up import DossierApprovalVerifier
+
     try:
-        reg = Regista.create_project(_DSN, project, hmac_key_path=str(key_path))
+        reg = Regista.create_project(
+            _DSN,
+            project,
+            hmac_key_path=str(key_path),
+            approval_verifier=DossierApprovalVerifier(_SESSION_SECRET),
+        )
     except Exception as exc:
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
         pytest.skip(f"Postgres unavailable: {exc}")
@@ -355,3 +362,68 @@ def test_step_up_throttled_after_repeated_failures(pg_client: TestClient):
         assert resp.status_code in (401, 429)
     resp = _step_up(pg_client, "s3cret")
     assert resp.status_code == 429
+
+
+def test_approval_evidence_verified_true_in_database(pg_client: TestClient):
+    """The ApprovalVerifier records evidence_verified=true on a valid approval."""
+    principal = f"stepup-verified-{uuid.uuid4().hex[:8]}"
+    prepared = _enrollment_awaiting_approval(pg_client, principal)
+
+    _login_as(pg_client, "bob")
+    resp = _approve(pg_client, prepared)
+    assert resp.status_code == 303, resp.text
+
+    # Read the evidence_verified column directly from the database.
+    with psycopg.connect(_DSN) as conn:
+        row = conn.execute(
+            sql.SQL(
+                "SELECT evidence_verified FROM {}.lifecycle_approvals "
+                "WHERE operation_id = %s"
+            ).format(sql.Identifier(_project(pg_client))),
+            [prepared["operation_id"]],
+        ).fetchone()
+    assert row is not None
+    assert row[0] is True
+
+
+def test_approval_without_evidence_rejected_by_core(pg_client: TestClient):
+    """Bypassing the route: a direct gateway approval with no step-up evidence
+    is rejected by the regista ApprovalVerifier (APPROVAL_EVIDENCE_REQUIRED)."""
+    from regista import LifecycleContractError, LifecycleErrorCode
+
+    from dossier.actors import Actor
+
+    principal = f"stepup-noev-{uuid.uuid4().hex[:8]}"
+    prepared = _enrollment_awaiting_approval(pg_client, principal)
+
+    gw = _gw(pg_client)
+    approver = Actor(actor_id=_BOB_ID, actor_kind="human", display_name="Bob")
+    with pytest.raises(LifecycleContractError) as exc_info:
+        gw.approve_operation(
+            prepared["operation_id"],
+            approver=approver,
+            approval_digest=prepared["digest"],
+            step_up_evidence=None,  # No evidence — verifier must reject.
+        )
+    assert exc_info.value.code is LifecycleErrorCode.APPROVAL_EVIDENCE_REQUIRED
+
+
+def test_approval_with_forged_evidence_rejected_by_core(pg_client: TestClient):
+    """A forged step-up evidence string is rejected by the ApprovalVerifier."""
+    from regista import LifecycleContractError, LifecycleErrorCode
+
+    from dossier.actors import Actor
+
+    principal = f"stepup-forged-{uuid.uuid4().hex[:8]}"
+    prepared = _enrollment_awaiting_approval(pg_client, principal)
+
+    gw = _gw(pg_client)
+    approver = Actor(actor_id=_BOB_ID, actor_kind="human", display_name="Bob")
+    with pytest.raises(LifecycleContractError) as exc_info:
+        gw.approve_operation(
+            prepared["operation_id"],
+            approver=approver,
+            approval_digest=prepared["digest"],
+            step_up_evidence='{"forged": true}',
+        )
+    assert exc_info.value.code is LifecycleErrorCode.APPROVAL_EVIDENCE_REQUIRED

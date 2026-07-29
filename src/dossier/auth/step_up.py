@@ -194,3 +194,66 @@ def requires_step_up(operation: str) -> bool:
     unmapped operation is a loud error, never a silent "not protected".
     """
     return ProtectedOperation(operation) in PROTECTED_OPERATIONS
+
+
+class DossierApprovalVerifier:
+    """Regista ``ApprovalVerifier`` implementation (Plan 031 WI-1.2).
+
+    Validates the ``step_up_evidence`` JSON stored on an approval against
+    the operation digest and the approver's identity. Returns ``True`` only
+    when the evidence is well-formed, signature-valid, digest-bound,
+    principal-bound, and fresh. Any malformed, missing, stale, or
+    mis-bound evidence returns ``False`` — never raises.
+
+    Wired into ``Regista(..., approval_verifier=...)`` at construction so
+    regista core enforces the policy at the storage layer, not just at the
+    dossier route layer.
+    """
+
+    def __init__(self, session_secret: str) -> None:
+        self._session_secret = session_secret
+
+    def verify_approval(self, operation: object, approval: object) -> bool:
+        """Return True iff the approval's step-up evidence is valid.
+
+        Accepts ``LifecycleOperation`` and ``Approval`` structurally (typed
+        as ``object`` to avoid a hard import cycle with regista at module
+        level; the Protocol only requires the attributes we access).
+        """
+        try:
+            return self._verify(operation, approval)
+        except Exception:
+            # Fail closed: any unexpected error means evidence is not valid.
+            return False
+
+    def _verify(self, operation: object, approval: object) -> bool:
+        import json as _json
+
+        raw_evidence = getattr(approval, "step_up_evidence", None)
+        if not isinstance(raw_evidence, str) or not raw_evidence:
+            return False
+        try:
+            data = _json.loads(raw_evidence)
+        except (ValueError, TypeError):
+            return False
+        if not isinstance(data, dict):
+            return False
+        try:
+            evidence = StepUpEvidence.from_dict(data)
+        except (KeyError, ValueError, TypeError):
+            return False
+
+        op_digest = getattr(getattr(operation, "digest", None), "value", None)
+        if not isinstance(op_digest, str):
+            return False
+        approver_id = getattr(approval, "approver_id", None)
+        if not isinstance(approver_id, str):
+            return False
+
+        valid, _ = verify_step_up_evidence(
+            self._session_secret,
+            evidence,
+            expected_operation_digest=op_digest,
+            expected_principal_id=approver_id,
+        )
+        return valid

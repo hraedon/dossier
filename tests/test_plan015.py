@@ -535,29 +535,26 @@ def test_rotate_rolls_back_on_registration_failure(client, principal_store, admi
     assert active["public_key"] == entry["public_key"]
 
 
-def test_enroll_principal_failure_logs_warning(caplog):
+def test_enroll_principal_fail_closed_against_real_regista():
+    """Legacy in-process enrollment is rejected when principal ops are available."""
     from unittest.mock import MagicMock
 
+    import pytest
     from helpers import ALICE
     from regista import ErrorCode, RegistaError
 
     from dossier.gateway import RegistaGateway
 
     reg = MagicMock()
-    reg.enroll_principal.side_effect = RegistaError(
-        ErrorCode.INVALID_ARGUMENT, "bad principal"
-    )
+    # MagicMock has all attributes, so has_principal_ops() is True.
     gw = RegistaGateway(reg, project_name="test")
 
-    with caplog.at_level("WARNING", logger="dossier.gateway"):
-        result = gw.enroll_principal("alice", actor=ALICE)
-
-    assert result is None
-    assert "enroll_principal failed" in caplog.text
-    assert "bad principal" not in caplog.text
-    record = next(r for r in caplog.records if "enroll_principal failed" in r.getMessage())
-    assert record.error_code == "INVALID_ARGUMENT"
-    assert record.principal_id == "alice"
+    with pytest.raises(RegistaError) as exc_info:
+        gw.enroll_principal("alice", actor=ALICE)
+    assert exc_info.value.code == ErrorCode.SECRET_WRITE_UNSUPPORTED
+    assert "client-signer" in exc_info.value.message
+    # The underlying reg.enroll_principal was never called.
+    reg.enroll_principal.assert_not_called()
 
 
 def test_rotation_rate_limit_blocks_repeat(client, principal_store, admin_env):

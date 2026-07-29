@@ -323,7 +323,7 @@ def test_registry_close_all_scrubs_materialized_temp_manifest(monkeypatch, tmp_p
     captured: dict[str, object] = {}
 
     class _FakeRegista:
-        def __init__(self, dsn, project, key_path, *, require_ssl=False):
+        def __init__(self, dsn, project, key_path, *, require_ssl=False, **kwargs):
             captured["dsn"] = dsn
             captured["project"] = project
             captured["key_path"] = key_path
@@ -380,7 +380,7 @@ def test_registry_build_failure_scrubs_temp_and_closes_pool(monkeypatch, tmp_pat
     materialized_paths: list[str] = []
 
     class _FakeRegista:
-        def __init__(self, dsn, project, key_path, *, require_ssl=False):
+        def __init__(self, dsn, project, key_path, *, require_ssl=False, **kwargs):
             materialized_paths.append(key_path)
 
         def register_workflow(self, *_a, **_kw):
@@ -430,7 +430,7 @@ def test_registry_literal_path_no_cleanup(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
     class _FakeRegista:
-        def __init__(self, dsn, project, key_path, *, require_ssl=False):
+        def __init__(self, dsn, project, key_path, *, require_ssl=False, **kwargs):
             captured["key_path"] = key_path
 
         def register_workflow(self, *_a, **_kw):

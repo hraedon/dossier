@@ -205,6 +205,12 @@ def _http_status_for_lifecycle_error(code: LifecycleErrorCode) -> int:
         return status.HTTP_400_BAD_REQUEST
     if code is LifecycleErrorCode.OPERATION_ALREADY_COMMITTED:
         return status.HTTP_409_CONFLICT
+    if code is LifecycleErrorCode.APPROVER_IS_ACTOR:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.APPROVAL_EVIDENCE_REQUIRED:
+        return status.HTTP_403_FORBIDDEN
+    if code is LifecycleErrorCode.RECEIPT_OBSERVED_AT_INVALID:
+        return status.HTTP_400_BAD_REQUEST
     assert_never(code)
 
 
@@ -307,6 +313,10 @@ def _parse_effective_receipt(body: dict[str, Any]) -> EffectiveReceipt:
     except ValueError:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "observed_at must be an ISO-8601 timestamp"
+        )
+    if observed_at.tzinfo is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "observed_at must be timezone-aware"
         )
     signature_raw = _optional_str(body, "signature")
     signature = _decode_b64(signature_raw, "signature") if signature_raw else None
@@ -1678,7 +1688,23 @@ def create_app(
             except Exception:
                 pass
 
+        # Determine whether any accessible project has a durable lifecycle
+        # backend — if so, the legacy in-process enrollment form is not a
+        # supported production control and the template says so plainly.
+        has_durable_lifecycle = False
+        for project in registry.list_projects():
+            if not _can_read_project(actor, project):
+                continue
+            try:
+                gw = registry.get(project)
+                if gw.has_lifecycle_ops():
+                    has_durable_lifecycle = True
+                    break
+            except Exception:
+                pass
+
         ctx["principals"] = all_principals
+        ctx["has_durable_lifecycle"] = has_durable_lifecycle
         return templates.TemplateResponse(
             request,
             "principal_roster.html",
@@ -1726,9 +1752,10 @@ def create_app(
                 ):
                     raise HTTPException(
                         status.HTTP_400_BAD_REQUEST,
-                        "key custody requires a writable secret backend "
-                        "(file/windows/vault/azure); the configured backend "
-                        "cannot store a generated private key",
+                        "in-process enrollment is disabled: it generates "
+                        "private key material in the web process. Use the "
+                        "client-signer enrollment flow "
+                        "(POST /admin/p/{project}/lifecycle/enroll/prepare)",
                     )
                 errors.append(f"{project}: {type(exc).__name__}")
             except Exception as exc:
@@ -1890,12 +1917,19 @@ def create_app(
         approval_reason = str(form.get("reason", "")).strip()
         form_digest = str(form.get("approval_digest", "")).strip()
 
+        if not form_digest:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "approval_digest is required: confirm the exact operation you "
+                "are approving by submitting its digest",
+            )
+
         try:
             operation = gw.principal_lifecycle.get_operation(operation_id)
         except LifecycleContractError as exc:
             _handle_lifecycle_error(exc)
         server_digest = operation.digest.value
-        if form_digest and not hmac.compare_digest(form_digest, server_digest):
+        if not hmac.compare_digest(form_digest, server_digest):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 "approval digest does not match the server operation",

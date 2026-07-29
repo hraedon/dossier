@@ -551,43 +551,23 @@ class RegistaGateway:
     ) -> dict[str, Any] | None:
         """Enroll a principal through regista (Plan 015 WI-2.1).
 
-        Real regista (Postgres): delegates to ``reg.enroll_principal`` which
-        generates the Ed25519 keypair, stores the private key in the secret
-        backend, registers the public key, and emits a signed
-        ``principal_enrolled`` event — all in one call.
-
-        InMemoryRegista (tests): generates a keypair locally and registers
-        via the injected test-double store.
-
-        The returned dict contains only public metadata: ``key_id``,
-        ``fingerprint``, ``scheme``. No private key material is ever returned.
+        Fails closed against real regista: the in-process generate-and-register
+        pattern produces private key material in the web process, violating the
+        custody invariant (the web process must never generate or hold private
+        keys). Production enrollment uses the client-signer exchange
+        (``prepare_enrollment_with_key`` → possession proof → approval →
+        commit → effective receipt). The test-store path remains for dev/test.
         """
         if self.has_principal_ops():
-            actor_id = actor.actor_id if actor else "system"
-            actor_kind = actor.actor_kind if actor else "system"
-            actor_metadata = _metadata(actor) if actor else None
-            try:
-                return cast(
-                    dict[str, Any],
-                    self._reg.enroll_principal(
-                        principal_id,
-                        actor_id=actor_id,
-                        actor_kind=actor_kind,
-                        actor_metadata=actor_metadata,
-                        private_key_dir=private_key_dir,
-                        secret_backend=secret_backend,
-                    ),
-                )
-            except Exception as exc:
-                detail: dict[str, Any] = {
-                    "principal_id": principal_id,
-                    "error": type(exc).__name__,
-                }
-                if isinstance(exc, RegistaError):
-                    detail["error_code"] = exc.code.value
-                logger.warning("enroll_principal failed", extra=detail)
-                return None
-
+            raise RegistaError(
+                code=ErrorCode.SECRET_WRITE_UNSUPPORTED,
+                message=(
+                    "in-process enrollment is disabled against real regista: "
+                    "it generates private key material in the web process. "
+                    "Use the client-signer enrollment flow "
+                    "(POST /admin/p/{project}/lifecycle/enroll/prepare)."
+                ),
+            )
         registered_by = actor.actor_id if actor else "system"
         try:
             return self._generate_and_register(

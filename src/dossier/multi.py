@@ -181,6 +181,8 @@ class GatewayRegistry:
         # echo it. If Regista() or register_workflow() raises, we scrub the
         # materialized manifest before re-raising so a retry loop (e.g. a
         # dashboard rebuild on each request) cannot accumulate temp files.
+        from .auth.step_up import DossierApprovalVerifier
+
         key_path, cleanup = suite_secrets.materialize_key_manifest(s.hmac_key_path)
         reg: Any = None
         try:
@@ -189,6 +191,7 @@ class GatewayRegistry:
                 project,
                 key_path,
                 require_ssl=s.require_ssl,
+                approval_verifier=DossierApprovalVerifier(s.session_secret),
             )
             gw = RegistaGateway(reg, project_name=project)
             gw.register_workflow()

@@ -7,7 +7,41 @@
 
 <div class="ds-callout">Admin only — manages signing principals and key enrollment.</div>
 
+{% if has_durable_lifecycle %}
 <div class="ds-panel ds-panel--pad">
+  <div class="ds-callout ds-callout--warn">
+    <strong>Client-signer integration required.</strong>
+    Enrollment on a durable lifecycle backend is not supported through this
+    page. Use the client-signer API exchange
+    (<code>POST /admin/p/{project}/lifecycle/enroll/prepare</code>): the
+    out-of-process signer generates and custodies the keypair; the web process
+    never holds private key material. The legacy form below is retained for
+    qualification testing only and will be rejected by the server.
+  </div>
+  <form method="post" action="/admin/principals/enroll" class="ds-form" aria-disabled="true">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="ds-field-row">
+      <div class="ds-field">
+        <label class="ds-label" for="enroll-pid">principal id</label>
+        <input class="ds-input" type="text" id="enroll-pid" name="principal_id" required disabled>
+      </div>
+      <div class="ds-field">
+        <label class="ds-label" for="enroll-scheme">scheme</label>
+        <select class="ds-select" id="enroll-scheme" name="scheme" disabled>
+          <option value="ed25519" selected>ed25519</option>
+        </select>
+      </div>
+    </div>
+    <button type="submit" class="ds-btn ds-btn--ghost" disabled>enroll (disabled on durable backend)</button>
+  </form>
+</div>
+{% else %}
+<div class="ds-panel ds-panel--pad">
+  <p class="ds-prose">
+    Enrollment generates a keypair in-process (dev/test only). Production
+    deployments with a durable lifecycle backend use the client-signer
+    exchange API.
+  </p>
   <form method="post" action="/admin/principals/enroll" class="ds-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="ds-field-row">
@@ -22,9 +56,10 @@
         </select>
       </div>
     </div>
-    <button type="submit" class="ds-btn ds-btn--primary">enroll</button>
+    <button type="submit" class="ds-btn ds-btn--primary">enroll (dev/test only)</button>
   </form>
 </div>
+{% endif %}
 
 {% if principals %}
 <div class="ds-table-wrap">
