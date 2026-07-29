@@ -11,10 +11,11 @@
 <a class="ds-skip-link" href="#main-content">skip to main content</a>
 <div class="ds-app">
   <header class="ds-topbar">
-    <a class="ds-topbar__wordmark" href="/">dossier</a>
+    <a class="ds-topbar__wordmark" href="/"><span class="ds-mark" aria-hidden="true">D</span>dossier</a>
     {% from "_shell.html" import primary_navigation, work_navigation, project_switcher, user_menu with context %}
     {% if shell is defined %}
     {{ primary_navigation(shell) }}
+    <span class="ds-topbar__area" aria-hidden="true">{{ shell.area.value }}</span>
     {% else %}
     <nav class="ds-primary-nav" aria-label="Suite areas"><a href="/" class="ds-primary-nav__item">Work</a></nav>
     {% endif %}
@@ -36,6 +37,10 @@
       {% block content %}{% endblock %}
     </div>
   </main>
+  <footer class="ds-foot">
+    <span>dossier — a tracker that is also a provenance instrument</span>
+    <span class="ds-foot__right">every change a signed event · replay verifies the record</span>
+  </footer>
 </div>
 </body>
 </html>

@@ -1,25 +1,28 @@
 <section class="ds-history">
   <div class="ds-history__head">
     <h2 class="ds-history__title">verified history</h2>
-    {% if assurance_level is defined and assurance_level %}
-    <span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance level (computed by regista)">
-      <span class="ds-pill__dot"></span>{{ assurance_label }}
+    <span class="ds-history__seal">
+      {% if assurance_level is defined and assurance_level %}
+      <span class="ds-pill ds-pill--{{ assurance_css }}" title="review assurance level (computed by regista)">
+        <span class="ds-pill__dot"></span>{{ assurance_label }}
+      </span>
+      {% endif %}
+      {% if assurance_verdict is defined and assurance_verdict and assurance_verdict.degraded %}
+      <span class="ds-pill ds-pill--warn" title="{{ assurance_verdict.degradation_reason }}">
+        <span class="ds-pill__dot"></span>degraded assurance
+      </span>
+      {% endif %}
+      <span class="ds-chip">hmac-sha256 · {{ events | length }} events</span>
+      {% if integrity_drift == 0 %}
+      <span class="ds-integrity-badge ds-integrity-badge--ok">
+        <span class="ds-pill__dot"></span>chain verified
+      </span>
+      {% else %}
+      <span class="ds-integrity-badge ds-integrity-badge--crit">
+        <span class="ds-pill__dot"></span>CHAIN BROKEN: {{ integrity_drift }} drift
+      </span>
+      {% endif %}
     </span>
-    {% endif %}
-    {% if assurance_verdict is defined and assurance_verdict and assurance_verdict.degraded %}
-    <span class="ds-pill ds-pill--warn" title="{{ assurance_verdict.degradation_reason }}">
-      <span class="ds-pill__dot"></span>degraded assurance
-    </span>
-    {% endif %}
-    {% if integrity_drift == 0 %}
-    <span class="ds-integrity-badge ds-integrity-badge--ok">
-      <span class="ds-pill__dot"></span>chain verified
-    </span>
-    {% else %}
-    <span class="ds-integrity-badge ds-integrity-badge--crit">
-      <span class="ds-pill__dot"></span>CHAIN BROKEN: {{ integrity_drift }} drift
-    </span>
-    {% endif %}
   </div>
 
   {% if events %}
@@ -28,9 +31,21 @@
     {% for event in events %}
     {% set ev = event_verifications|default({}) %}
     {% set vinfo = ev[loop.index0] if loop.index0 in ev else none %}
+    {% if event.transition == 'created' %}
+      {% set rule_mod = 'ds-chain__rule--created' %}
+    {% elif event.transition == 'comment' %}
+      {% set rule_mod = 'ds-chain__rule--comment' %}
+    {% elif event.transition in ('adversarial_pass', 'accept') %}
+      {% set rule_mod = 'ds-chain__rule--review' %}
+    {% elif event.transition in ('request_changes', 'reject') %}
+      {% set rule_mod = 'ds-chain__rule--change' %}
+    {% else %}
+      {% set rule_mod = '' %}
+    {% endif %}
     <div class="ds-chain__event">
-      <div class="ds-chain__rule"></div>
+      <div class="ds-chain__rule {{ rule_mod }}"></div>
       <div class="ds-chain__row">
+        <span class="ds-chain__seq">#{{ loop.index }}</span>
         <time class="ds-chain__time mono tnum">{{ format_timestamp(event.timestamp) }}</time>
         <span class="ds-chain__action mono">{{ transition_label(event.transition) }}</span>
       </div>

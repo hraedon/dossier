@@ -20,10 +20,10 @@
 </div>
 {% else %}
 
-<div class="ds-panel ds-panel--pad">
-  <form method="post" action="/p/{{ project_slug }}/owner" class="ds-form ds-form--inline">
+<div class="ds-panel ds-panel--slim">
+  <form method="post" action="/p/{{ project_slug }}/owner" class="ds-form ds-form--row">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="ds-field ds-field--inline">
+    <div class="ds-field">
       <label class="ds-label" for="owner-input">set owner</label>
       <input class="ds-input ds-input--sm" type="text" id="owner-input" name="owner_actor_id" placeholder="actor_id" value="{{ owner_display(catalog_entry) if owner_display(catalog_entry) != 'unassigned' else '' }}">
     </div>
@@ -55,7 +55,7 @@
 
 {% if issues %}
 <div class="ds-table-wrap">
-  <table class="ds-table">
+  <table class="ds-table ds-table--stack">
     <thead>
       <tr>
         <th>key</th>
@@ -70,13 +70,13 @@
     <tbody>
       {% for wi in issues %}
       <tr>
-        <td class="mono"><a href="/p/{{ project_slug }}/issues/{{ wi.work_item_id }}">{{ display_key(wi) }}</a></td>
-        <td><a href="/p/{{ project_slug }}/issues/{{ wi.work_item_id }}">{{ issue_title(wi) }}</a></td>
-        <td class="mono">{{ wi.work_item_type }}</td>
-        <td><span class="ds-pill {{ status_pill_class(wi.current_state) }}"><span class="ds-pill__dot"></span>{{ wi.current_state }}</span></td>
-        <td>{{ issue_field(wi, 'assignee', '—') }}</td>
-        <td class="mono">{{ issue_field(wi, 'priority', 'normal') }}</td>
-        <td class="mono tnum">{{ last_event_time(wi) }}</td>
+        <td class="mono ds-cell--lead"><a href="/p/{{ project_slug }}/issues/{{ wi.work_item_id }}">{{ display_key(wi) }}</a></td>
+        <td class="ds-cell--lead ds-cell--title"><a href="/p/{{ project_slug }}/issues/{{ wi.work_item_id }}">{{ issue_title(wi) }}</a></td>
+        <td class="mono" data-th="type">{{ wi.work_item_type }}</td>
+        <td data-th="status"><span class="ds-pill {{ status_pill_class(wi.current_state) }}"><span class="ds-pill__dot"></span>{{ wi.current_state }}</span></td>
+        <td data-th="assignee">{{ issue_field(wi, 'assignee', '—') }}</td>
+        <td class="mono" data-th="priority">{{ issue_field(wi, 'priority', 'normal') }}</td>
+        <td class="mono tnum" data-th="updated">{{ last_event_time(wi) }}</td>
       </tr>
       {% endfor %}
     </tbody>

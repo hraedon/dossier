@@ -2,12 +2,15 @@
 {% block title %}all projects — dossier{% endblock %}
 {% block content %}
 <div class="ds-pagehead">
-  <h1 class="ds-pagehead__title">projects</h1>
+  <div>
+    <p class="ds-kicker">estate</p>
+    <h1 class="ds-pagehead__title">projects</h1>
+  </div>
 </div>
 
 {% if project_rows %}
 <div class="ds-table-wrap">
-  <table class="ds-table">
+  <table class="ds-table ds-table--stack">
     <thead>
       <tr>
         <th>project</th>
@@ -18,9 +21,9 @@
     <tbody>
       {% for p in project_rows %}
       <tr>
-        <td><a href="/p/{{ p.slug }}">{{ p.name }}</a></td>
-        <td class="mono">{{ owner_display(p.catalog_entry) }}</td>
-        <td class="mono tnum">{{ p.open_count }}</td>
+        <td class="ds-cell--lead"><a href="/p/{{ p.slug }}">{{ p.name }}</a></td>
+        <td class="mono" data-th="owner">{{ owner_display(p.catalog_entry) }}</td>
+        <td class="mono tnum" data-th="open items">{{ p.open_count }}</td>
       </tr>
       {% endfor %}
     </tbody>
