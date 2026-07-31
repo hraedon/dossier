@@ -71,6 +71,56 @@ For an **external Postgres** (the production posture), point `REGISTA_DSN` in
 only for dev). The image is substrate-agnostic: it runs under compose, behind
 a reverse proxy, or as a published `ghcr.io` image against an external store.
 
+## Linux systemd service (artifact-only substrate)
+
+For a host installed from the wheel rather than the container — the posture
+`agent-suite/docs/install-linux.md` describes — dossier installs its own systemd
+unit:
+
+```bash
+sudo dossier install-service --dry-run     # report the plan; act on nothing
+sudo dossier install-service               # write, enable, start, and verify
+sudo dossier install-service --uninstall   # remove it
+```
+
+This writes `/etc/systemd/system/dossier.service`, runs `systemctl enable --now`,
+and then **verifies** three things before reporting success: that the resolved
+`ExecStart` is an absolute existing executable, that systemd's own parse of
+`ExecStart` names it, and that the service is `active`. It exits non-zero if any
+of those fails — writing a unit file is not the success condition. Run it again
+after upgrading dossier; it is idempotent.
+
+`agent-suite install-services` invokes this for you as part of a suite install
+(agent-suite WI-044).
+
+The unit is **generated**, not shipped as a static file, because the one
+host-specific thing in it is where the CLI lives: systemd resolves an
+unqualified `ExecStart` only against its own fixed search path
+(`/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, …) and never the
+invoking user's `PATH`, so no single file is correct on both a system-scoped
+install and a `~/.local/bin` one. If the `dossier` CLI is not resolvable to an
+absolute path, `install-service` **refuses** and names the problem rather than
+writing a unit that would fail `203/EXEC` at first start. Install the CLI on a
+system PATH (`pipx install dossier`, or a venv at `/opt` linked into
+`/usr/local/bin`) or pass `--bin-dir`.
+
+`deploy/systemd/dossier.service` is a **reference rendering** against
+`/usr/local/bin` for review and manual install; `tests/test_service_unit.py`
+keeps it byte-identical to the generator.
+
+Defaults and the flags that change them:
+
+| Flag | Default | Notes |
+|---|---|---|
+| `--host` | `127.0.0.1` | Matches `dossier serve`. Installing a service must not widen a host's exposure as a side effect — pass `--host 0.0.0.0` (behind TLS or a reverse proxy) deliberately. |
+| `--port` | `8000` | |
+| `--user` | `root` | `/etc/agent-suite/suite.env` and any TLS material it points at are root-owned. Pass a dedicated service account if you have one; the account must exist, or the unit fails `217/USER`. |
+| `--unit-dir` | `/etc/systemd/system` | |
+
+The unit reads `EnvironmentFile=-/etc/agent-suite/suite.env` (the shared suite
+config) and then `-/etc/dossier/dossier.env` (dossier-specific overrides). Both
+are optional, and no value is baked into the unit.
+
 ## Windows Service (alternative substrate)
 
 For a Windows host, use the WinSW service wrapper in
