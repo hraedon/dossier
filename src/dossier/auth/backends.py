@@ -19,6 +19,25 @@ logger = logging.getLogger("dossier.auth.ldap")
 _DUMMY_HASH: str | None = None
 
 
+def validate_principal_binding(value: object) -> str:
+    """Validate a recorded regista ``principal_id`` and return it normalized.
+
+    Applies regista's own principal-id grammar so a binding that dossier accepts
+    is one regista can register a key against. Raises :class:`ValueError` with a
+    message naming the offending value — this runs at identity-source load time
+    (users file parse / LDAP attribute read), where an operator can act on it.
+    """
+    from ..keys import _validate_principal_id
+
+    if not isinstance(value, str):
+        raise ValueError(
+            f"principal_id must be a string, got {type(value).__name__}"
+        )
+    candidate = value.strip()
+    _validate_principal_id(candidate)
+    return candidate
+
+
 def _get_dummy_hash() -> str:
     global _DUMMY_HASH
     if _DUMMY_HASH is None:
@@ -31,15 +50,25 @@ class Principal:
     """A verified identity, backend-agnostic.
 
     ``stable_id`` is a durable identifier (a minted uuid for local users, an
-    LDAP ``objectGUID`` for AD) that survives renames — it is what becomes the
-    regista ``actor_id``. ``raw_attributes`` carries backend-specific data
-    (username, groups) for authorization and display.
+    LDAP ``objectGUID`` for AD) that survives renames. ``raw_attributes``
+    carries backend-specific data (username, groups) for authorization and
+    display.
+
+    ``principal_id`` is the regista signing principal this identity is bound to
+    (WI-035), or ``None`` when the operator has not recorded one. It is
+    deliberately never *derived* — not from the username, not from the
+    ``stable_id``. A derived binding would silently claim a signing identity the
+    suite may not have provisioned, and dossier would then either sign as
+    somebody else or fall back to the shared store key; both are worse than
+    saying "unbound". When it is set it becomes the regista ``actor_id`` (see
+    :func:`dossier.auth.resolver.principal_to_actor`).
     """
 
     stable_id: str
     display_name: str
     source: str
     raw_attributes: dict[str, Any] = field(default_factory=dict)
+    principal_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,7 +110,14 @@ class LocalBackend:
 
     No directory infra required. ``stable_id`` is a minted uuid per user. The
     users file is a JSON array of objects with keys ``stable_id``, ``username``,
-    ``display_name``, ``password`` (a ``hash_password`` string), ``groups``.
+    ``display_name``, ``password`` (a ``hash_password`` string), ``groups``, and
+    an optional ``principal_id``.
+
+    ``principal_id`` is the regista signing principal the user acts as (WI-035).
+    It is optional so an existing users file keeps loading, and it is never
+    inferred from ``username`` or ``stable_id``: the value must match a principal
+    that `agent-suite bootstrap --user <principal_id>` has actually provisioned a
+    key for, and only the operator knows that.
     """
 
     def __init__(
@@ -113,6 +149,11 @@ class LocalBackend:
             groups = entry.get("groups", [])
             if not isinstance(groups, list):
                 raise ValueError(f"groups must be a list, got {type(groups).__name__}")
+            # Validate the signing binding at load, not at sign time: a typo in
+            # a principal_id would otherwise surface as "no key for this actor"
+            # on someone's acceptance, which reads like a provisioning gap.
+            if entry.get("principal_id") is not None:
+                validate_principal_binding(entry["principal_id"])
             users[entry["username"].strip().lower()] = entry
         return users
 
@@ -127,6 +168,7 @@ class LocalBackend:
             stable_id=user["stable_id"],
             display_name=user["display_name"],
             source="local",
+            principal_id=user.get("principal_id") or None,
             raw_attributes={
                 "username": user["username"],
                 "groups": [
@@ -257,6 +299,7 @@ class LdapBackend:
         group_strategy: Literal["direct", "nested"] = "direct",
         ca_cert_file: str = "",
         connect_timeout: int = 5,
+        principal_id_attr: str = "",
     ) -> None:
         if not server_urls:
             raise ValueError("server_urls must not be empty")
@@ -280,6 +323,12 @@ class LdapBackend:
         self._group_strategy = group_strategy
         self._ca_cert_file = ca_cert_file
         self._connect_timeout = connect_timeout
+        # WI-035: the directory attribute carrying the suite principal_id. Empty
+        # (the default) means no LDAP identity is bound, so an upgrade cannot
+        # silently re-key every user's actor_id. Commonly set to
+        # ``sAMAccountName`` when logon names and principal ids are the same, or
+        # to a dedicated attribute when they are not.
+        self._principal_id_attr = principal_id_attr.strip()
 
         try:
             import ldap3  # noqa: F401
@@ -302,6 +351,7 @@ class LdapBackend:
             group_strategy=config.group_strategy,
             ca_cert_file=config.ca_cert_file,
             connect_timeout=config.connect_timeout,
+            principal_id_attr=config.principal_id_attr,
         )
 
     # ── connection plumbing ───────────────────────────────────────────
@@ -372,6 +422,7 @@ class LdapBackend:
                     "displayName",
                     "cn",
                     "sAMAccountName",
+                    *([self._principal_id_attr] if self._principal_id_attr else []),
                 ],
             )
 
@@ -424,6 +475,7 @@ class LdapBackend:
                 stable_id=stable_id,
                 display_name=str(display_name),
                 source=f"ldap:{self._domain}",
+                principal_id=self._read_principal_id(entry, identifier),
                 raw_attributes={
                     "username": identifier,
                     "dn": user_dn,
@@ -447,6 +499,40 @@ class LdapBackend:
                     svc_conn.unbind()
                 except Exception:
                     pass
+
+    def _read_principal_id(self, entry: Any, identifier: str) -> str | None:
+        """Read the suite ``principal_id`` from the directory entry (WI-035).
+
+        Returns ``None`` when no attribute is configured or the attribute is
+        absent/empty on this user — an unbound identity, which the signing policy
+        then handles. A *malformed* value is also treated as unbound rather than
+        raising, because raising here would turn a directory data problem into a
+        login failure; it is logged with the attribute name so the operator can
+        find it, and the signing policy still refuses to sign symmetrically for
+        the user under a production posture.
+        """
+        if not self._principal_id_attr:
+            return None
+        raw = _attr_value(entry, self._principal_id_attr)
+        if raw is None or not str(raw).strip():
+            logger.warning(
+                "LDAP user %s has no %s — identity is unbound and has no "
+                "per-actor signing key",
+                identifier,
+                self._principal_id_attr,
+            )
+            return None
+        try:
+            return validate_principal_binding(str(raw))
+        except ValueError as exc:
+            logger.warning(
+                "LDAP user %s has an invalid %s: %s — treating the identity as "
+                "unbound",
+                identifier,
+                self._principal_id_attr,
+                exc,
+            )
+            return None
 
     def fetch_groups(self, principal: Principal) -> list[GroupIdentity]:
         """Return group identities cached during ``authenticate``.

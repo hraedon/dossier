@@ -106,6 +106,8 @@ keep their `DOSSIER_*` names.
 | `DOSSIER_LDAP_BASE_DN` / `_BIND_DN` / `_BIND_PASSWORD` | search-then-bind creds |
 | `DOSSIER_LDAP_DOMAIN` | appears in `Principal.source` as `ldap:<domain>` |
 | `DOSSIER_LDAP_CA_CERT_FILE` | AD root CA PEM (pinning; never `validate=NONE`) |
+| `DOSSIER_LDAP_PRINCIPAL_ID_ATTR` | directory attribute holding each human's regista `principal_id`; unset = LDAP identities are unbound (WI-035) |
+| `DOSSIER_HUMAN_SIGNING` | `require` (refuse a human write that could only be signed with the shared store key — the default in prod) or `warn` (record it, loudly). See the migration below |
 
 Either `REGISTA_DSN` or `REGISTA_KEY_PATH` may be a secret-backend ref
 (`env:`/`file:`/`vault:`/`azure:`) so no plaintext secret sits on the host
@@ -162,9 +164,15 @@ exception — it is deny-by-default in dev too (WI-017). **Set
   crash `load_settings`), `/healthz` returns 503, and startup logs an error
   naming both variables. See `docs/project-access.md` for the migration and
   recovery path.
+- `human_signing` defaults to `require` (WI-035): a human action that could
+  only be signed with the shared store HMAC key is **refused** rather than
+  recorded without attribution. This is the one prod default that can stop a
+  working deployment, so it has a migration — see below — and an explicit
+  escape hatch, `DOSSIER_HUMAN_SIGNING=warn`.
 - The doctor escalates posture gaps from `warn` to `fail` in prod: open
   access, missing TLS, missing/short session secret, missing `users_path` for
-  the local backend. In dev these remain `warn`/informational.
+  the local backend, and unbound human signing identities. In dev these remain
+  `warn`/informational.
 
 `DOSSIER_ALLOWED_HOSTS` wires Starlette's `TrustedHostMiddleware` (only when
 set, so dev is unaffected). In prod, pin it to the host(s) the team reaches
@@ -174,6 +182,103 @@ to HTTPS (that would break health probes), but the TLS seam must be evident.
 
 `dev` (the default) preserves every historical default for backwards
 compatibility — the promotion is opt-in via `DOSSIER_ENV=prod`.
+
+## Migrating to per-actor human signing
+
+Before WI-035, dossier signed human events under the auth backend's `stable_id`
+(a local uuid or an LDAP `objectGUID`). No signing key is registered against those,
+so regista fell back to the **shared store HMAC key** and the human leg of every
+chain came out as `unverifiable (symmetric scheme)`. The rationale is in
+[provenance-model.md](provenance-model.md); this is the operational path.
+
+**Upgrading changes nothing until you bind an identity.** An unbound identity keeps
+the `actor_id` it always had. What changes is that the downgrade is now reported —
+and, under `DOSSIER_ENV=prod`, refused. So do this in order.
+
+### 1. See where you stand
+
+```bash
+dossier doctor           # or: curl -s localhost:8000/healthz | jq '.checks[] | select(.name=="human_signing")'
+```
+
+The `human_signing` check names every local identity with no `principal_id`, and every
+recorded `principal_id` with no active per-actor key. On the LDAP backend it reports
+whether `DOSSIER_LDAP_PRINCIPAL_ID_ATTR` is wired (it cannot enumerate the directory —
+health does not make directory calls).
+
+### 2. Keep the deployment running while you provision
+
+If you are already on `DOSSIER_ENV=prod`, set the escape hatch *first*, so the upgrade
+cannot refuse an acceptance before anyone has a key:
+
+```env
+DOSSIER_HUMAN_SIGNING=warn
+```
+
+Every human write still works, and each one that falls back logs
+`provenance.human_signature_downgraded` and returns
+`X-Dossier-Human-Signing: downgraded`.
+
+### 3. Provision a signing key per human
+
+```bash
+agent-suite bootstrap --user alice      # enrolls the principal and writes its Ed25519 key
+```
+
+This is idempotent and will not clobber an existing key (agent-suite
+`docs/multi-user-onboarding.md` §5).
+
+### 4. Record the binding on the identity
+
+**local backend** — add `principal_id` to the user's entry in `DOSSIER_USERS_PATH`:
+
+```json
+{
+  "stable_id": "4814fec5-7b84-4f61-ae43-99a91dc76a63",
+  "username": "alice",
+  "display_name": "Alice",
+  "password": "scrypt:...",
+  "principal_id": "alice"
+}
+```
+
+**ldap backend** — set `DOSSIER_LDAP_PRINCIPAL_ID_ATTR` to the attribute carrying the
+principal id (often `sAMAccountName`; a dedicated attribute if logon names and
+principal ids differ), and make sure it is populated for each onboarded human.
+
+An invalid `principal_id` fails at load for the local backend and is logged and
+treated as unbound for LDAP — it never silently becomes a store-key signature.
+
+**Each bound human must re-authenticate.** The actor is resolved at login and
+carried in the signed session cookie, so somebody with a live session keeps acting
+under their pre-binding id until they log in again — restarting dossier does not
+change that. Have them log out and back in (or shorten
+`DOSSIER_SESSION_MAX_AGE_SECONDS` for the changeover window) before you expect the
+doctor's verdict to match what people actually sign with.
+
+### 5. What the binding changes, and what it does not
+
+A bound human's `actor_id` becomes their `principal_id`. Plan for that:
+
+- **Authorization keeps working.** The old `stable_id` is retained as an
+  authorization alias, so existing `DOSSIER_PROJECT_ACL_PATH` entries,
+  `DOSSIER_BOOTSTRAP_ADMINS` entries, and project-owner records that name the uuid
+  still match. You can migrate them to the `principal_id` at your leisure; you do not
+  have to do it in the same window.
+- **History does not move.** Events already written keep the `stable_id` they were
+  signed under — rewriting them is neither possible nor desirable (that is G2). A
+  bound human's *past* activity therefore appears under the old id and their new
+  activity under the `principal_id`. If that split matters for a given person, note the
+  changeover date; it is a one-time discontinuity.
+- **`assignee` fields are free text.** Items assigned to the uuid keep that value.
+  Reassign them if you want the new id to match.
+
+### 6. Turn on refusal
+
+Once `dossier doctor` reports `human_signing: ok`, remove the escape hatch (or set
+`DOSSIER_HUMAN_SIGNING=require` explicitly) and restart. From then on a human action
+that cannot be signed by that human is refused with a `409` naming the fix, rather
+than recorded as something nobody can be held to.
 
 ## Operator-gated validation (not delivered here)
 

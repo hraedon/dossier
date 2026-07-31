@@ -57,6 +57,19 @@
 <div class="ds-callout ds-callout--crit">{{ error }}</div>
 {% endif %}
 
+{# WI-035: the action was recorded but sealed with the shared store key, so it
+   attributes nothing to this human. Loud by design — the silent version of this
+   is the defect. #}
+{% if signing_downgraded %}
+<div class="ds-callout ds-callout--crit" data-testid="signing-downgraded">
+  <strong>Recorded without your signature.</strong>
+  That action was signed with the shared store key, not a key only you hold, so
+  the record cannot attribute it to you — anyone holding the store key could have
+  produced it. Reason: {{ signing_downgraded }}. Ask an administrator to provision
+  a per-actor signing key for your identity.
+</div>
+{% endif %}
+
 {% if transitions %}
 <div class="ds-panel ds-panel--pad">
   <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">

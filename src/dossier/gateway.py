@@ -35,6 +35,14 @@ from regista.principal_lifecycle import (
 )
 
 from .actors import SYSTEM_ACTOR, Actor
+from .signing import (
+    HumanSigningPolicy,
+    SigningIdentity,
+    resolve_signing_identity,
+)
+from .signing import (
+    enforce as _enforce_human_signing,
+)
 
 if TYPE_CHECKING:
     from .contracts import ProviderDescriptor
@@ -108,12 +116,85 @@ class RegistaGateway:
     mint-then-create operation so two concurrent creates in the same process
     cannot produce the same key (WI-011). Multi-process deployments still
     require a regista-side sequence or advisory lock for full correctness.
+
+    Because it is the only mutation path, it is also the only place the
+    per-actor signing policy can be enforced without leaving a bypass: every
+    human write resolves :meth:`human_signing_identity` first and pins the
+    resulting ``key_id`` (WI-035).
     """
 
-    def __init__(self, regista: Regista, project_name: str = "dossier") -> None:
+    def __init__(
+        self,
+        regista: Regista,
+        project_name: str = "dossier",
+        *,
+        human_signing: HumanSigningPolicy = "warn",
+    ) -> None:
         self._reg = regista
         self._project_name = project_name
         self._mint_lock = threading.Lock()
+        self._human_signing = human_signing
+
+    @property
+    def human_signing_policy(self) -> HumanSigningPolicy:
+        """The configured posture for human writes (``require`` or ``warn``)."""
+        return self._human_signing
+
+    def signing_identity(self, actor: Actor) -> SigningIdentity:
+        """Report whether *actor* can be signed for per-actor, without writing.
+
+        A read-only probe for the UI, the doctor, and the pre-flight below. Never
+        raises: an unresolvable identity comes back with ``per_actor`` False and a
+        ``reason``.
+        """
+        return resolve_signing_identity(self._reg, actor)
+
+    def active_signing_principals(self) -> set[str]:
+        """Principal ids with an active asymmetric key in the loaded key-set.
+
+        The set this process can actually sign per-actor for. Used by the doctor
+        to tell "no key provisioned" apart from "no principal recorded". Returns
+        an empty set — never raises — when the key-set cannot be read, so a
+        health probe degrades rather than erroring.
+        """
+        from .signing import asymmetric_schemes
+
+        try:
+            keys = self._reg.export_public_keys()
+        except Exception:
+            logger.debug("active_signing_principals: key-set read failed", exc_info=True)
+            return set()
+        asym = asymmetric_schemes()
+        return {
+            str(k["principal_id"])
+            for k in keys
+            if k.get("principal_id")
+            and k.get("status") == "active"
+            and str(k.get("scheme")) in asym
+        }
+
+    def human_signing_identity(self, actor: Actor, operation: str) -> SigningIdentity:
+        """Pre-flight a write and return the key to pin it to (WI-035).
+
+        For a ``human`` actor this applies the configured policy: ``require``
+        raises :exc:`HumanSigningRefusedError` *before* anything is appended, ``warn``
+        logs the downgrade and lets the write proceed. Non-human actors are
+        returned unenforced — agents already resolve their own per-principal key
+        because their ``actor_id`` is their ``principal_id``, and the system actor
+        legitimately signs with the store key (it *is* the store).
+
+        The returned ``key_id`` is passed to regista as an explicit signing key so
+        the choice cannot quietly become the store key between the check and the
+        append.
+        """
+        if actor.actor_kind != "human":
+            return SigningIdentity(actor_id=actor.actor_id, reason="not a human actor")
+        return _enforce_human_signing(
+            self._reg,
+            actor,
+            policy=self._human_signing,
+            operation=operation,
+        )
 
     def register_workflow(self, yaml_text: str | None = None) -> None:
         self._reg.register_workflow(yaml_text or packaged_workflow_yaml())
@@ -162,7 +243,15 @@ class RegistaGateway:
         A ``display_key`` (e.g. ``DOSSIER-3``) is auto-minted if not already
         present — see :class:`RegistaGateway` docstring for the ownership
         decision (WI-006).
+
+        The human-signing pre-flight runs here too, but the key cannot be
+        *pinned*: regista's ``create_work_item`` takes no ``key_id`` (filed as
+        regista WI-227). The pre-flight still guarantees an active asymmetric key
+        is bound to this actor, and regista's own ``resolve_signing_key``
+        prefers asymmetric candidates, so the create is signed per-actor — it
+        just relies on regista's resolution rather than an explicit pin.
         """
+        self.human_signing_identity(actor, "create")
         cf = dict(custom_fields) if custom_fields else {}
         if "display_key" not in cf:
             with self._mint_lock:
@@ -199,6 +288,14 @@ class RegistaGateway:
         payload: dict[str, Any] | None = None,
         custom_fields: dict[str, Any] | None = None,
     ) -> Event:
+        """Execute a workflow transition as *actor*.
+
+        A human transition — an acceptance in particular — is pre-flighted and
+        pinned to that human's own signing key (WI-035). Under
+        ``human_signing="require"`` an identity with no per-actor key raises
+        :exc:`~dossier.signing.HumanSigningRefusedError` and nothing is appended.
+        """
+        identity = self.human_signing_identity(actor, f"transition:{transition_name}")
         return cast(
             Event,
             self._reg.transition(
@@ -210,6 +307,7 @@ class RegistaGateway:
                 payload=payload,
                 custom_fields=custom_fields,
                 on_behalf_of=actor.on_behalf_of,
+                key_id=identity.key_id,
             ),
         )
 
@@ -220,6 +318,7 @@ class RegistaGateway:
         work_item_id: uuid.UUID,
         body: str,
     ) -> Event:
+        identity = self.human_signing_identity(actor, "comment")
         return cast(
             Event,
             self._reg.append_event(
@@ -230,6 +329,7 @@ class RegistaGateway:
                 transition="comment",
                 payload={"body": body},
                 on_behalf_of=actor.on_behalf_of,
+                key_id=identity.key_id,
             ),
         )
 
@@ -241,6 +341,7 @@ class RegistaGateway:
         transition: str,
         payload: dict[str, Any] | None = None,
     ) -> Event:
+        identity = self.human_signing_identity(actor, f"note:{transition}")
         return cast(
             Event,
             self._reg.append_event(
@@ -252,6 +353,7 @@ class RegistaGateway:
                 payload=payload,
                 on_behalf_of=actor.on_behalf_of,
                 entity_kind="note",
+                key_id=identity.key_id,
             ),
         )
 

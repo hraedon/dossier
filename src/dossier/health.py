@@ -153,6 +153,7 @@ def build_health(
     checks.append(_notification_sink_check(settings))
     checks.append(_project_access_check(settings, prod=prod))
     checks.append(_allowed_hosts_check(settings, prod=prod))
+    checks.append(_human_signing_check(settings, registry))
 
     has_fail = any(c["status"] == "fail" for c in checks)
     has_warn = any(c["status"] == "warn" for c in checks)
@@ -511,3 +512,142 @@ def _allowed_hosts_check(
         "status": "skip",
         "detail": "not configured (dev — no TrustedHostMiddleware)",
     }
+
+
+def _human_signing_check(
+    settings: Settings, registry: GatewayRegistry
+) -> dict[str, Any]:
+    """Report whether human actions can be signed per-actor (WI-035).
+
+    A human's acceptance is the signature the whole review gate exists to
+    record. When the acting identity has no regista principal bound to it, the
+    write falls through to the *shared* store HMAC key: the event still seals
+    into the chain, `regista verify` reports it as ``unverifiable (symmetric
+    scheme)``, and the record attributes nothing to anyone. Before this check the
+    only place that showed up was an offline bundle verification, long after the
+    acceptance.
+
+    Bounded like the rest of health: it reads the identity source (a local users
+    file) and the loaded signing key-set. No chain replay, no directory
+    round-trip — an LDAP deployment cannot be enumerated from here, so it reports
+    the configured binding attribute and stops.
+
+    Status: ``fail`` when the posture is ``require`` and an identity would be
+    refused (the deployment cannot record human decisions); ``warn`` when the
+    posture is ``warn`` and a downgrade is possible; ``ok`` when every known
+    human identity resolves to an active per-actor key.
+    """
+    from .signing import PROVISION_HINT
+
+    policy = settings.human_signing
+    name = "human_signing"
+
+    if settings.auth_backend == "ldap":
+        if not settings.ldap_principal_id_attr:
+            return {
+                "name": name,
+                "status": "fail" if policy == "require" else "warn",
+                "detail": (
+                    f"policy={policy}; DOSSIER_LDAP_PRINCIPAL_ID_ATTR is unset, so "
+                    f"no LDAP identity is bound to a regista principal and every "
+                    f"human action "
+                    + (
+                        "will be refused"
+                        if policy == "require"
+                        else "falls back to the shared store key"
+                    )
+                    + f". Fix: set it to the directory attribute holding the suite "
+                    f"principal_id, then {PROVISION_HINT}"
+                ),
+            }
+        return {
+            "name": name,
+            "status": "ok",
+            "detail": (
+                f"policy={policy}; LDAP identities bind via "
+                f"{settings.ldap_principal_id_attr} (per-user keys are verified at "
+                f"sign time — health does not query the directory)"
+            ),
+        }
+
+    unbound, unprovisioned = _local_signing_gaps(settings, registry)
+    if not unbound and not unprovisioned:
+        return {
+            "name": name,
+            "status": "ok",
+            "detail": (
+                f"policy={policy}; every local identity is bound to a principal "
+                f"with an active per-actor key"
+            ),
+        }
+
+    problems: list[str] = []
+    if unbound:
+        problems.append(
+            f"{len(unbound)} identity/identities with no principal_id recorded "
+            f"({', '.join(unbound)})"
+        )
+    if unprovisioned:
+        problems.append(
+            f"{len(unprovisioned)} principal(s) with no active per-actor key "
+            f"({', '.join(unprovisioned)})"
+        )
+    consequence = (
+        "their actions will be refused"
+        if policy == "require"
+        else "their actions fall back to the shared store key and cannot be "
+        "attributed to them"
+    )
+    return {
+        "name": name,
+        "status": "fail" if policy == "require" else "warn",
+        "detail": (
+            f"policy={policy}; {'; '.join(problems)}. {consequence}. "
+            f"Fix: {PROVISION_HINT}"
+        ),
+    }
+
+
+def _local_signing_gaps(
+    settings: Settings, registry: GatewayRegistry
+) -> tuple[list[str], list[str]]:
+    """Split local identities into (unbound, bound-but-no-active-key).
+
+    Usernames are reported, not ``stable_id``s: the operator edits the users file
+    by username and runs ``agent-suite bootstrap --user <principal_id>``, so those
+    are the two handles they can act on. Never returns key material.
+    """
+    import json
+
+    if not settings.users_path:
+        return [], []
+    try:
+        raw = Path(settings.users_path).read_text(encoding="utf-8")
+        entries = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    if not isinstance(entries, list):
+        return [], []
+
+    bound: dict[str, str] = {}
+    unbound: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        username = str(entry.get("username", "?"))
+        principal_id = entry.get("principal_id")
+        if principal_id:
+            bound[str(principal_id)] = username
+        else:
+            unbound.append(username)
+    if not bound:
+        return sorted(unbound), []
+
+    active: set[str] = set()
+    for project in registry.list_projects():
+        try:
+            active |= registry.get(project).active_signing_principals()
+        except Exception:
+            continue
+    unprovisioned = sorted(pid for pid in bound if pid not in active)
+    return sorted(unbound), unprovisioned
