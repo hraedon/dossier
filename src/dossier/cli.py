@@ -10,7 +10,7 @@ from typing import Any, assert_never
 
 import structlog
 
-from . import __version__
+from . import __version__, service
 from .keys import generate_keyset
 
 
@@ -239,6 +239,40 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _cmd_install_service(args: argparse.Namespace) -> int:
+    """Install or remove the dossier systemd unit (agent-suite WI-044).
+
+    Exits non-zero when the unit could not be installed *and verified* — writing
+    a file is not the success condition.
+    """
+    unit_dir = Path(args.unit_dir)
+    if args.uninstall:
+        result = service.remove_service(unit_dir=unit_dir, dry_run=args.dry_run)
+        action = "uninstall-service"
+    else:
+        search_dirs = (
+            (Path(args.bin_dir), *service.default_search_dirs()) if args.bin_dir else None
+        )
+        result = service.install_service(
+            unit_dir=unit_dir,
+            host=args.host,
+            port=args.port,
+            user=args.user,
+            dry_run=args.dry_run,
+            search_dirs=search_dirs,
+        )
+        action = "install-service"
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        print(
+            service.format_result(result, action),
+            file=sys.stdout if result.ok else sys.stderr,
+        )
+    return 0 if result.ok else 1
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from .config import load_ldap_config, load_settings
 
@@ -379,6 +413,36 @@ def _run(argv: list[str] | None) -> int:
         help="Skip the project provision check (for local dev with InMemory backend)",
     )
     serve_parser.set_defaults(func=_cmd_serve)
+
+    service_parser = subparsers.add_parser(
+        "install-service",
+        help="install (or remove) the dossier systemd unit — Linux, requires root",
+    )
+    service_parser.add_argument("--host", default=service.DEFAULT_HOST)
+    service_parser.add_argument("--port", type=int, default=service.DEFAULT_PORT)
+    service_parser.add_argument(
+        "--user", default="root", help="account the unit runs as (default: root)"
+    )
+    service_parser.add_argument(
+        "--unit-dir",
+        default=str(service.SYSTEMD_UNIT_DIR),
+        help=f"systemd unit directory (default: {service.SYSTEMD_UNIT_DIR})",
+    )
+    service_parser.add_argument(
+        "--bin-dir",
+        default=None,
+        help=(
+            "directory holding the dossier CLI, used to build an absolute ExecStart. "
+            "Default: this process's own bin/ then PATH. Never the invoking user's "
+            "~/.local/bin under sudo — install refuses instead"
+        ),
+    )
+    service_parser.add_argument(
+        "--dry-run", action="store_true", help="report the plan; act on nothing"
+    )
+    service_parser.add_argument("--uninstall", action="store_true", help="remove the unit")
+    service_parser.add_argument("--json", action="store_true", help="emit the result as JSON")
+    service_parser.set_defaults(func=_cmd_install_service)
 
     doctor_parser = subparsers.add_parser("doctor")
     doctor_parser.add_argument(
