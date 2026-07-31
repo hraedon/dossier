@@ -56,6 +56,10 @@ the regista `Actor`. Credential and federated backends both produce a
 
 - `Principal.stable_id` is source-agnostic (uuid / `objectGUID` / Entra `oid`
   all fit). `Principal.source` distinguishes them.
+- `Principal.principal_id` is likewise source-agnostic: the regista signing
+  principal the identity acts as (WI-035). A federated backend supplies it from a
+  token claim exactly as the LDAP backend reads it from a directory attribute —
+  the signing binding does not care which family the identity came from.
 - `principal_to_actor` is the single keystone — every backend, credential or
   federated, converges on `Principal → Actor`.
 - Group authz reads `raw_attributes["groups"]` / `fetch_groups()`. LDAP

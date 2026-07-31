@@ -60,7 +60,13 @@ class AccessGrant:
     groups: frozenset[str]
 
     def matches(self, actor: Actor) -> bool:
-        return actor.actor_id in self.principals or bool(
+        # Match on every id this actor may be named by, not just ``actor_id``.
+        # Binding a human to a regista ``principal_id`` changes the id they act
+        # under (WI-035); without the aliases, an existing ACL or
+        # DOSSIER_BOOTSTRAP_ADMINS entry naming the old ``stable_id`` would stop
+        # matching at the moment an operator provisions signing — turning a
+        # provenance upgrade into a lockout.
+        return not self.principals.isdisjoint(actor.authorization_identities) or bool(
             self.groups.intersection(actor.groups)
         )
 

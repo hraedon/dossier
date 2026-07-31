@@ -193,7 +193,11 @@ class GatewayRegistry:
                 require_ssl=s.require_ssl,
                 approval_verifier=DossierApprovalVerifier(s.session_secret),
             )
-            gw = RegistaGateway(reg, project_name=project)
+            gw = RegistaGateway(
+                reg,
+                project_name=project,
+                human_signing=s.human_signing,
+            )
             gw.register_workflow()
         except BaseException:
             # Scrub the materialized manifest AND release the connection pool
