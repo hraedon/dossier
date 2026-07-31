@@ -3,40 +3,32 @@
 {% block content %}
 <div class="ds-pagehead">
   <div>
+    <p class="ds-kicker">working set</p>
     <h1 class="ds-pagehead__title">dashboard</h1>
-    <div class="ds-pagehead__meta">
-      <span class="ds-chip mono">{{ total_count }} open across {{ project_rows | length }} projects</span>
-    </div>
   </div>
 </div>
 
 {% if project_rows %}
-<div class="ds-table-wrap">
-  <table class="ds-table">
-    <thead>
-      <tr>
-        <th>project</th>
-        <th>owner</th>
-        <th class="tnum">open items</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for p in project_rows %}
-      <tr>
-        <td><a href="/p/{{ p.slug }}">{{ p.name }}</a></td>
-        <td class="mono">{{ owner_display(p.catalog_entry) }}</td>
-        <td class="mono tnum">{% if p.unreachable %}<span class="ds-warn" title="project store unreachable">unreachable</span>{% else %}{{ p.open_count }}{% endif %}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% set unreachable_count = project_rows | selectattr('unreachable') | list | length %}
+<div class="ds-metrics">
+  <div class="ds-metric">
+    <span class="ds-metric__label">open items</span>
+    <span class="ds-metric__value">{{ total_count }}</span>
+    <span class="ds-metric__sub">across {{ pluralize(project_rows, 'project') }}</span>
+  </div>
+  <div class="ds-metric">
+    <span class="ds-metric__label">projects</span>
+    <span class="ds-metric__value">{{ project_rows | length }}</span>
+    <span class="ds-metric__sub">fronted by this console</span>
+  </div>
+  {% if unreachable_count %}
+  <a class="ds-metric ds-metric--warn" href="/operations">
+    <span class="ds-metric__label">store warnings</span>
+    <span class="ds-metric__value">{{ unreachable_count }}</span>
+    <span class="ds-metric__sub">unreachable — see operations</span>
+  </a>
+  {% endif %}
 </div>
-{% else %}
-<div class="ds-empty">
-  <div class="ds-empty__title">no projects</div>
-  <div class="ds-empty__sub">configure DOSSIER_PROJECTS to get started</div>
-</div>
-{% endif %}
 
 <form method="get" action="/" class="ds-filters">
   <div class="ds-field ds-field--inline">
@@ -72,40 +64,73 @@
   <button type="submit" class="ds-btn ds-btn--ghost">filter</button>
 </form>
 
-{% if dashboard_items %}
-{% if total_count > max_items %}
-<div class="ds-callout">showing first {{ max_items }} of {{ total_count }} items</div>
-{% endif %}
-<div class="ds-table-wrap">
-  <table class="ds-table">
-    <thead>
-      <tr>
-        <th>key</th>
-        <th>title</th>
-        <th>project</th>
-        <th>state</th>
-        <th>assignee</th>
-        <th>updated</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in dashboard_items %}
-      <tr>
-        <td class="mono"><a href="{{ item.issue_url }}">{{ item.key }}</a></td>
-        <td><a href="{{ item.issue_url }}">{{ item.title }}</a></td>
-        <td class="mono"><a href="{{ item.project_url }}">{{ item.project_slug }}</a></td>
-        <td><span class="ds-pill {{ status_pill_class(item.state) }}"><span class="ds-pill__dot"></span>{{ item.state }}</span></td>
-        <td>{{ item.assignee or '—' }}</td>
-        <td class="mono tnum">{{ item.updated }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="ds-section">
+  <div class="ds-section-label">open work across the estate</div>
+  {% if dashboard_items %}
+  {% if total_count > max_items %}
+  <div class="ds-callout">showing first {{ max_items }} of {{ total_count }} items</div>
+  {% endif %}
+  <div class="ds-table-wrap">
+    <table class="ds-table ds-table--stack">
+      <thead>
+        <tr>
+          <th>key</th>
+          <th>title</th>
+          <th>project</th>
+          <th>state</th>
+          <th>assignee</th>
+          <th>updated</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in dashboard_items %}
+        <tr>
+          <td class="mono ds-cell--lead"><a href="{{ item.issue_url }}">{{ item.key }}</a></td>
+          <td class="ds-cell--lead ds-cell--title"><a href="{{ item.issue_url }}">{{ item.title }}</a></td>
+          <td class="mono" data-th="project"><a href="{{ item.project_url }}">{{ item.project_slug }}</a></td>
+          <td data-th="state"><span class="ds-pill {{ status_pill_class(item.state) }}"><span class="ds-pill__dot"></span>{{ item.state }}</span></td>
+          <td data-th="assignee">{{ item.assignee or '—' }}</td>
+          <td class="mono tnum" data-th="updated">{{ item.updated }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="ds-empty">
+    <div class="ds-empty__title">no open items across the estate</div>
+    <div class="ds-empty__sub">create or reopen a work-item to see it here</div>
+  </div>
+  {% endif %}
+</div>
+
+<div class="ds-section">
+  <div class="ds-section-label">projects</div>
+  <div class="ds-table-wrap">
+    <table class="ds-table ds-table--stack">
+      <thead>
+        <tr>
+          <th>project</th>
+          <th>owner</th>
+          <th class="tnum">open items</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in project_rows %}
+        <tr>
+          <td class="ds-cell--lead"><a href="/p/{{ p.slug }}">{{ p.name }}</a></td>
+          <td class="mono" data-th="owner">{{ owner_display(p.catalog_entry) }}</td>
+          <td class="mono tnum" data-th="open items">{% if p.unreachable %}<span class="ds-warn" title="project store unreachable">unreachable</span>{% else %}{{ p.open_count }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% else %}
 <div class="ds-empty">
-  <div class="ds-empty__title">no open items across the estate</div>
-  <div class="ds-empty__sub">create or reopen a work-item to see it here</div>
+  <div class="ds-empty__title">no projects</div>
+  <div class="ds-empty__sub">configure DOSSIER_PROJECTS to get started</div>
 </div>
 {% endif %}
 {% endblock %}

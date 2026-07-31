@@ -5,17 +5,15 @@
   <div>
     <h1 class="ds-pagehead__title">operations</h1>
     <div class="ds-pagehead__meta">
-      <span class="ds-chip mono">{{ estates | length }} projects</span>
+      <span class="ds-chip mono">{{ pluralize(estates, 'project') }}</span>
     </div>
   </div>
 </div>
 
-<div class="ds-panel ds-panel--pad">
-  <p class="ds-prose" style="font-size: var(--fs-sm);">
-    Estate health composed from regista's pool, maintenance, and chain checks.
-    Deployment operations are owned by agent-suite — this view is read-only.
-  </p>
-</div>
+<p class="ds-intro">
+  Estate health composed from regista's pool, maintenance, and chain checks.
+  Deployment operations are owned by agent-suite — this view is read-only.
+</p>
 
 {% for estate in estates %}
 <div class="ds-section">

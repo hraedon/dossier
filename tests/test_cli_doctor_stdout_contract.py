@@ -76,6 +76,15 @@ def _set_cli_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     users_path = tmp_path / "users.json"
     users_path.write_text("[]", encoding="utf-8")
 
+    # Pin suite-env resolution to an empty file so ``main()`` never reads the
+    # developer's real ``~/.config/agent-suite/suite.env``. ``load_suite_env``
+    # writes ``os.environ`` directly (not via monkeypatch), so a real file
+    # would leak untracked keys (e.g. DOSSIER_PROJECT_ACL_PATH) into every
+    # test that runs after this one.
+    suite_env = tmp_path / "suite.env"
+    suite_env.write_text("", encoding="utf-8")
+    monkeypatch.setenv("AGENT_SUITE_CONFIG", str(suite_env))
+
     monkeypatch.setenv("REGISTA_DSN", "postgresql://stub:stub@localhost/stub")
     monkeypatch.setenv("REGISTA_KEY_PATH", str(key_path))
     monkeypatch.setenv("DOSSIER_PROJECTS", "dossier_test")

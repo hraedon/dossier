@@ -5,18 +5,16 @@
   <div>
     <h1 class="ds-pagehead__title">evidence</h1>
     <div class="ds-pagehead__meta">
-      <span class="ds-chip mono">{{ summaries | length }} projects</span>
+      <span class="ds-chip mono">{{ pluralize(summaries, 'project') }}</span>
     </div>
   </div>
 </div>
 
-<div class="ds-panel ds-panel--pad">
-  <p class="ds-prose" style="font-size: var(--fs-sm);">
-    Integrity and verification data from regista's signed event log. The UI
-    renders verdicts from regista's replay — it does not recompute cryptographic
-    results.
-  </p>
-</div>
+<p class="ds-intro">
+  Integrity and verification data from regista's signed event log. The UI
+  renders verdicts from regista's replay — it does not recompute cryptographic
+  results.
+</p>
 
 {% for summary in summaries %}
 <div class="ds-section">

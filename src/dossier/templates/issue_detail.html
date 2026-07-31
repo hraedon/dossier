@@ -15,7 +15,7 @@
       <span class="ds-chip mono">priority: {{ issue_field(issue, 'priority', 'normal') }}</span>
     </div>
   </div>
-  <a href="/p/{{ project_slug }}" class="ds-btn ds-btn--ghost">back</a>
+  <div class="ds-pagehead__actions"><a href="/p/{{ project_slug }}" class="ds-btn ds-btn--ghost">back</a></div>
 </div>
 
 {% if events %}
@@ -31,6 +31,7 @@
 
 {% if issue_field(issue, 'description', '') %}
 <div class="ds-panel ds-panel--pad">
+  <div class="ds-section-label">description</div>
   <div class="ds-prose">{{ issue_field(issue, 'description', '') }}</div>
 </div>
 {% endif %}
@@ -66,7 +67,7 @@
         <option value="{{ name }}" {% if needs_note %}data-needs-note="true"{% endif %}>{{ label }}</option>
         {% endfor %}
       </select>
-      <input class="ds-input" type="text" name="review_note" id="review-note-input" placeholder="review note (required for review verdicts)" style="display:none">
+      <input class="ds-input" type="text" name="review_note" id="review-note-input" placeholder="review note — required for verdicts" style="display:none">
       <noscript><style>#review-note-input{display:block !important}</style></noscript>
       {% if issue.current_state == "in_review" %}
       <label class="ds-check"><input type="checkbox" name="same_lineage_acknowledged"> same-lineage ack</label>

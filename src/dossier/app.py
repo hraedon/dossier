@@ -487,6 +487,7 @@ def create_app(
         format_bytes=web.format_bytes,
         safe_path=web.safe_path,
         session_principal_display=web.session_principal_display,
+        pluralize=web.pluralize,
     )
     app.state.templates = templates
 
