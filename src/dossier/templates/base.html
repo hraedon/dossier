@@ -42,5 +42,22 @@
     <span class="ds-foot__right">every change a signed event · replay verifies the record</span>
   </footer>
 </div>
+<script>
+  // scroll affordance for wide tables (WI-032): fade the clipped edge while
+  // there is more table to the right, mirroring the nav's edge fade. Pure
+  // progressive enhancement — without JS the wrap still scrolls, just unfaded.
+  (function () {
+    function update(el) {
+      var more = el.scrollWidth - el.clientWidth - el.scrollLeft > 1;
+      el.classList.toggle("ds-scroll-fade", more);
+    }
+    var wraps = document.querySelectorAll(".ds-table-wrap");
+    wraps.forEach(function (el) {
+      el.addEventListener("scroll", function () { update(el); }, { passive: true });
+      update(el);
+    });
+    window.addEventListener("resize", function () { wraps.forEach(update); });
+  })();
+</script>
 </body>
 </html>

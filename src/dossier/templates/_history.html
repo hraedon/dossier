@@ -12,9 +12,9 @@
         <span class="ds-pill__dot"></span>degraded assurance
       </span>
       {% endif %}
-      <span class="ds-chip">hmac-sha256 · {{ events | length }} events</span>
+      <span class="ds-chip">hmac-sha256 · {{ pluralize(events, 'event') }}</span>
       {% if integrity_drift == 0 %}
-      <span class="ds-integrity-badge ds-integrity-badge--ok">
+      <span class="ds-integrity-badge ds-integrity-badge--ok" title="ledger integrity: replaying the HMAC chain reproduces every event — independent of per-event signatures">
         <span class="ds-pill__dot"></span>chain verified
       </span>
       {% else %}
@@ -61,8 +61,12 @@
         {% if vinfo.principal_id and vinfo.principal_id != event.actor_id %}
         <span class="ds-chain__delegation">signer: {{ vinfo.principal_id }}</span>
         {% endif %}
+        {% elif vinfo and vinfo.key_id and not vinfo.signature_valid %}
+        {# a signature exists but does not verify — the record is contradicted, not merely unattributed #}
+        <span class="ds-chain__unverified" title="this event carries a signature that does not verify"><span class="ds-pill__dot"></span>signature invalid</span>
         {% elif vinfo %}
-        <span class="ds-chain__unverified"><span class="ds-pill__dot"></span>unverified</span>
+        {# no principal-bound signature (ledger HMAC only, or none at all) — a different axis from chain integrity above (WI-033) #}
+        <span class="ds-chain__unsigned" title="no per-event principal signature enrolled; the chain seal above still covers this event"><span class="ds-pill__dot"></span>unsigned</span>
         {% endif %}
       </div>
       {% set verdict = event_verdict(event) %}

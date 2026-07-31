@@ -318,6 +318,26 @@ def safe_path(path: Any) -> str:
     return "".join(c for c in text if c in "\t\n" or ord(c) >= 0x20)
 
 
+def pluralize(count: Any, singular: str, plural: str | None = None) -> str:
+    """Render a count-noun phrase whose noun agrees in number.
+
+    ``pluralize(events, "event")`` → ``"1 event"`` / ``"3 events"``.
+    ``count`` may be a number or a sized collection. An irregular plural can
+    be passed explicitly (``pluralize(n, "entry", "entries")``). This is the
+    single seam for count phrases in templates — inline ``{{ xs | length }}
+    things`` is the defect class that ships "1 events" (WI-029/WI-030).
+    """
+    try:
+        n = len(count)
+    except TypeError:
+        try:
+            n = int(count)
+        except (ValueError, TypeError):
+            n = 0
+    noun = singular if n == 1 else (plural if plural is not None else f"{singular}s")
+    return f"{n} {noun}"
+
+
 def session_principal_display(summary: Any) -> str:
     """Return the principal display name or ID from a SessionSummary."""
     display = getattr(summary, "principal_display_name", None)
