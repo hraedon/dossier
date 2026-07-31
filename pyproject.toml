@@ -33,9 +33,12 @@ dev = [
     "mypy>=1.10",
     "ldap3>=2.9",              # LDAP/AD auth tests (mocked + integration)
     # CLI contract v1 conformance kit (Plan 018 WI-2 / Plan 019 B1). A published
-    # PyPI wheel; consumed only by tests/test_cli_conformance.py, never imported
-    # by runtime code.
-    "agent-suite-conformance==1.0.0",
+    # PyPI wheel; consumed only by the conformance tests, never imported by
+    # runtime code. v1.1.0 ships the WI-026 meta-guard helpers
+    # (assert_cases_declared, ConformanceGateError) that the gate dogfoods at
+    # module scope; the local copies cairn carried under 1.0.0 are no longer
+    # needed.
+    "agent-suite-conformance==1.1.0",
 ]
 
 [project.scripts]
@@ -85,6 +88,7 @@ testpaths = ["tests"]
 markers = [
     "postgres: tests that require a live Postgres (skip if unavailable)",
     "ldap_e2e: tests that require a live LDAP/AD server (skip if unavailable)",
+    "slow: tests that build/install wheels or exercise external tools",
 ]
 
 [tool.mypy]
