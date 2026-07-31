@@ -23,7 +23,7 @@ def build_health(
             "version": "0.1.0",
             "ok": bool,
             "degraded": bool,
-            "regista": {"reachable": bool, "project": str, "chain_ok": bool | None},
+            "regista": {"reachable": bool, "project": str, "chain_ok": None},
             "checks": [{"name": str, "status": "ok|warn|fail|skip", "detail": str | None}],
         }
 
@@ -33,6 +33,11 @@ def build_health(
 
     An unreachable regista or missing session secret is a named ``checks``
     failure — never an exception.
+
+    This probe is bounded: it must complete within a liveness/readiness
+    timeout and must never replay an event chain. ``regista.chain_ok`` is
+    therefore always ``None`` ("not checked here"); the chain verdict comes
+    from an explicit integrity run, not from health.
     """
     checks: list[dict[str, Any]] = []
 
@@ -62,21 +67,28 @@ def build_health(
     if projects:
         reachable: list[str] = []
         unreachable: list[str] = []
-        chain_drift = False
+        # Health is a BOUNDED reachability probe: one cheap paged query per
+        # project, never a chain replay. This endpoint previously called
+        # gateway.integrity() — a full replay of every project's event
+        # chain — for every request, which cost ~2 GiB per call on the
+        # production estate (24 projects) and was not released between
+        # calls, so two health probes OOM-killed the container. The suite's
+        # own umbrella doctor probes this endpoint, so the health check
+        # could kill the service it was checking. Chain integrity is a
+        # deliberate, on-demand operation (the operations/evidence views and
+        # `cairn integrity`), not a health-path side effect — the same
+        # separation cairn made for WI-030.
         for project in projects:
             try:
                 gw = registry.get(project)
                 gw.list_issues(current_states=["open"], page_size=1)
                 reachable.append(project)
-                try:
-                    if gw.integrity().replayed_drift:
-                        chain_drift = True
-                except Exception:
-                    chain_drift = True
             except Exception:
                 unreachable.append(project)
         regista_reachable = bool(reachable) and not unreachable
-        chain_ok = (not chain_drift) if reachable else None
+        # chain_ok stays None: health does not compute a chain verdict and
+        # must not imply one. None means "not checked here", never "intact".
+        chain_ok = None
         if unreachable:
             checks.append({
                 "name": "regista",
@@ -89,9 +101,17 @@ def build_health(
         else:
             checks.append({
                 "name": "regista",
-                "status": "ok" if not chain_drift else "warn",
+                "status": "ok",
                 "detail": f"{len(reachable)} project(s) reachable",
             })
+        checks.append({
+            "name": "chain_integrity",
+            "status": "skip",
+            "detail": (
+                "not checked by health — full replay is an on-demand "
+                "operation (operations view / `cairn integrity`)"
+            ),
+        })
     elif not any(c["name"] == "regista" for c in checks):
         checks.append({
             "name": "regista",
