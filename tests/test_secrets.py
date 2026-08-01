@@ -49,6 +49,26 @@ def test_resolve_secret_bytes_rejects_short_secret(monkeypatch):
     with pytest.raises(RuntimeError, match="at least 32 bytes"):
         suite_secrets.resolve_secret_bytes("env:DOSSIER_TEST_WAKE_SECRET")
 
+
+def test_resolve_session_secret_from_env(monkeypatch):
+    monkeypatch.setenv("DOSSIER_TEST_SESSION_SECRET", "s" * 40)
+    assert (
+        suite_secrets.resolve_session_secret("env:DOSSIER_TEST_SESSION_SECRET")
+        == "s" * 40
+    )
+
+
+def test_settings_resolve_session_secret_ref(monkeypatch):
+    from dossier.config import load_settings
+
+    monkeypatch.setenv("DOSSIER_TEST_SESSION_SECRET", "s" * 40)
+    monkeypatch.setenv(
+        "DOSSIER_SESSION_SECRET", "env:DOSSIER_TEST_SESSION_SECRET"
+    )
+    settings = load_settings(strict=False)
+    assert settings.session_secret == "s" * 40
+    assert settings.session_secret_ref == "env:DOSSIER_TEST_SESSION_SECRET"
+
 # ---------------------------------------------------------------------------
 # resolve_dsn
 # ---------------------------------------------------------------------------

@@ -324,6 +324,8 @@ def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:
         refs.append(("REGISTA_DSN", settings.database_url))
     if settings.hmac_key_path and suite_secrets.is_backend_ref(settings.hmac_key_path):
         refs.append(("REGISTA_KEY_PATH", settings.hmac_key_path))
+    if settings.session_secret_ref:
+        refs.append(("DOSSIER_SESSION_SECRET", settings.session_secret_ref))
 
     if not refs:
         return [{
@@ -337,6 +339,9 @@ def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:
         try:
             if label == "REGISTA_DSN":
                 suite_secrets.resolve_dsn(ref)
+            elif label == "DOSSIER_SESSION_SECRET":
+                # Settings loading already resolved and length-checked this ref.
+                pass
             else:
                 path, cleanup = suite_secrets.materialize_key_manifest(ref)
                 # A bare/file: path is returned unread — confirm it exists AND
