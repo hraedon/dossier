@@ -6,6 +6,8 @@ import logging
 import re
 import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import regista
@@ -112,10 +114,8 @@ class RegistaGateway:
     all work items' ``display_key`` custom fields (a read) — dossier owns no
     counter table. The minted key is stored as a ``display_key`` custom field
     in the regista create event, so the write goes through regista, not a
-    side-channel. A process-level ``threading.Lock`` serializes the
-    mint-then-create operation so two concurrent creates in the same process
-    cannot produce the same key (WI-011). Multi-process deployments still
-    require a regista-side sequence or advisory lock for full correctness.
+    side-channel. A process-level lock and a project-scoped PostgreSQL advisory
+    lock serialize mint-then-create across threads and worker processes.
 
     Because it is the only mutation path, it is also the only place the
     per-actor signing policy can be enforced without leaving a bypass: every
@@ -254,7 +254,7 @@ class RegistaGateway:
         self.human_signing_identity(actor, "create")
         cf = dict(custom_fields) if custom_fields else {}
         if "display_key" not in cf:
-            with self._mint_lock:
+            with self._display_key_lock():
                 cf["display_key"] = self._mint_display_key()
                 return cast(
                     tuple[WorkItem, Event],
@@ -278,6 +278,28 @@ class RegistaGateway:
                 custom_fields=cf,
             ),
         )
+
+    @contextmanager
+    def _display_key_lock(self) -> Iterator[None]:
+        """Serialize display-key minting within this process and PostgreSQL."""
+        with self._mint_lock:
+            manager = getattr(self._reg, "_mgr", None)
+            if manager is None:
+                yield
+                return
+            lock_id = int.from_bytes(
+                hashlib.sha256(
+                    f"dossier:display-key:v1:{self._project_name}".encode()
+                ).digest()[:8],
+                byteorder="big",
+                signed=True,
+            )
+            with manager.connect() as conn:
+                conn.execute("SELECT pg_advisory_lock(%s)", [lock_id])
+                try:
+                    yield
+                finally:
+                    conn.execute("SELECT pg_advisory_unlock(%s)", [lock_id])
 
     def transition(
         self,
@@ -1136,7 +1158,7 @@ class RegistaGateway:
         and sanitized to ``[A-Z0-9_]`` (spaces and hyphens become underscores;
         other characters are stripped).
 
-        Must be called under ``self._mint_lock`` to prevent a TOCTOU race
+        Must be called under :meth:`_display_key_lock` to prevent a TOCTOU race
         between the scan and the create.
         """
         prefix = self._display_prefix()
