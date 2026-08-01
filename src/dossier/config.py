@@ -307,8 +307,18 @@ def load_settings(strict: bool = True) -> Settings:
     session_secret_config = os.environ.get("DOSSIER_SESSION_SECRET", "")
     from .secrets import is_backend_ref, resolve_session_secret
 
-    session_secret = resolve_session_secret(session_secret_config)
-    session_secret_ref = session_secret_config if is_backend_ref(session_secret_config) else ""
+    session_secret_ref = (
+        session_secret_config if is_backend_ref(session_secret_config) else ""
+    )
+    if session_secret_ref:
+        try:
+            session_secret = resolve_session_secret(session_secret_config)
+        except Exception:
+            if strict:
+                raise
+            session_secret = ""
+    else:
+        session_secret = session_secret_config
     session_max_age_raw = os.environ.get("DOSSIER_SESSION_MAX_AGE_SECONDS", "43200")
     secure_cookies_raw = os.environ.get("DOSSIER_SECURE_COOKIES", "true")
     # In prod, require_ssl defaults on (the operator may still override).
@@ -367,10 +377,10 @@ def load_settings(strict: bool = True) -> Settings:
         _require("REGISTA_DSN (or DOSSIER_DATABASE_URL)", database_url)
         _require("REGISTA_KEY_PATH (or DOSSIER_HMAC_KEY_PATH)", hmac_key_path)
         _require("DOSSIER_SESSION_SECRET", session_secret)
-        if len(session_secret) < 32:
-            raise RuntimeError(
-                "DOSSIER_SESSION_SECRET must be at least 32 bytes for signed sessions"
-            )
+    if session_secret and len(session_secret) < 32:
+        raise RuntimeError(
+            "DOSSIER_SESSION_SECRET must be at least 32 bytes for signed sessions"
+        )
 
     try:
         session_max_age_seconds = int(session_max_age_raw)

@@ -261,6 +261,7 @@ def _emit_health(health: dict[str, Any], *, use_json: bool) -> int:
         print(json.dumps(health, indent=2))
     else:
         print(f"dossier {health['version']} — component health")
+        print(f"  environment: {health.get('environment', '?')}")
         regista = health["regista"]
         print(
             f"  regista: reachable={regista['reachable']} "
