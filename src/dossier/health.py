@@ -428,7 +428,7 @@ def _project_access_check(
             return {
                 "name": "project_access",
                 "status": "fail",
-                "detail": f"ACL invalid or unreadable: {type(exc).__name__}",
+                "detail": f"ACL invalid or unreadable: {exc}",
             }
         if policy.is_empty:
             return {
