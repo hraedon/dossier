@@ -190,7 +190,7 @@ def _is_executable_file(path: Path) -> bool:
 def resolve_command(
     command: str,
     *,
-    which: Which = _default_which,
+    which: Which | None = None,
     search_dirs: tuple[Path, ...] | None = None,
 ) -> ResolvedCommand | None:
     """Resolve *command*'s executable to an absolute path, or ``None``.
@@ -202,6 +202,8 @@ def resolve_command(
     unresolvable gets a refusal naming it, never a unit that reports success and
     fails at first start.
     """
+    if which is None:
+        which = _default_which
     words = shlex.split(command)
     name, arguments = words[0], shlex.join(words[1:])
 
@@ -379,7 +381,7 @@ def install_service(
     user: str = "root",
     dry_run: bool = False,
     runner: Runner = _default_runner,
-    which: Which = _default_which,
+    which: Which | None = None,
     search_dirs: tuple[Path, ...] | None = None,
     settle_seconds: float = SETTLE_SECONDS,
     sleeper: Sleeper = time.sleep,
@@ -391,6 +393,8 @@ def install_service(
     executable, and ``FAILED`` (unit left in place for inspection) when systemd
     does not agree it is runnable and running.
     """
+    if which is None:
+        which = _default_which
     command = f"dossier {serve_arguments(host=host, port=port)}"
     resolved = resolve_command(command, which=which, search_dirs=search_dirs)
     if resolved is None:
