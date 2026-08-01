@@ -420,8 +420,9 @@ def test_display_key_concurrent_no_duplicates(gateway):
 
 
 class _AdvisoryConnection:
-    def __init__(self, lock: threading.Lock) -> None:
+    def __init__(self, lock: threading.Lock, items: list[Any]) -> None:
         self._lock = lock
+        self._items = items
 
     def __enter__(self):
         return self
@@ -434,23 +435,38 @@ class _AdvisoryConnection:
             self._lock.release()
         elif "pg_advisory_lock" in query:
             self._lock.acquire()
+        else:
+            prefix = str(params[0]).removeprefix("^").split("-", 1)[0]
+            sequences = [
+                int(key.rsplit("-", 1)[1])
+                for item in self._items
+                if (key := item.custom_fields.get("display_key", "")).startswith(
+                    f"{prefix}-"
+                )
+            ]
+            return SimpleNamespace(
+                fetchone=lambda: {"max_sequence": max(sequences, default=0)}
+            )
 
 
 class _AdvisoryManager:
-    def __init__(self, lock: threading.Lock) -> None:
+    def __init__(self, lock: threading.Lock, items: list[Any]) -> None:
         self._lock = lock
+        self._items = items
 
     def connect(self):
-        return _AdvisoryConnection(self._lock)
+        return _AdvisoryConnection(self._lock, self._items)
 
 
 class _SharedRegista:
     def __init__(self, items: list[Any], lock: threading.Lock) -> None:
         self._items = items
         self._items_lock = threading.Lock()
-        self._mgr = _AdvisoryManager(lock)
+        self._mgr = _AdvisoryManager(lock, items)
+        self.query_calls = 0
 
     def query_work_items(self, **kwargs):
+        self.query_calls += 1
         time.sleep(0.01)
         with self._items_lock:
             return SimpleNamespace(items=list(self._items), has_more=False, cursor=None)
@@ -499,6 +515,7 @@ def test_display_key_concurrent_across_gateway_workers() -> None:
         "SHARED_PROJECT-1",
         "SHARED_PROJECT-2",
     ]
+    assert all(gateway._reg.query_calls == 0 for gateway in gateways)
 
 
 def test_display_key_different_prefix_not_affected(gateway, make_issue):

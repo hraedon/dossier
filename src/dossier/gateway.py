@@ -254,8 +254,8 @@ class RegistaGateway:
         self.human_signing_identity(actor, "create")
         cf = dict(custom_fields) if custom_fields else {}
         if "display_key" not in cf:
-            with self._display_key_lock():
-                cf["display_key"] = self._mint_display_key()
+            with self._display_key_lock() as lock_connection:
+                cf["display_key"] = self._mint_display_key(lock_connection)
                 return cast(
                     tuple[WorkItem, Event],
                     self._reg.create_work_item(
@@ -280,12 +280,12 @@ class RegistaGateway:
         )
 
     @contextmanager
-    def _display_key_lock(self) -> Iterator[None]:
+    def _display_key_lock(self) -> Iterator[Any | None]:
         """Serialize display-key minting within this process and PostgreSQL."""
         with self._mint_lock:
             manager = getattr(self._reg, "_mgr", None)
             if manager is None:
-                yield
+                yield None
                 return
             lock_id = int.from_bytes(
                 hashlib.sha256(
@@ -297,7 +297,7 @@ class RegistaGateway:
             with manager.connect() as conn:
                 conn.execute("SELECT pg_advisory_lock(%s)", [lock_id])
                 try:
-                    yield
+                    yield conn
                 finally:
                     conn.execute("SELECT pg_advisory_unlock(%s)", [lock_id])
 
@@ -1148,7 +1148,7 @@ class RegistaGateway:
             cursor = page.cursor
         return keys
 
-    def _mint_display_key(self) -> str:
+    def _mint_display_key(self, connection: Any | None = None) -> str:
         """Mint a ``<PREFIX>-<N>`` display key for a new work item.
 
         ``N`` is ``max(existing sequences) + 1``, where existing sequences are
@@ -1162,18 +1162,29 @@ class RegistaGateway:
         between the scan and the create.
         """
         prefix = self._display_prefix()
-        existing = self._existing_display_keys()
-        max_n = 0
-        pfx = f"{prefix}-"
-        for key in existing:
-            if key.startswith(pfx):
-                suffix = key[len(pfx) :]
-                try:
-                    n = int(suffix)
-                    if n > max_n:
-                        max_n = n
-                except ValueError:
-                    pass
+        if connection is not None:
+            pattern = f"^{prefix}-([0-9]+)$"
+            row = connection.execute(
+                "SELECT COALESCE(MAX((regexp_match("
+                "custom_fields->>'display_key', %s))[1]::bigint), 0) AS max_sequence "
+                "FROM work_items_current WHERE workflow_name = %s "
+                "AND custom_fields ? 'display_key'",
+                [pattern, WORKFLOW_NAME],
+            ).fetchone()
+            max_n = int(row["max_sequence"])
+        else:
+            existing = self._existing_display_keys()
+            max_n = 0
+            pfx = f"{prefix}-"
+            for key in existing:
+                if key.startswith(pfx):
+                    suffix = key[len(pfx) :]
+                    try:
+                        n = int(suffix)
+                        if n > max_n:
+                            max_n = n
+                    except ValueError:
+                        pass
         return f"{prefix}-{max_n + 1}"
 
     def _display_prefix(self) -> str:

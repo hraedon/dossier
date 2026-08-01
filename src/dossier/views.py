@@ -292,12 +292,14 @@ def read_activity_feed(
 ) -> list[ActivityEntry]:
     """Read recent transition events for the activity feed.
 
-    Returns entries in descending time order. Filters by *actor_kind_filter*
-    (human/agent) and *transition_filter* are applied client-side after the
-    read because regista's ``read_events`` does not support actor_kind
-    filtering directly.
+    Returns entries in descending time order. The transition filter is pushed
+    into regista's indexed event query; actor-kind filtering remains client-side
+    because ``read_events`` does not support it.
     """
-    events = gateway.read_recent_events(limit=limit * 3)
+    events = gateway.read_recent_events(
+        limit=limit * 3,
+        transition=transition_filter,
+    )
 
     wi_cache: dict[uuid.UUID, WorkItem] = {}
 
