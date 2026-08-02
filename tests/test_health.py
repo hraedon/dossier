@@ -52,3 +52,46 @@ def test_healthz_auth_backend_check_present(client):
     body = resp.json()
     auth_check = next(c for c in body["checks"] if c["name"] == "auth_backend")
     assert auth_check["status"] in ("ok", "fail")
+
+
+def test_healthz_never_replays_the_chain(app, client, monkeypatch):
+    """Health is a bounded reachability probe.
+
+    /healthz previously called gateway.integrity() — a full chain replay —
+    once per configured project. On the production estate (24 projects) that
+    cost ~2 GiB per request and was not released between requests, so two
+    probes OOM-killed the container; agent-suite's umbrella doctor probes
+    this very endpoint, so the suite's health check could kill the service
+    it was checking. Chain integrity is an explicit on-demand operation.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from dossier import health as health_mod
+
+    calls: list[str] = []
+
+    class _TrapGateway:
+        def list_issues(self, **kwargs):
+            return []
+
+        def integrity(self):  # pragma: no cover - must never be reached
+            calls.append("integrity")
+            raise AssertionError("health must not replay the chain")
+
+    class _TrapRegistry:
+        def list_projects(self):
+            return ["p1", "p2"]
+
+        def get(self, project):
+            return _TrapGateway()
+
+    body = health_mod.build_health(
+        _settings(Path(tempfile.mkdtemp())), _TrapRegistry()
+    )
+    assert calls == []
+    # chain_ok is None ("not checked here"), never an implied True
+    assert body["regista"]["chain_ok"] is None
+    chain = next(c for c in body["checks"] if c["name"] == "chain_integrity")
+    assert chain["status"] == "skip"
+    assert "on-demand" in chain["detail"]

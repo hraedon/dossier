@@ -14,7 +14,7 @@
   <div class="ds-metric">
     <span class="ds-metric__label">open items</span>
     <span class="ds-metric__value">{{ total_count }}</span>
-    <span class="ds-metric__sub">across {{ project_rows | length }} projects</span>
+    <span class="ds-metric__sub">across {{ pluralize(project_rows, 'project') }}</span>
   </div>
   <div class="ds-metric">
     <span class="ds-metric__label">projects</span>

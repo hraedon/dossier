@@ -25,7 +25,6 @@
         <th>title</th>
         <th>project</th>
         <th>state</th>
-        <th>gate</th>
         <th>assurance</th>
         <th>age</th>
         <th>submitted by</th>
@@ -38,8 +37,8 @@
         <td class="mono ds-cell--lead"><a href="{{ e.issue_url }}">{{ e.key }}</a></td>
         <td class="ds-cell--lead ds-cell--title"><a href="{{ e.issue_url }}">{{ e.title }}</a></td>
         <td class="mono" data-th="project"><a href="{{ e.project_url }}">{{ e.project_slug }}</a></td>
-        <td data-th="state"><span class="ds-pill {{ status_pill_class(e.state) }}"><span class="ds-pill__dot"></span>{{ e.state }}</span></td>
-        <td class="mono" data-th="gate">{{ e.gate }}</td>
+        {# gate rides the state pill's tooltip — a 9th column clipped at 1440 (WI-032) #}
+        <td data-th="state"><span class="ds-pill {{ status_pill_class(e.state) }}" title="gate: {{ e.gate }}"><span class="ds-pill__dot"></span>{{ e.state }}</span></td>
         <td data-th="assurance"><span class="ds-pill ds-pill--{{ e.assurance_css }}"><span class="ds-pill__dot"></span>{{ e.assurance_label }}</span></td>
         <td class="mono tnum" data-th="age">{{ e.age }}</td>
         <td data-th="submitted by">{{ e.submitted_by }}</td>

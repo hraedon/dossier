@@ -1,0 +1,17 @@
+[Unit]
+Description=dossier — the agent suite's human work-item face
+Documentation=https://github.com/hraedon/dossier
+Wants=network-online.target
+After=network-online.target postgresql.service
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/dossier serve --host 127.0.0.1 --port 8000
+EnvironmentFile=-/etc/agent-suite/suite.env
+EnvironmentFile=-/etc/dossier/dossier.env
+User=root
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

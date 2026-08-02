@@ -173,7 +173,11 @@ def test_load_suite_env_from_explicit_path(clean_env, tmp_path, monkeypatch):
     assert os.environ["REGISTA_DSN"] == "postgresql://from-file/db"
 
 
-def test_load_suite_env_missing_default_is_noop(clean_env):
+def test_load_suite_env_missing_default_is_noop(clean_env, tmp_path, monkeypatch):
+    # Point the XDG default at an empty tmp dir: on a developer machine the
+    # real ~/.config/agent-suite/suite.env may exist, and loading it here
+    # would leak its keys into os.environ for the rest of the session.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     load_suite_env()
 
 

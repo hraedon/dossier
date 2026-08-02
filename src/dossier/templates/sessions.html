@@ -5,7 +5,7 @@
   <div>
     <h1 class="ds-pagehead__title">agent activity</h1>
     <div class="ds-pagehead__meta">
-      <span class="ds-chip mono">{{ sessions | length }} attested sessions</span>
+      <span class="ds-chip mono">{{ pluralize(sessions, 'attested session') }}</span>
     </div>
   </div>
 </div>

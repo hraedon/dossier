@@ -23,7 +23,7 @@ def build_health(
             "version": "0.1.0",
             "ok": bool,
             "degraded": bool,
-            "regista": {"reachable": bool, "project": str, "chain_ok": bool | None},
+            "regista": {"reachable": bool, "project": str, "chain_ok": None},
             "checks": [{"name": str, "status": "ok|warn|fail|skip", "detail": str | None}],
         }
 
@@ -33,6 +33,11 @@ def build_health(
 
     An unreachable regista or missing session secret is a named ``checks``
     failure — never an exception.
+
+    This probe is bounded: it must complete within a liveness/readiness
+    timeout and must never replay an event chain. ``regista.chain_ok`` is
+    therefore always ``None`` ("not checked here"); the chain verdict comes
+    from an explicit integrity run, not from health.
     """
     checks: list[dict[str, Any]] = []
 
@@ -62,21 +67,28 @@ def build_health(
     if projects:
         reachable: list[str] = []
         unreachable: list[str] = []
-        chain_drift = False
+        # Health is a BOUNDED reachability probe: one cheap paged query per
+        # project, never a chain replay. This endpoint previously called
+        # gateway.integrity() — a full replay of every project's event
+        # chain — for every request, which cost ~2 GiB per call on the
+        # production estate (24 projects) and was not released between
+        # calls, so two health probes OOM-killed the container. The suite's
+        # own umbrella doctor probes this endpoint, so the health check
+        # could kill the service it was checking. Chain integrity is a
+        # deliberate, on-demand operation (the operations/evidence views and
+        # `cairn integrity`), not a health-path side effect — the same
+        # separation cairn made for WI-030.
         for project in projects:
             try:
                 gw = registry.get(project)
                 gw.list_issues(current_states=["open"], page_size=1)
                 reachable.append(project)
-                try:
-                    if gw.integrity().replayed_drift:
-                        chain_drift = True
-                except Exception:
-                    chain_drift = True
             except Exception:
                 unreachable.append(project)
         regista_reachable = bool(reachable) and not unreachable
-        chain_ok = (not chain_drift) if reachable else None
+        # chain_ok stays None: health does not compute a chain verdict and
+        # must not imply one. None means "not checked here", never "intact".
+        chain_ok = None
         if unreachable:
             checks.append({
                 "name": "regista",
@@ -89,9 +101,17 @@ def build_health(
         else:
             checks.append({
                 "name": "regista",
-                "status": "ok" if not chain_drift else "warn",
+                "status": "ok",
                 "detail": f"{len(reachable)} project(s) reachable",
             })
+        checks.append({
+            "name": "chain_integrity",
+            "status": "skip",
+            "detail": (
+                "not checked by health — full replay is an on-demand "
+                "operation (operations view / `cairn integrity`)"
+            ),
+        })
     elif not any(c["name"] == "regista" for c in checks):
         checks.append({
             "name": "regista",
@@ -133,6 +153,7 @@ def build_health(
     checks.append(_notification_sink_check(settings))
     checks.append(_project_access_check(settings, prod=prod))
     checks.append(_allowed_hosts_check(settings, prod=prod))
+    checks.append(_human_signing_check(settings, registry))
 
     has_fail = any(c["status"] == "fail" for c in checks)
     has_warn = any(c["status"] == "warn" for c in checks)
@@ -491,3 +512,142 @@ def _allowed_hosts_check(
         "status": "skip",
         "detail": "not configured (dev — no TrustedHostMiddleware)",
     }
+
+
+def _human_signing_check(
+    settings: Settings, registry: GatewayRegistry
+) -> dict[str, Any]:
+    """Report whether human actions can be signed per-actor (WI-035).
+
+    A human's acceptance is the signature the whole review gate exists to
+    record. When the acting identity has no regista principal bound to it, the
+    write falls through to the *shared* store HMAC key: the event still seals
+    into the chain, `regista verify` reports it as ``unverifiable (symmetric
+    scheme)``, and the record attributes nothing to anyone. Before this check the
+    only place that showed up was an offline bundle verification, long after the
+    acceptance.
+
+    Bounded like the rest of health: it reads the identity source (a local users
+    file) and the loaded signing key-set. No chain replay, no directory
+    round-trip — an LDAP deployment cannot be enumerated from here, so it reports
+    the configured binding attribute and stops.
+
+    Status: ``fail`` when the posture is ``require`` and an identity would be
+    refused (the deployment cannot record human decisions); ``warn`` when the
+    posture is ``warn`` and a downgrade is possible; ``ok`` when every known
+    human identity resolves to an active per-actor key.
+    """
+    from .signing import PROVISION_HINT
+
+    policy = settings.human_signing
+    name = "human_signing"
+
+    if settings.auth_backend == "ldap":
+        if not settings.ldap_principal_id_attr:
+            return {
+                "name": name,
+                "status": "fail" if policy == "require" else "warn",
+                "detail": (
+                    f"policy={policy}; DOSSIER_LDAP_PRINCIPAL_ID_ATTR is unset, so "
+                    f"no LDAP identity is bound to a regista principal and every "
+                    f"human action "
+                    + (
+                        "will be refused"
+                        if policy == "require"
+                        else "falls back to the shared store key"
+                    )
+                    + f". Fix: set it to the directory attribute holding the suite "
+                    f"principal_id, then {PROVISION_HINT}"
+                ),
+            }
+        return {
+            "name": name,
+            "status": "ok",
+            "detail": (
+                f"policy={policy}; LDAP identities bind via "
+                f"{settings.ldap_principal_id_attr} (per-user keys are verified at "
+                f"sign time — health does not query the directory)"
+            ),
+        }
+
+    unbound, unprovisioned = _local_signing_gaps(settings, registry)
+    if not unbound and not unprovisioned:
+        return {
+            "name": name,
+            "status": "ok",
+            "detail": (
+                f"policy={policy}; every local identity is bound to a principal "
+                f"with an active per-actor key"
+            ),
+        }
+
+    problems: list[str] = []
+    if unbound:
+        problems.append(
+            f"{len(unbound)} identity/identities with no principal_id recorded "
+            f"({', '.join(unbound)})"
+        )
+    if unprovisioned:
+        problems.append(
+            f"{len(unprovisioned)} principal(s) with no active per-actor key "
+            f"({', '.join(unprovisioned)})"
+        )
+    consequence = (
+        "their actions will be refused"
+        if policy == "require"
+        else "their actions fall back to the shared store key and cannot be "
+        "attributed to them"
+    )
+    return {
+        "name": name,
+        "status": "fail" if policy == "require" else "warn",
+        "detail": (
+            f"policy={policy}; {'; '.join(problems)}. {consequence}. "
+            f"Fix: {PROVISION_HINT}"
+        ),
+    }
+
+
+def _local_signing_gaps(
+    settings: Settings, registry: GatewayRegistry
+) -> tuple[list[str], list[str]]:
+    """Split local identities into (unbound, bound-but-no-active-key).
+
+    Usernames are reported, not ``stable_id``s: the operator edits the users file
+    by username and runs ``agent-suite bootstrap --user <principal_id>``, so those
+    are the two handles they can act on. Never returns key material.
+    """
+    import json
+
+    if not settings.users_path:
+        return [], []
+    try:
+        raw = Path(settings.users_path).read_text(encoding="utf-8")
+        entries = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    if not isinstance(entries, list):
+        return [], []
+
+    bound: dict[str, str] = {}
+    unbound: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        username = str(entry.get("username", "?"))
+        principal_id = entry.get("principal_id")
+        if principal_id:
+            bound[str(principal_id)] = username
+        else:
+            unbound.append(username)
+    if not bound:
+        return sorted(unbound), []
+
+    active: set[str] = set()
+    for project in registry.list_projects():
+        try:
+            active |= registry.get(project).active_signing_principals()
+        except Exception:
+            continue
+    unprovisioned = sorted(pid for pid in bound if pid not in active)
+    return sorted(unbound), unprovisioned

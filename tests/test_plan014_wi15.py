@@ -88,7 +88,7 @@ _TRACKED = (
     "DOSSIER_USERS_PATH", "DOSSIER_PROJECTS", "DOSSIER_PROJECT",
     "DOSSIER_LDAP_SERVER", "DOSSIER_LDAP_BASE_DN", "DOSSIER_LDAP_BIND_DN",
     "DOSSIER_LDAP_BIND_PASSWORD", "DOSSIER_LDAP_DOMAIN",
-    "DOSSIER_BEHIND_TLS_PROXY", "DOSSIER_ENV",
+    "DOSSIER_BEHIND_TLS_PROXY", "DOSSIER_ENV", "DOSSIER_PROJECT_ACL_PATH",
 )
 
 
@@ -147,6 +147,10 @@ def _serve_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("DOSSIER_AUTH_BACKEND", "local")
     (tmp_path / "users.json").write_text("[]", encoding="utf-8")
     monkeypatch.setenv("DOSSIER_USERS_PATH", str(tmp_path / "users.json"))
+    # An ambient ACL path (e.g. leaked from a developer's real suite.env by an
+    # earlier test) would make ``serve`` fail loading a file that doesn't
+    # exist in this sandbox — these tests exercise TLS wiring, not authz.
+    monkeypatch.delenv("DOSSIER_PROJECT_ACL_PATH", raising=False)
 
 
 def _patch_uvicorn_run(monkeypatch, captured: dict) -> None:

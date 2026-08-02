@@ -40,8 +40,11 @@ jobs:
       - name: Type check
         run: mypy src/dossier/
 
+      # The slow built-wheel conformance lane runs in its own job
+      # (conformance-wheel) so it doesn't multiply across this matrix; -m "not
+      # slow" keeps the per-PR lane on the fast, source-checkout tests.
       - name: Test
-        run: pytest tests/ -v
+        run: pytest tests/ -v -m "not slow"
 
   # Identifier gate (Plan 013 WI-4.3) — blocks work-domain identifiers
   identifier-gate:
@@ -148,5 +151,32 @@ jobs:
       - name: Type check (mypy)
         run: mypy src/dossier/
 
+      # Slow built-wheel conformance lane is POSIX-only (conformance-wheel job);
+      # exclude it here so the Windows matrix stays on the fast source tests.
       - name: Run tests
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short -m "not slow"
+
+  # Built-wheel conformance lane (CLI contract §7): build dossier's wheel,
+  # install it + the pinned conformance kit into a clean venv, and run the
+  # conformance cases against the installed entry points — proving the gate
+  # holds for the shipped artifact, not just the editable source checkout that
+  # the `check` matrix covers. Single Python on ubuntu: this lane is about
+  # packaging correctness, not the interpreter matrix.
+  conformance-wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install deps (dossier against the lock)
+        run: python scripts/dev-install.py
+
+      - name: Run built-wheel conformance lane
+        run: pytest tests/test_wheel_conformance.py -v -m slow

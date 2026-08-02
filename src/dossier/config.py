@@ -204,6 +204,17 @@ class Settings:
     env_mode: Literal["dev", "prod"] = "dev"
     allowed_hosts: tuple[str, ...] = ()
     behind_tls_proxy: bool = False
+    # What happens when a human action can only be signed with the shared
+    # store-level HMAC key instead of a key only that human holds (WI-035).
+    # ``require`` refuses the write; ``warn`` records it but says so in the log,
+    # the response, the UI, and the doctor. Never silent in either mode.
+    # Resolved by ``signing.parse_policy``: ``require`` under a prod posture,
+    # ``warn`` otherwise, overridable with ``DOSSIER_HUMAN_SIGNING``.
+    human_signing: Literal["require", "warn"] = "warn"
+    # Mirror of ``LdapConfig.principal_id_attr`` so the doctor can report the
+    # LDAP binding posture without constructing an LDAP config (which is strict
+    # about server/bind values the doctor has no business requiring).
+    ldap_principal_id_attr: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,6 +234,10 @@ class LdapConfig:
     ca_cert_file: str
     connect_timeout: int
     domain: str
+    # WI-035: directory attribute holding the suite regista principal_id. Empty
+    # means LDAP identities are unbound — no attribute is guessed, because
+    # guessing would silently change every user's signing identity on upgrade.
+    principal_id_attr: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,6 +395,15 @@ def load_settings(strict: bool = True) -> Settings:
         h.strip() for h in raw_allowed_hosts.split(",") if h.strip()
     )
 
+    # Human per-actor signing posture (WI-035). Resolved eagerly so an invalid
+    # value fails at config load rather than on somebody's acceptance.
+    from .signing import parse_policy as _parse_signing_policy
+
+    human_signing = _parse_signing_policy(
+        os.environ.get("DOSSIER_HUMAN_SIGNING", ""),
+        prod=env_mode == "prod",
+    )
+
     # TLS proxy indicator (Plan 023 WI-4): when TLS is terminated at an
     # ingress/proxy rather than the app itself, the doctor's tls check
     # reports ``ok`` with detail naming the proxy posture instead of
@@ -420,6 +444,10 @@ def load_settings(strict: bool = True) -> Settings:
         env_mode=cast(Literal["dev", "prod"], env_mode),
         allowed_hosts=allowed_hosts,
         behind_tls_proxy=behind_tls_proxy,
+        human_signing=human_signing,
+        ldap_principal_id_attr=os.environ.get(
+            "DOSSIER_LDAP_PRINCIPAL_ID_ATTR", ""
+        ).strip(),
     )
 
 
@@ -442,6 +470,7 @@ def load_ldap_config(strict: bool = True) -> LdapConfig:
     ca_cert_file = os.environ.get("DOSSIER_LDAP_CA_CERT_FILE", "")
     connect_timeout_raw = os.environ.get("DOSSIER_LDAP_CONNECT_TIMEOUT", "5") or "5"
     domain = os.environ.get("DOSSIER_LDAP_DOMAIN", "")
+    principal_id_attr = os.environ.get("DOSSIER_LDAP_PRINCIPAL_ID_ATTR", "").strip()
 
     if group_strategy not in ("direct", "nested"):
         raise ValueError(
@@ -483,4 +512,5 @@ def load_ldap_config(strict: bool = True) -> LdapConfig:
         ca_cert_file=ca_cert_file,
         connect_timeout=connect_timeout,
         domain=domain,
+        principal_id_attr=principal_id_attr,
     )

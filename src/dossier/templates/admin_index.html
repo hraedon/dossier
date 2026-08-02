@@ -12,7 +12,7 @@
   <div class="ds-card ds-card--compact">
     <div class="ds-card__label">{{ summary.access.project_slug if summary.access else '—' }}</div>
     <div class="ds-card__value">
-      <span class="ds-chip mono">{{ summary.projects | length }} projects</span>
+      <span class="ds-chip mono">{{ pluralize(summary.projects, 'project') }}</span>
       <span class="ds-chip mono">{{ summary.principal_count }} principals</span>
     </div>
     {% if summary.findings %}

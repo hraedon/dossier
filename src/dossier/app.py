@@ -93,6 +93,7 @@ from .provenance import (
     unverifiable_session_detail,
 )
 from .shell import build_shell
+from .signing import HumanSigningRefusedError
 from .views import (
     ActivityEntry,
     MyWorkEntry,
@@ -487,6 +488,7 @@ def create_app(
         format_bytes=web.format_bytes,
         safe_path=web.safe_path,
         session_principal_display=web.session_principal_display,
+        pluralize=web.pluralize,
     )
     app.state.templates = templates
 
@@ -505,6 +507,32 @@ def create_app(
         request: Request, exc: LoginRequiredError
     ) -> RedirectResponse:
         return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+    @app.exception_handler(HumanSigningRefusedError)
+    async def _human_signing_refused_handler(
+        request: Request, exc: HumanSigningRefusedError
+    ) -> JSONResponse:
+        """Refuse the write with an operator-actionable 409 (WI-035).
+
+        409 rather than 500: nothing is broken, the deployment's signing state
+        simply conflicts with recording this action. The body names the identity
+        and the provisioning command. ``X-Dossier-Human-Signing: refused`` marks
+        it for any client that only reads headers.
+        """
+        logger.warning(
+            "provenance.human_signature_refused",
+            extra={
+                "actor_id": exc.actor.actor_id,
+                "principal_id": exc.actor.principal_id,
+                "path": request.url.path,
+                "reason": exc.identity.reason,
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content=exc.detail,
+            headers={"X-Dossier-Human-Signing": "refused"},
+        )
 
     def current_actor(request: Request) -> Actor:
         data = request.session.get(_ACTOR_SESSION_KEY)
@@ -554,6 +582,70 @@ def create_app(
         version = getattr(wi, "workflow_version", None) or packaged_workflow_version()
         tdefs = gateway.transitions_from(wi.current_state, version)
         return [web.transition_tuple(t) for t in tdefs]
+
+    def _render_issue_detail_error(
+        request: Request,
+        gw: RegistaGateway,
+        project: str,
+        work_item_id: uuid.UUID,
+        actor: Actor,
+        *,
+        error: str,
+        status_code: int,
+        headers: dict[str, str] | None = None,
+    ) -> Response:
+        """Re-render the issue page with *error* in the callout.
+
+        Shared by every failed mutation on the issue detail page so a rejected
+        transition always lands the human back on the item with the reason,
+        rather than on a JSON error body.
+        """
+        wi = gw.get_issue(work_item_id)
+        if wi is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
+        events = gw.history(work_item_id)
+        transitions = transitions_for(gw, wi)
+        integrity = gw.integrity(work_item_id=work_item_id)
+        links = gw.list_links(work_item_id)
+
+        event_verifications: dict[int, dict[str, Any]] = {}
+        for i, event in enumerate(events):
+            try:
+                event_verifications[i] = gw.verify_event(event)
+            except Exception:
+                event_verifications[i] = {
+                    "verified": False,
+                    "principal_id": None,
+                    "fingerprint": None,
+                    "scheme": None,
+                }
+        verdict = compute_assurance_verdict(events)
+        assurance = verdict.level
+
+        ctx = actor_context(request, actor)
+        ctx["current_project"] = slug_to_project(project)
+        return templates.TemplateResponse(
+            request,
+            "issue_detail.html",
+            {
+                **ctx,
+                "issue": wi,
+                "events": events,
+                "transitions": transitions,
+                "integrity_drift": integrity.replayed_drift,
+                "project_slug": project,
+                "links": links,
+                "error": error,
+                "event_verifications": event_verifications,
+                "assurance_level": assurance,
+                "assurance_label": assurance_label(assurance),
+                "assurance_css": assurance_class(assurance),
+                "assurance_verdict": verdict,
+                "signing_downgraded": None,
+            },
+            status_code=status_code,
+            headers=headers,
+        )
 
     @app.get("/healthz")
     def healthz() -> Any:
@@ -1239,6 +1331,7 @@ def create_app(
         project: str,
         work_item_id: uuid.UUID,
         request: Request,
+        signing: str = "",
         actor: Actor = Depends(current_actor_or_redirect),
     ) -> Response:
         gw = resolve_gateway(project, actor)
@@ -1284,6 +1377,14 @@ def create_app(
                 "assurance_label": assurance_label(assurance),
                 "assurance_css": assurance_class(assurance),
                 "assurance_verdict": verdict,
+                # WI-035: set when the human was redirected here after an action
+                # that could only be signed with the shared store key. The reason
+                # is re-derived rather than trusted from the query string.
+                "signing_downgraded": (
+                    gw.signing_identity(actor).reason
+                    if signing == "downgraded" and actor.actor_kind == "human"
+                    else None
+                ),
             },
         )
 
@@ -1307,6 +1408,11 @@ def create_app(
             if same_lineage_ack:
                 payload["same_lineage_acknowledged"] = True
 
+        # WI-035: resolve the signing posture before the write so the outcome can
+        # be reported whichever way it goes. ``gw.transition`` re-runs the check
+        # and is the authority; this probe only decides what the operator sees.
+        signing_posture = gw.signing_identity(actor)
+
         try:
             gw.transition(
                 actor=actor,
@@ -1314,49 +1420,36 @@ def create_app(
                 transition_name=transition_name,
                 payload=payload,
             )
-        except RegistaError as exc:
-            wi = gw.get_issue(work_item_id)
-            if wi is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
-            events = gw.history(work_item_id)
-            transitions = transitions_for(gw, wi)
-            integrity = gw.integrity(work_item_id=work_item_id)
-            links = gw.list_links(work_item_id)
-
-            event_verifications: dict[int, dict[str, Any]] = {}
-            for i, event in enumerate(events):
-                try:
-                    event_verifications[i] = gw.verify_event(event)
-                except Exception:
-                    event_verifications[i] = {
-                        "verified": False,
-                        "principal_id": None,
-                        "fingerprint": None,
-                        "scheme": None,
-                    }
-            verdict = compute_assurance_verdict(events)
-            assurance = verdict.level
-
-            ctx = actor_context(request, actor)
-            ctx["current_project"] = slug_to_project(project)
-            return templates.TemplateResponse(
-                request,
-                "issue_detail.html",
-                {
-                    **ctx,
-                    "issue": wi,
-                    "events": events,
-                    "transitions": transitions,
-                    "integrity_drift": integrity.replayed_drift,
-                    "project_slug": project,
-                    "links": links,
-                    "error": exc.message,
-                    "event_verifications": event_verifications,
-                    "assurance_level": assurance,
-                    "assurance_label": assurance_label(assurance),
-                    "assurance_css": assurance_class(assurance),
-                    "assurance_verdict": verdict,
+        except HumanSigningRefusedError as exc:
+            # Rendered rather than handed to the global handler so the human sees
+            # why their acceptance was not recorded, in the page they were on.
+            logger.warning(
+                "provenance.human_signature_refused",
+                extra={
+                    "actor_id": actor.actor_id,
+                    "principal_id": actor.principal_id,
+                    "transition": transition_name,
+                    "reason": exc.identity.reason,
                 },
+            )
+            return _render_issue_detail_error(
+                request,
+                gw,
+                project,
+                work_item_id,
+                actor,
+                error=str(exc),
+                status_code=status.HTTP_409_CONFLICT,
+                headers={"X-Dossier-Human-Signing": "refused"},
+            )
+        except RegistaError as exc:
+            return _render_issue_detail_error(
+                request,
+                gw,
+                project,
+                work_item_id,
+                actor,
+                error=exc.message,
                 status_code=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1390,6 +1483,17 @@ def create_app(
                 )
         except Exception:
             logger.warning("notification.emit_error", exc_info=True)
+
+        # The write happened but could only be sealed with the shared store key
+        # (``human_signing="warn"``). Say so on the response *and* carry it into
+        # the page the human lands on — a downgrade the operator never sees is the
+        # failure mode WI-035 exists to remove.
+        if actor.actor_kind == "human" and not signing_posture.per_actor:
+            return RedirectResponse(
+                url=f"/p/{project}/issues/{work_item_id}?signing=downgraded",
+                status_code=status.HTTP_303_SEE_OTHER,
+                headers={"X-Dossier-Human-Signing": "downgraded"},
+            )
 
         return RedirectResponse(
             url=f"/p/{project}/issues/{work_item_id}",

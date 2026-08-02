@@ -346,6 +346,12 @@ a:hover { text-decoration: underline; }
   overflow-x: auto; background: var(--panel);
   box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.02);
 }
+/* edge fade while more columns hide to the right — same affordance the
+   scrollable nav wears; toggled by the base-shell script (WI-032) */
+.ds-table-wrap.ds-scroll-fade {
+  -webkit-mask-image: linear-gradient(90deg, #000 92%, transparent 100%);
+  mask-image: linear-gradient(90deg, #000 92%, transparent 100%);
+}
 .ds-table { width: 100%; border-collapse: collapse; }
 .ds-table th {
   font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
@@ -492,6 +498,71 @@ a.ds-chip:hover { border-color: var(--accent-line); color: var(--accent); }
    body text is the payload, so it reads at --text with a 68ch line */
 .ds-prose { white-space: pre-wrap; max-width: 68ch; font-size: var(--fs-md); color: var(--text); line-height: 1.65; }
 
+/* metrics strip (dashboard) */
+.ds-metrics {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3); margin-bottom: var(--space-5);
+}
+.ds-metric {
+  display: block; padding: var(--space-3) var(--space-4);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); text-decoration: none; color: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.02);
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px); text-decoration: none; }
+.ds-metric__label {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-2);
+}
+.ds-metric__value {
+  display: block; font-family: var(--font-mono); font-weight: 600;
+  font-size: var(--fs-2xl); color: var(--text); line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+.ds-metric__sub { display: block; font-size: var(--fs-xs); color: var(--text-2); margin-top: 2px; }
+.ds-metric--accent .ds-metric__value { color: var(--accent); }
+.ds-metric--warn .ds-metric__value { color: var(--warn); }
+
+/* compact stat cards (evidence / operations / administration) */
+.ds-card-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3); margin-bottom: var(--space-4);
+}
+.ds-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.02);
+}
+.ds-card--compact { padding: var(--space-3) var(--space-4); }
+.ds-card--meta { padding: var(--space-4) var(--space-5); background: var(--bg-soft); }
+.ds-card__label {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-2); margin-bottom: 4px;
+}
+.ds-card__value {
+  font-family: var(--font-mono); font-size: var(--fs-lg); font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; word-break: break-word;
+}
+.ds-card__detail { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; }
+.ds-card__body { padding: var(--space-4) var(--space-5); }
+
+/* findings list — no green aggregate hides a named finding */
+.ds-findings {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-4) 0;
+  list-style: none; padding-left: 0;
+}
+.ds-finding {
+  padding: 8px 12px; background: var(--panel-2);
+  border: 1px solid var(--border); border-left: 2px solid var(--border-2);
+  border-radius: var(--radius-sm); font-size: var(--fs-sm);
+}
+.ds-finding--warn { border-left-color: var(--warn); }
+.ds-finding--crit { border-left-color: var(--crit); }
+.ds-finding--ok { border-left-color: var(--ok); }
+.ds-finding--muted { border-left-color: var(--border-2); color: var(--text-3); }
+
 /* sections */
 .ds-section { margin: var(--space-6) 0; }
 .ds-section__title { font-size: var(--fs-md); font-weight: 600; color: var(--text); margin: 0 0 var(--space-3) 0; }
@@ -577,7 +648,11 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
 /* transition controls */
 .ds-transition-row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
 .ds-transition-row .ds-select { width: auto; }
-.ds-transition-row .ds-input { flex: 1; min-width: 200px; }
+/* the note input needs a full placeholder's width before it may share a row;
+   below that it wraps to its own full-width line instead of clipping mid-word
+   (WI-031) */
+.ds-transition-row .ds-input { flex: 1; min-width: min(280px, 100%); }
+.ds-transition-row .ds-input::placeholder { text-overflow: ellipsis; }
 
 /* callouts */
 .ds-callout {
@@ -751,11 +826,22 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
   display: inline-flex; align-items: center; gap: 5px;
 }
 .ds-chain__verified .ds-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+/* a present-but-failing signature contradicts the record: crit, not warn */
 .ds-chain__unverified {
-  font-family: var(--font-mono); font-size: 10.5px; color: var(--warn);
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--crit);
   display: inline-flex; align-items: center; gap: 5px;
 }
-.ds-chain__unverified .ds-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.ds-chain__unverified .ds-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--crit); }
+/* absent signature is a calm fact, not an alarm — it must not shout beside
+   the chain-verified badge (WI-033); hollow dot marks "nothing recorded" */
+.ds-chain__unsigned {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-3);
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.ds-chain__unsigned .ds-pill__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: transparent; border: 1px solid var(--text-3);
+}
 
 /* review notes/verdicts are prose payloads, not chain metadata: reading
    measure per Plan 026 WI-2 */
@@ -854,6 +940,8 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
 /* title cells carry the sentence; give them floor width on wide screens */
 @media (min-width: 521px) {
   .ds-cell--title { min-width: 13rem; }
+  /* a display key is one token — never break it across lines */
+  td.mono.ds-cell--lead { white-space: nowrap; }
 }
 
 @media (max-width: 520px) {
@@ -864,6 +952,10 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
   .ds-pagehead__actions { align-self: flex-start; }
   .ds-table-wrap { overflow-x: auto; }
   .ds-metrics { grid-template-columns: 1fr 1fr; }
+  /* phones: transition controls stack full-width — no cramped inline row
+     squeezing the note input (WI-031) */
+  .ds-transition-row { flex-direction: column; align-items: stretch; }
+  .ds-transition-row .ds-select { width: 100%; }
   .ds-chain { padding-left: 26px; }
   .ds-chain__rule { left: -22px; }
   .ds-chain__rule--comment { left: -21px; }
@@ -906,6 +998,8 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
   .ds-topbar, .ds-subbar, .ds-foot, .ds-filters, .ds-iconbtn,
   .ds-pagehead__actions, form, .ds-skip-link { display: none !important; }
   .ds-app, .ds-panel, .ds-table-wrap, .ds-card { box-shadow: none; }
+  /* paper neither scrolls nor fades */
+  .ds-table-wrap.ds-scroll-fade { -webkit-mask-image: none; mask-image: none; }
   .ds-wrap { max-width: none; padding: 0; }
   /* the record prints single-column, chain first */
   .ds-record-grid { display: block; }

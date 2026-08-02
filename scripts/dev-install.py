@@ -76,9 +76,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_ruff:
         steps.append([*pip, "ruff"])
     # The [dev] extra carries pytest, httpx, ruff, mypy, ldap3, and the pinned
-    # conformance kit (agent-suite-conformance==1.0.0). regista is already resolved
-    # above, so this editable install just satisfies the floor with the locked
-    # version.
+    # conformance kit (agent-suite-conformance==1.1.0). regista is already
+    # resolved above, so this editable install just satisfies the floor with the
+    # locked version.
     steps.append([*pip, "-e", ".[dev]"])
 
     _banner(target)
