@@ -232,7 +232,7 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: 0.06em;
   color: var(--text-2); text-transform: uppercase; white-space: nowrap;
 }
-.ds-topbar__area::before { content: "·"; margin-right: var(--space-2); color: var(--border-2); }
+.ds-topbar__area::before { content: "\00B7"; margin-right: var(--space-2); color: var(--border-2); }
 
 .ds-primary-nav { display: flex; gap: 2px; }
 .ds-primary-nav__item {
@@ -440,7 +440,9 @@ a.ds-chip:hover { border-color: var(--accent-line); color: var(--accent); }
   padding-right: 26px;
 }
 .ds-input--sm { width: auto; max-width: 180px; }
-.ds-input--area { resize: vertical; min-height: 60px; line-height: 1.55; }
+/* prose inputs inherit the reading measure so what you write resembles
+   what you read (Plan 026 WI-2) */
+.ds-input--area { resize: vertical; min-height: 60px; max-width: 68ch; font-size: var(--fs-md); line-height: 1.65; }
 .ds-select--sm { width: auto; max-width: 150px; }
 .ds-input:hover, .ds-select:hover, .ds-textarea:hover { border-color: var(--border-2); }
 .ds-input:focus, .ds-select:focus, .ds-textarea:focus {
@@ -486,7 +488,9 @@ a.ds-chip:hover { border-color: var(--accent-line); color: var(--accent); }
 }
 .ds-panel--pad { padding: var(--space-5); }
 .ds-panel--slim { padding: var(--space-3) var(--space-4); }
-.ds-prose { white-space: pre-wrap; font-size: var(--fs-base); color: var(--text-2); line-height: 1.6; }
+/* prose surfaces (descriptions, review verdicts): a real reading measure —
+   body text is the payload, so it reads at --text with a 68ch line */
+.ds-prose { white-space: pre-wrap; max-width: 68ch; font-size: var(--fs-md); color: var(--text); line-height: 1.65; }
 
 /* sections */
 .ds-section { margin: var(--space-6) 0; }
@@ -662,6 +666,23 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
 .ds-login-card__tag { font-size: var(--fs-sm); color: var(--text-2); margin: 2px 0 0 0; }
 .ds-login-card__sub { font-size: var(--fs-sm); color: var(--text-2); margin: 0 0 var(--space-4); }
 
+/* ================== record-first issue composition (Plan 026) ================== */
+
+/* The verified chain is the primary column; acting surfaces (transitions,
+   comment) ride in a side rail on wide viewports. Below 1100px the grid
+   collapses and DOM order — record first, rail after — rules. */
+@media (min-width: 1100px) {
+  .ds-record-grid {
+    display: grid; grid-template-columns: 7fr 5fr;
+    gap: var(--space-6); align-items: start;
+  }
+  .ds-record-grid > * { min-width: 0; }
+  .ds-record-grid .ds-history { margin-top: 0; }
+}
+@media (max-width: 1099px) {
+  .ds-record-rail { margin-top: var(--space-6); }
+}
+
 /* ================== verified history — the signature view ================== */
 
 .ds-history { margin-top: var(--space-6); }
@@ -736,9 +757,12 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
 }
 .ds-chain__unverified .ds-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
 
+/* review notes/verdicts are prose payloads, not chain metadata: reading
+   measure per Plan 026 WI-2 */
 .ds-chain__verdict {
   margin-top: var(--space-2); padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm); font-size: var(--fs-sm); color: var(--text-2);
+  border-radius: var(--radius-sm); font-size: var(--fs-md); color: var(--text);
+  line-height: 1.65; max-width: 68ch;
   border: 1px solid var(--border); border-left: 3px solid var(--border-2);
   background: var(--panel-2); white-space: pre-wrap;
 }
@@ -883,6 +907,8 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
   .ds-pagehead__actions, form, .ds-skip-link { display: none !important; }
   .ds-app, .ds-panel, .ds-table-wrap, .ds-card { box-shadow: none; }
   .ds-wrap { max-width: none; padding: 0; }
+  /* the record prints single-column, chain first */
+  .ds-record-grid { display: block; }
   .ds-chain__spine { background: #999; }
   .ds-chain__event { break-inside: avoid; }
   /* hide acting surfaces that wrap forms — never their content panels */
