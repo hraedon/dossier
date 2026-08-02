@@ -82,6 +82,36 @@ def test_full_ui_flow(client):
     assert "This is a test comment in the chain" in detail.text
 
 
+def test_issue_detail_renders_record_before_acting_surfaces(client):
+    """Plan 026 WI-1: the verified chain is the first contentful section after
+    the pagehead; the transition select and the comment form follow it in DOM
+    order (reading order), inside the record/rail split."""
+    _login(client)
+    new_page = client.get("/p/dossier-test/issues/new")
+    csrf = _extract_csrf(new_page.text)
+    resp = client.post(
+        "/p/dossier-test/issues",
+        data={
+            "type": "bug",
+            "title": "Record-first ordering",
+            "description": "cover sheet prose",
+            "csrf_token": csrf,
+        },
+        follow_redirects=False,
+    )
+    detail = client.get(resp.headers["location"]).text
+
+    pagehead = detail.index('class="ds-pagehead"')
+    description = detail.index("cover sheet prose")
+    grid = detail.index('class="ds-record-grid"')
+    history = detail.index('<section class="ds-history">')
+    rail = detail.index('class="ds-record-rail"')
+    transitions = detail.index('id="transition-select"')
+    comment = detail.index('id="comment-body"')
+
+    assert pagehead < description < grid < history < rail < transitions < comment
+
+
 def test_create_issue_without_title_re_renders_form(client):
     _login(client)
     new_page = client.get("/p/dossier-test/issues/new")
