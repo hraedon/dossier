@@ -18,7 +18,10 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-from pathlib import Path
+import sys
+from pathlib import Path, PurePosixPath
+
+import pytest
 
 from dossier import cli
 from dossier.service import (
@@ -152,13 +155,17 @@ def test_reference_unit_matches_the_generator() -> None:
     A hand-maintained copy drifts, and a drifted unit is how an operator ends up
     installing something the code has never produced.
     """
-    assert REFERENCE_UNIT.read_text() == generate_unit()
+    assert REFERENCE_UNIT.read_text(encoding="utf-8") == generate_unit()
 
 
 def test_reference_unit_execstart_is_absolute_and_uses_the_documented_prefix() -> None:
-    program = shlex.split(_exec_start(REFERENCE_UNIT.read_text()))[0]
-    assert Path(program).is_absolute(), f"ExecStart={program!r} is not absolute (203/EXEC)"
-    assert Path(program).parent == REFERENCE_BIN_DIR
+    # PurePosixPath / as_posix: the unit is a POSIX artifact whatever the host,
+    # so its properties are asserted under POSIX path semantics.
+    program = shlex.split(_exec_start(REFERENCE_UNIT.read_text(encoding="utf-8")))[0]
+    assert PurePosixPath(program).is_absolute(), (
+        f"ExecStart={program!r} is not absolute (203/EXEC)"
+    )
+    assert PurePosixPath(program).parent == PurePosixPath(REFERENCE_BIN_DIR.as_posix())
 
 
 def test_reference_bin_dir_is_on_systemd_fixed_search_path() -> None:
@@ -167,7 +174,7 @@ def test_reference_bin_dir_is_on_systemd_fixed_search_path() -> None:
     /usr/local/bin is on systemd's fixed ExecStart path; ~/.local/bin is not.
     That asymmetry is WI-045 in one line.
     """
-    assert str(REFERENCE_BIN_DIR) in (
+    assert REFERENCE_BIN_DIR.as_posix() in (
         "/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin",
     )
 
@@ -176,7 +183,7 @@ def test_generated_unit_execstart_is_always_absolute() -> None:
     """Both renderings — reference and install-time — must be absolute."""
     for resolved in (None, ResolvedCommand("/opt/dossier/bin/dossier", "serve")):
         program = shlex.split(_exec_start(generate_unit(resolved)))[0]
-        assert Path(program).is_absolute()
+        assert PurePosixPath(program).is_absolute()
 
 
 def test_generated_unit_reads_config_from_files_not_inline() -> None:
@@ -220,6 +227,10 @@ def test_resolve_command_refuses_rather_than_returning_a_bare_name() -> None:
     assert resolve_command("dossier serve", which=_no_which, search_dirs=()) is None
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="exec-bit semantics are POSIX; the systemd install path never runs on Windows",
+)
 def test_check_exec_start_runnable_rejects_bare_missing_and_non_executable(
     tmp_path: Path,
 ) -> None:
@@ -255,6 +266,11 @@ def test_install_refuses_to_write_a_unit_it_cannot_resolve(tmp_path: Path) -> No
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="drives a systemd install from host tmp dirs; the POSIX-quoting "
+    "(shlex) round-trip mangles Windows paths — POSIX-only by design",
+)
 def test_install_writes_enables_and_verifies(tmp_path: Path) -> None:
     unit_dir = tmp_path / "systemd"
     unit_dir.mkdir()
@@ -412,6 +428,11 @@ def test_remove_is_idempotent(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="drives a systemd install from host tmp dirs; the POSIX-quoting "
+    "(shlex) round-trip mangles Windows paths — POSIX-only by design",
+)
 def test_cli_install_service_dry_run_json(tmp_path: Path, capsys) -> None:  # type: ignore[no-untyped-def]
     bindir = _fake_bin_dir(tmp_path)
     rc = cli.main([
