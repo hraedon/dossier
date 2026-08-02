@@ -190,7 +190,7 @@ def _is_executable_file(path: Path) -> bool:
 def resolve_command(
     command: str,
     *,
-    which: Which = _default_which,
+    which: Which | None = None,
     search_dirs: tuple[Path, ...] | None = None,
 ) -> ResolvedCommand | None:
     """Resolve *command*'s executable to an absolute path, or ``None``.
@@ -201,6 +201,9 @@ def resolve_command(
     CLIs install system-scoped. A per-user install that leaves the CLI
     unresolvable gets a refusal naming it, never a unit that reports success and
     fails at first start.
+
+    ``which=None`` resolves to :func:`_default_which` at call time (not as a
+    def-time default) so a test's monkeypatch of the module attribute is seen.
     """
     words = shlex.split(command)
     name, arguments = words[0], shlex.join(words[1:])
@@ -213,14 +216,18 @@ def resolve_command(
         if _is_executable_file(candidate):
             return ResolvedCommand(str(candidate), arguments)
 
-    found = which(name)
+    found = (which or _default_which)(name)
     return ResolvedCommand(found, arguments) if found else None
 
 
 def reference_command(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> ResolvedCommand:
-    """The rendering used for ``deploy/systemd/dossier.service``."""
+    """The rendering used for ``deploy/systemd/dossier.service``.
+
+    as_posix: the systemd rendering is a POSIX artifact whatever the host;
+    str() of a WindowsPath would backslash the ExecStart.
+    """
     return ResolvedCommand(
-        str(REFERENCE_BIN_DIR / "dossier"), serve_arguments(host=host, port=port)
+        (REFERENCE_BIN_DIR / "dossier").as_posix(), serve_arguments(host=host, port=port)
     )
 
 
@@ -379,7 +386,7 @@ def install_service(
     user: str = "root",
     dry_run: bool = False,
     runner: Runner = _default_runner,
-    which: Which = _default_which,
+    which: Which | None = None,
     search_dirs: tuple[Path, ...] | None = None,
     settle_seconds: float = SETTLE_SECONDS,
     sleeper: Sleeper = time.sleep,
