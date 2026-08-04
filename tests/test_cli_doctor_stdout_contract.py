@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 import structlog
 
-from dossier.cli import main
+from dossier.cli import _read_running_health, main
 from dossier.keys import generate_keyset
 
 
@@ -62,6 +62,32 @@ class _StubRegista:
             "regista.connected", project="dossier_test", regista_version="stub"
         )
         raise RuntimeError("stub: no postgres in CI")
+
+
+class _HealthResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+        self.closed = False
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_doctor_prefers_running_service_health(monkeypatch):
+    payload: dict[str, object] = {
+        "component": "dossier",
+        "version": "test",
+        "ok": True,
+        "checks": [],
+    }
+    response = _HealthResponse(payload)
+    monkeypatch.setattr("urllib.request.urlopen", lambda *args, **kwargs: response)
+
+    assert _read_running_health() == payload
+    assert response.closed is True
 
 
 def _set_cli_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

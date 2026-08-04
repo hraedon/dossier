@@ -21,6 +21,7 @@ def build_health(
         {
             "component": "dossier",
             "version": "0.1.0",
+            "environment": "dev|prod",
             "ok": bool,
             "degraded": bool,
             "regista": {"reachable": bool, "project": str, "chain_ok": None},
@@ -163,6 +164,7 @@ def build_health(
     return {
         "component": "dossier",
         "version": __version__,
+        "environment": settings.env_mode,
         "ok": ok,
         "degraded": degraded,
         "regista": {
@@ -324,6 +326,8 @@ def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:
         refs.append(("REGISTA_DSN", settings.database_url))
     if settings.hmac_key_path and suite_secrets.is_backend_ref(settings.hmac_key_path):
         refs.append(("REGISTA_KEY_PATH", settings.hmac_key_path))
+    if settings.session_secret_ref:
+        refs.append(("DOSSIER_SESSION_SECRET", settings.session_secret_ref))
 
     if not refs:
         return [{
@@ -337,6 +341,8 @@ def _secrets_backend_checks(settings: Settings) -> list[dict[str, Any]]:
         try:
             if label == "REGISTA_DSN":
                 suite_secrets.resolve_dsn(ref)
+            elif label == "DOSSIER_SESSION_SECRET":
+                suite_secrets.resolve_session_secret(ref)
             else:
                 path, cleanup = suite_secrets.materialize_key_manifest(ref)
                 # A bare/file: path is returned unread — confirm it exists AND
@@ -428,7 +434,7 @@ def _project_access_check(
             return {
                 "name": "project_access",
                 "status": "fail",
-                "detail": f"ACL invalid or unreadable: {type(exc).__name__}",
+                "detail": f"ACL invalid or unreadable: {exc}",
             }
         if policy.is_empty:
             return {

@@ -49,6 +49,26 @@ def test_resolve_secret_bytes_rejects_short_secret(monkeypatch):
     with pytest.raises(RuntimeError, match="at least 32 bytes"):
         suite_secrets.resolve_secret_bytes("env:DOSSIER_TEST_WAKE_SECRET")
 
+
+def test_resolve_session_secret_from_env(monkeypatch):
+    monkeypatch.setenv("DOSSIER_TEST_SESSION_SECRET", "s" * 40)
+    assert (
+        suite_secrets.resolve_session_secret("env:DOSSIER_TEST_SESSION_SECRET")
+        == "s" * 40
+    )
+
+
+def test_settings_resolve_session_secret_ref(monkeypatch):
+    from dossier.config import load_settings
+
+    monkeypatch.setenv("DOSSIER_TEST_SESSION_SECRET", "s" * 40)
+    monkeypatch.setenv(
+        "DOSSIER_SESSION_SECRET", "env:DOSSIER_TEST_SESSION_SECRET"
+    )
+    settings = load_settings(strict=False)
+    assert settings.session_secret == "s" * 40
+    assert settings.session_secret_ref == "env:DOSSIER_TEST_SESSION_SECRET"
+
 # ---------------------------------------------------------------------------
 # resolve_dsn
 # ---------------------------------------------------------------------------
@@ -635,3 +655,42 @@ def test_config_principal_key_dir_explicit_wins_over_remote_ref(monkeypatch):
 
     settings = load_settings(strict=False)
     assert settings.principal_key_dir == "/var/lib/dossier/principals"
+
+
+def test_unresolvable_session_secret_ref_non_strict_grades_not_crash(monkeypatch):
+    """PR #14: an unresolvable session-secret ref must not crash the doctor.
+
+    Under ``strict=False`` (the doctor path) a ref that cannot resolve is
+    downgraded to an empty resolved value so ``build_health`` can grade it
+    as a ``fail`` finding. Under ``strict=True`` (serve) the hard failure
+    remains.
+    """
+    from dossier.config import load_settings
+
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://x/x")
+    monkeypatch.setenv("REGISTA_KEY_PATH", "/x")
+    monkeypatch.setenv("DOSSIER_SESSION_SECRET", "env:DOSSIER_DEFINITELY_UNSET_SECRET_X9Z")
+    monkeypatch.delenv("DOSSIER_DEFINITELY_UNSET_SECRET_X9Z", raising=False)
+
+    settings = load_settings(strict=False)
+    assert settings.session_secret == ""
+    assert settings.session_secret_ref == "env:DOSSIER_DEFINITELY_UNSET_SECRET_X9Z"
+
+    with pytest.raises(RuntimeError):
+        load_settings(strict=True)
+
+
+def test_session_secret_length_check_runs_unconditionally(monkeypatch):
+    """PR #14: the session-secret length check must validate regardless of
+    ``strict`` — a short secret is always invalid, not only in serve mode."""
+    from dossier.config import load_settings
+
+    monkeypatch.setenv("REGISTA_DSN", "postgresql://x/x")
+    monkeypatch.setenv("REGISTA_KEY_PATH", "/x")
+    monkeypatch.setenv("DOSSIER_SESSION_SECRET", "short")
+
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        load_settings(strict=False)
+
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        load_settings(strict=True)

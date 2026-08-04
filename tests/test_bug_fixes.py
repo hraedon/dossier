@@ -8,8 +8,10 @@ WI-011: Display key minting race condition (concurrent creates produce duplicate
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -415,6 +417,105 @@ def test_display_key_concurrent_no_duplicates(gateway):
     assert seqs == expected, (
         f"Keys should be contiguous, got {seqs}"
     )
+
+
+class _AdvisoryConnection:
+    def __init__(self, lock: threading.Lock, items: list[Any]) -> None:
+        self._lock = lock
+        self._items = items
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def execute(self, query, params):
+        if "pg_advisory_unlock" in query:
+            self._lock.release()
+        elif "pg_advisory_lock" in query:
+            self._lock.acquire()
+        else:
+            prefix = str(params[0]).removeprefix("^").split("-", 1)[0]
+            sequences = [
+                int(key.rsplit("-", 1)[1])
+                for item in self._items
+                if (key := item.custom_fields.get("display_key", "")).startswith(
+                    f"{prefix}-"
+                )
+            ]
+            return SimpleNamespace(
+                fetchone=lambda: {"max_sequence": max(sequences, default=0)}
+            )
+
+
+class _AdvisoryManager:
+    def __init__(self, lock: threading.Lock, items: list[Any]) -> None:
+        self._lock = lock
+        self._items = items
+
+    def connect(self):
+        return _AdvisoryConnection(self._lock, self._items)
+
+
+class _SharedRegista:
+    def __init__(self, items: list[Any], lock: threading.Lock) -> None:
+        self._items = items
+        self._items_lock = threading.Lock()
+        self._mgr = _AdvisoryManager(lock, items)
+        self.query_calls = 0
+
+    def query_work_items(self, **kwargs):
+        self.query_calls += 1
+        time.sleep(0.01)
+        with self._items_lock:
+            return SimpleNamespace(items=list(self._items), has_more=False, cursor=None)
+
+    def create_work_item(self, **kwargs):
+        item = SimpleNamespace(custom_fields=dict(kwargs["custom_fields"]))
+        with self._items_lock:
+            self._items.append(item)
+        return item, object()
+
+
+def test_display_key_concurrent_across_gateway_workers() -> None:
+    """WI-021: distinct workers coordinate mint+create through PostgreSQL."""
+    from helpers import ALICE
+
+    from dossier.gateway import RegistaGateway
+
+    items: list[Any] = []
+    advisory_lock = threading.Lock()
+    gateways = [
+        RegistaGateway(_SharedRegista(items, advisory_lock), "shared_project")
+        for _ in range(2)
+    ]
+    barrier = threading.Barrier(2)
+    errors: list[Exception] = []
+
+    def create_one(worker: int) -> None:
+        try:
+            barrier.wait(timeout=5)
+            gateways[worker].create_issue(
+                actor=ALICE,
+                work_item_type="bug",
+                custom_fields={"title": "Concurrent worker"},
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=create_one, args=(worker,)) for worker in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not errors
+    assert [item.custom_fields["display_key"] for item in items] == [
+        "SHARED_PROJECT-1",
+        "SHARED_PROJECT-2",
+    ]
+    assert all(gateway._reg.query_calls == 0 for gateway in gateways)
 
 
 def test_display_key_different_prefix_not_affected(gateway, make_issue):
