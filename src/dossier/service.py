@@ -205,8 +205,6 @@ def resolve_command(
     ``which=None`` resolves to :func:`_default_which` at call time (not as a
     def-time default) so a test's monkeypatch of the module attribute is seen.
     """
-    if which is None:
-        which = _default_which
     words = shlex.split(command)
     name, arguments = words[0], shlex.join(words[1:])
 
@@ -400,8 +398,6 @@ def install_service(
     executable, and ``FAILED`` (unit left in place for inspection) when systemd
     does not agree it is runnable and running.
     """
-    if which is None:
-        which = _default_which
     command = f"dossier {serve_arguments(host=host, port=port)}"
     resolved = resolve_command(command, which=which, search_dirs=search_dirs)
     if resolved is None:
