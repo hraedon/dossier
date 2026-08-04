@@ -312,13 +312,13 @@ def load_settings(strict: bool = True) -> Settings:
     )
     if session_secret_ref:
         try:
-            session_secret = resolve_session_secret(session_secret_config)
+            session_secret_config = resolve_session_secret(session_secret_config)
         except Exception:
             if strict:
                 raise
-            session_secret = ""
-    else:
-        session_secret = session_secret_config
+            # Leave nothing to sign with; build_health grades the failure.
+            session_secret_config = ""
+    session_secret = session_secret_config
     session_max_age_raw = os.environ.get("DOSSIER_SESSION_MAX_AGE_SECONDS", "43200")
     secure_cookies_raw = os.environ.get("DOSSIER_SECURE_COOKIES", "true")
     # In prod, require_ssl defaults on (the operator may still override).
