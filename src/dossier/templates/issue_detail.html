@@ -53,69 +53,73 @@
 </div>
 {% endif %}
 
-{% if error %}
-<div class="ds-callout ds-callout--crit">{{ error }}</div>
-{% endif %}
+<div class="ds-record-grid">
+  {% include "_history.html" %}
 
-{# WI-035: the action was recorded but sealed with the shared store key, so it
-   attributes nothing to this human. Loud by design — the silent version of this
-   is the defect. #}
-{% if signing_downgraded %}
-<div class="ds-callout ds-callout--crit" data-testid="signing-downgraded">
-  <strong>Recorded without your signature.</strong>
-  That action was signed with the shared store key, not a key only you hold, so
-  the record cannot attribute it to you — anyone holding the store key could have
-  produced it. Reason: {{ signing_downgraded }}. Ask an administrator to provision
-  a per-actor signing key for your identity.
-</div>
-{% endif %}
+  <div class="ds-record-rail">
+    {% if error %}
+    <div class="ds-callout ds-callout--crit">{{ error }}</div>
+    {% endif %}
 
-{% if transitions %}
-<div class="ds-panel ds-panel--pad">
-  <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="ds-transition-row">
-      <select class="ds-select" name="transition_name" id="transition-select">
-        {% for name, label, needs_note in transitions %}
-        <option value="{{ name }}" {% if needs_note %}data-needs-note="true"{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-      <input class="ds-input" type="text" name="review_note" id="review-note-input" placeholder="review note — required for verdicts" style="display:none">
-      <noscript><style>#review-note-input{display:block !important}</style></noscript>
-      {% if issue.current_state == "in_review" %}
-      <label class="ds-check"><input type="checkbox" name="same_lineage_acknowledged"> same-lineage ack</label>
-      {% endif %}
-      <button type="submit" class="ds-btn ds-btn--primary">apply</button>
+    {# WI-035: the action was recorded but sealed with the shared store key, so it
+       attributes nothing to this human. Loud by design — the silent version of this
+       is the defect. #}
+    {% if signing_downgraded %}
+    <div class="ds-callout ds-callout--crit" data-testid="signing-downgraded">
+      <strong>Recorded without your signature.</strong>
+      That action was signed with the shared store key, not a key only you hold, so
+      the record cannot attribute it to you — anyone holding the store key could have
+      produced it. Reason: {{ signing_downgraded }}. Ask an administrator to provision
+      a per-actor signing key for your identity.
     </div>
-  </form>
-  <script>
-    (function () {
-      var sel = document.getElementById("transition-select");
-      var note = document.getElementById("review-note-input");
-      if (!sel || !note) return;
-      function sync() {
-        var opt = sel.options[sel.selectedIndex];
-        var needs = opt && opt.getAttribute("data-needs-note") === "true";
-        note.style.display = needs ? "" : "none";
-        if (!needs) note.value = "";
-      }
-      sel.addEventListener("change", sync);
-      sync();
-    })();
-  </script>
-</div>
-{% endif %}
+    {% endif %}
 
-<div class="ds-panel ds-panel--pad">
-  <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/comments" class="ds-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="ds-field">
-      <label class="ds-label" for="comment-body">comment</label>
-      <textarea class="ds-input ds-input--area" id="comment-body" name="body" rows="2"></textarea>
+    {% if transitions %}
+    <div class="ds-panel ds-panel--pad">
+      <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/transitions" class="ds-form ds-form--inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="ds-transition-row">
+          <select class="ds-select" name="transition_name" id="transition-select">
+            {% for name, label, needs_note in transitions %}
+            <option value="{{ name }}" {% if needs_note %}data-needs-note="true"{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <input class="ds-input" type="text" name="review_note" id="review-note-input" placeholder="review note (required for review verdicts)" style="display:none">
+          <noscript><style>#review-note-input{display:block !important}</style></noscript>
+          {% if issue.current_state == "in_review" %}
+          <label class="ds-check"><input type="checkbox" name="same_lineage_acknowledged"> same-lineage ack</label>
+          {% endif %}
+          <button type="submit" class="ds-btn ds-btn--primary">apply</button>
+        </div>
+      </form>
+      <script>
+        (function () {
+          var sel = document.getElementById("transition-select");
+          var note = document.getElementById("review-note-input");
+          if (!sel || !note) return;
+          function sync() {
+            var opt = sel.options[sel.selectedIndex];
+            var needs = opt && opt.getAttribute("data-needs-note") === "true";
+            note.style.display = needs ? "" : "none";
+            if (!needs) note.value = "";
+          }
+          sel.addEventListener("change", sync);
+          sync();
+        })();
+      </script>
     </div>
-    <button type="submit" class="ds-btn ds-btn--primary">comment</button>
-  </form>
-</div>
+    {% endif %}
 
-{% include "_history.html" %}
+    <div class="ds-panel ds-panel--pad">
+      <form method="post" action="/p/{{ project_slug }}/issues/{{ issue.work_item_id }}/comments" class="ds-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="ds-field">
+          <label class="ds-label" for="comment-body">comment</label>
+          <textarea class="ds-input ds-input--area" id="comment-body" name="body" rows="2"></textarea>
+        </div>
+        <button type="submit" class="ds-btn ds-btn--primary">comment</button>
+      </form>
+    </div>
+  </div>
+</div>
 {% endblock %}

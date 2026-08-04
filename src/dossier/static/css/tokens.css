@@ -232,7 +232,7 @@ a:hover { text-decoration: underline; }
   font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: 0.06em;
   color: var(--text-2); text-transform: uppercase; white-space: nowrap;
 }
-.ds-topbar__area::before { content: "·"; margin-right: var(--space-2); color: var(--border-2); }
+.ds-topbar__area::before { content: "\00B7"; margin-right: var(--space-2); color: var(--border-2); }
 
 .ds-primary-nav { display: flex; gap: 2px; }
 .ds-primary-nav__item {
@@ -446,7 +446,9 @@ a.ds-chip:hover { border-color: var(--accent-line); color: var(--accent); }
   padding-right: 26px;
 }
 .ds-input--sm { width: auto; max-width: 180px; }
-.ds-input--area { resize: vertical; min-height: 60px; line-height: 1.55; }
+/* prose inputs inherit the reading measure so what you write resembles
+   what you read (Plan 026 WI-2) */
+.ds-input--area { resize: vertical; min-height: 60px; max-width: 68ch; font-size: var(--fs-md); line-height: 1.65; }
 .ds-select--sm { width: auto; max-width: 150px; }
 .ds-input:hover, .ds-select:hover, .ds-textarea:hover { border-color: var(--border-2); }
 .ds-input:focus, .ds-select:focus, .ds-textarea:focus {
@@ -492,7 +494,74 @@ a.ds-chip:hover { border-color: var(--accent-line); color: var(--accent); }
 }
 .ds-panel--pad { padding: var(--space-5); }
 .ds-panel--slim { padding: var(--space-3) var(--space-4); }
-.ds-prose { white-space: pre-wrap; font-size: var(--fs-base); color: var(--text-2); line-height: 1.6; }
+/* prose surfaces (descriptions, review verdicts): a real reading measure —
+   body text is the payload, so it reads at --text with a 68ch line */
+.ds-prose { white-space: pre-wrap; max-width: 68ch; font-size: var(--fs-md); color: var(--text); line-height: 1.65; }
+
+/* metrics strip (dashboard) */
+.ds-metrics {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3); margin-bottom: var(--space-5);
+}
+.ds-metric {
+  display: block; padding: var(--space-3) var(--space-4);
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); text-decoration: none; color: inherit;
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.02);
+  transition: border-color 0.12s ease, transform 0.12s ease;
+}
+a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px); text-decoration: none; }
+.ds-metric__label {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-2);
+}
+.ds-metric__value {
+  display: block; font-family: var(--font-mono); font-weight: 600;
+  font-size: var(--fs-2xl); color: var(--text); line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+.ds-metric__sub { display: block; font-size: var(--fs-xs); color: var(--text-2); margin-top: 2px; }
+.ds-metric--accent .ds-metric__value { color: var(--accent); }
+.ds-metric--warn .ds-metric__value { color: var(--warn); }
+
+/* compact stat cards (evidence / operations / administration) */
+.ds-card-row {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3); margin-bottom: var(--space-4);
+}
+.ds-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 1px 0 rgba(255, 240, 220, 0.02);
+}
+.ds-card--compact { padding: var(--space-3) var(--space-4); }
+.ds-card--meta { padding: var(--space-4) var(--space-5); background: var(--bg-soft); }
+.ds-card__label {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-2); margin-bottom: 4px;
+}
+.ds-card__value {
+  font-family: var(--font-mono); font-size: var(--fs-lg); font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; word-break: break-word;
+}
+.ds-card__detail { font-size: var(--fs-xs); color: var(--text-2); margin-top: 4px; }
+.ds-card__body { padding: var(--space-4) var(--space-5); }
+
+/* findings list — no green aggregate hides a named finding */
+.ds-findings {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-4) 0;
+  list-style: none; padding-left: 0;
+}
+.ds-finding {
+  padding: 8px 12px; background: var(--panel-2);
+  border: 1px solid var(--border); border-left: 2px solid var(--border-2);
+  border-radius: var(--radius-sm); font-size: var(--fs-sm);
+}
+.ds-finding--warn { border-left-color: var(--warn); }
+.ds-finding--crit { border-left-color: var(--crit); }
+.ds-finding--ok { border-left-color: var(--ok); }
+.ds-finding--muted { border-left-color: var(--border-2); color: var(--text-3); }
 
 /* sections */
 .ds-section { margin: var(--space-6) 0; }
@@ -672,6 +741,23 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
 .ds-login-card__tag { font-size: var(--fs-sm); color: var(--text-2); margin: 2px 0 0 0; }
 .ds-login-card__sub { font-size: var(--fs-sm); color: var(--text-2); margin: 0 0 var(--space-4); }
 
+/* ================== record-first issue composition (Plan 026) ================== */
+
+/* The verified chain is the primary column; acting surfaces (transitions,
+   comment) ride in a side rail on wide viewports. Below 1100px the grid
+   collapses and DOM order — record first, rail after — rules. */
+@media (min-width: 1100px) {
+  .ds-record-grid {
+    display: grid; grid-template-columns: 7fr 5fr;
+    gap: var(--space-6); align-items: start;
+  }
+  .ds-record-grid > * { min-width: 0; }
+  .ds-record-grid .ds-history { margin-top: 0; }
+}
+@media (max-width: 1099px) {
+  .ds-record-rail { margin-top: var(--space-6); }
+}
+
 /* ================== verified history — the signature view ================== */
 
 .ds-history { margin-top: var(--space-6); }
@@ -757,9 +843,12 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
   background: transparent; border: 1px solid var(--text-3);
 }
 
+/* review notes/verdicts are prose payloads, not chain metadata: reading
+   measure per Plan 026 WI-2 */
 .ds-chain__verdict {
   margin-top: var(--space-2); padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm); font-size: var(--fs-sm); color: var(--text-2);
+  border-radius: var(--radius-sm); font-size: var(--fs-md); color: var(--text);
+  line-height: 1.65; max-width: 68ch;
   border: 1px solid var(--border); border-left: 3px solid var(--border-2);
   background: var(--panel-2); white-space: pre-wrap;
 }
@@ -912,6 +1001,8 @@ a.ds-metric:hover { border-color: var(--accent-line); transform: translateY(-1px
   /* paper neither scrolls nor fades */
   .ds-table-wrap.ds-scroll-fade { -webkit-mask-image: none; mask-image: none; }
   .ds-wrap { max-width: none; padding: 0; }
+  /* the record prints single-column, chain first */
+  .ds-record-grid { display: block; }
   .ds-chain__spine { background: #999; }
   .ds-chain__event { break-inside: avoid; }
   /* hide acting surfaces that wrap forms — never their content panels */
