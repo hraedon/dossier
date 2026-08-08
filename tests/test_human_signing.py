@@ -951,6 +951,12 @@ def test_route_marks_the_downgrade_on_the_response_and_the_page(suite, tmp_path)
         assert page.status_code == 200
         assert 'data-testid="signing-downgraded"' in page.text
         assert "Recorded without your signature" in page.text
+        # loud by design (WI-035): the callout renders full-width BEFORE the
+        # record grid, never in the rail where narrow viewports would push it
+        # below the chain (Plan 026 last-pass finding, 2026-08-07)
+        assert page.text.index('data-testid="signing-downgraded"') < page.text.index(
+            'class="ds-record-grid"'
+        )
         # and the history row is honest about which key sealed it
         assert 'data-testid="shared-key-signature"' in page.text
     finally:
