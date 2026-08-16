@@ -20,7 +20,7 @@ dossier introduces no new state model. It maps directly onto regista primitives:
 | Assignment / "who's on it" | custom field `assignee` (MVP); regista *claims* later |
 | Priority, etc. | typed custom fields (`ui_visible`) |
 | Comment | event carrying comment text |
-| Adversarial review verdict | `accept` / `request_changes` transition event, by an actor ≠ the author |
+| Adversarial review verdict | `adversarial_pass` (reviewer ≠ every author, cross-lineage) / `request_changes` (v3: `finding_only` — any actor, substantive note required, no independence claim) transition events; final `accept` is the human gate (distinct accepter) |
 | Activity / history | the work-item's event log |
 | Issue key (`DOSSIER-42`) | dossier-minted display key over the work-item id |
 
