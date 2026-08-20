@@ -14,7 +14,13 @@ dependencies = [
     # which regista first shipped in 0.5.4. (The review-assurance delegation via
     # `regista.gate_rationale`, dossier WI-012, has been public API since 0.5.3.)
     # This matches SUITE.lock [spine].version.
-    "regista-hraedon>=0.5.4",
+    # Upper cap <0.6 (WI-040): regista 0.6.0 refuses `on_behalf_of` inside a v6
+    # epoch (`on_behalf_of_has_no_v6_field`) and refuses legacy writes on both
+    # sides of genesis. dossier still passes `on_behalf_of` throughout src, so an
+    # unconstrained resolve to 0.6.0 breaks writes at run time with confusing
+    # errors instead of failing at resolution. Remove the cap as part of the v6
+    # port ([D] phase), not before.
+    "regista-hraedon>=0.5.4,<0.6",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "jinja2>=3.1",
