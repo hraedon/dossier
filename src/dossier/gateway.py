@@ -1,30 +1,32 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import re
 import threading
 import uuid
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
 import regista
 import yaml
 from regista import (
     Approval,
-    ErrorCode,
-    Event,
     LifecycleContractError,
     LifecycleErrorCode,
     PrincipalKind,
     PrincipalLifecycle,
     QueryPage,
     Regista,
-    RegistaError,
     ReplayReport,
     RevocationRequest,
     WorkItem,
 )
+from regista import ErrorCode as ErrorCode  # type: ignore[attr-defined]
+from regista import Event as Event  # type: ignore[attr-defined]
+from regista import RegistaError as RegistaError  # type: ignore[attr-defined]
 from regista.principal_lifecycle import (
     CONTRACT_VERSION,
     CustodyMode,
@@ -34,10 +36,14 @@ from regista.principal_lifecycle import (
     RotationRequest,
 )
 
-from .actors import SYSTEM_ACTOR, Actor
+from .actors import Actor
+from .attribution import authoritative_payload
 from .signing import (
     HumanSigningPolicy,
+    HumanSigningRefusedError,
     SigningIdentity,
+    log_human_signing_fallback_refused,
+    log_human_signing_fallback_written,
     resolve_signing_identity,
 )
 from .signing import (
@@ -71,11 +77,18 @@ def packaged_workflow_version() -> int:
 
 
 def _metadata(actor: Actor) -> dict[str, Any]:
-    role = "system" if actor.actor_kind == "system" else "human"
-    meta: dict[str, Any] = {"display_name": actor.display_name, "role": role}
-    if actor.model_lineage:
-        meta["model_lineage"] = actor.model_lineage
-    return meta
+    """Build the actor metadata allowed on a v6 envelope.
+
+    Model and harness provenance comes from regista's signed ``producer`` block,
+    which is the canonical lineage source for the running process. Dossier keeps
+    actor metadata limited to display and role information; it does not create a
+    competing lineage claim there. ``role`` mirrors the actor kind so workflow
+    role gates see the authenticated identity rather than a dossier-local guess.
+    """
+    return {
+        "display_name": actor.display_name,
+        "role": actor.actor_kind,
+    }
 
 
 def _manifest_path_for(hmac_key_path: str) -> str | None:
@@ -93,6 +106,22 @@ def _manifest_path_for(hmac_key_path: str) -> str | None:
     if ":" not in hmac_key_path:
         return hmac_key_path
     return None
+
+
+def _require_lifecycle_actor(actor: Actor | None) -> Actor:
+    """Require a server-resolved non-system actor for durable lifecycle writes."""
+    if actor is None:
+        raise LifecycleContractError(
+            LifecycleErrorCode.INVALID_REQUEST,
+            "principal lifecycle preparation requires an authenticated registrar "
+            "or root actor",
+        )
+    if actor.actor_kind == "system" or not actor.actor_id.strip():
+        raise LifecycleContractError(
+            LifecycleErrorCode.INVALID_REQUEST,
+            "the system actor cannot authorize a principal lifecycle operation",
+        )
+    return actor
 
 
 class RegistaGateway:
@@ -129,8 +158,15 @@ class RegistaGateway:
         project_name: str = "dossier",
         *,
         human_signing: HumanSigningPolicy = "warn",
+        lifecycle_regista: Regista | None = None,
+        owns_lifecycle_regista: bool = True,
     ) -> None:
         self._reg = regista
+        # Principal lifecycle events live on the estate-wide trust-log project,
+        # not the ordinary work project.  Keep that topology explicit rather
+        # than silently putting trust-log rows into the project chain.
+        self._lifecycle_reg = lifecycle_regista
+        self._owns_lifecycle_regista = owns_lifecycle_regista
         self._project_name = project_name
         self._mint_lock = threading.Lock()
         self._human_signing = human_signing
@@ -177,8 +213,9 @@ class RegistaGateway:
         """Pre-flight a write and return the key to pin it to (WI-035).
 
         For a ``human`` actor this applies the configured policy: ``require``
-        raises :exc:`HumanSigningRefusedError` *before* anything is appended, ``warn``
-        logs the downgrade and lets the write proceed. Non-human actors are
+        raises :exc:`HumanSigningRefusedError` *before* anything is appended, while
+        ``warn`` logs the legacy downgrade and lets it proceed only when the backend
+        supports symmetric writes. Clean v6 epochs reject that fallback. Non-human actors are
         returned unenforced — agents already resolve their own per-principal key
         because their ``actor_id`` is their ``principal_id``, and the system actor
         legitimately signs with the store key (it *is* the store).
@@ -196,11 +233,50 @@ class RegistaGateway:
             operation=operation,
         )
 
+    @staticmethod
+    def _translate_v6_human_signing_error(
+        actor: Actor,
+        identity: SigningIdentity,
+        operation: str,
+        error: RegistaError,
+    ) -> None:
+        """Turn clean-v6's shared-key refusal into dossier's actionable error.
+
+        Legacy regista can still honour the ``warn`` escape hatch by writing an
+        HMAC event. A v6 epoch deliberately cannot: its writer rejects every
+        signer that is not bound to the acting principal. Keep that backend
+        boundary out of the HTTP surface and report the same operator guidance
+        as the pre-flight ``require`` path.
+        """
+        if (
+            actor.actor_kind == "human"
+            and not identity.per_actor
+            and error.code
+            in {ErrorCode.ACTOR_SIGNER_MISMATCH, ErrorCode.KEY_ROLE_NOT_PERMITTED}
+        ):
+            log_human_signing_fallback_refused(actor, identity, operation)
+            raise HumanSigningRefusedError(actor, identity) from error
+
+    @staticmethod
+    def _record_human_signing_success(
+        actor: Actor,
+        identity: SigningIdentity,
+        operation: str,
+    ) -> None:
+        if actor.actor_kind == "human" and not identity.per_actor:
+            log_human_signing_fallback_written(actor, identity, operation)
+
     def register_workflow(self, yaml_text: str | None = None) -> None:
         self._reg.register_workflow(yaml_text or packaged_workflow_yaml())
 
     def close(self) -> None:
         self._reg.close()
+        if (
+            self._owns_lifecycle_regista
+            and self._lifecycle_reg is not None
+            and self._lifecycle_reg is not self._reg
+        ):
+            self._lifecycle_reg.close()
 
     def describe_work(self) -> ProviderDescriptor:
         from .contracts import CONTRACT_VERSION, ProviderDescriptor
@@ -233,10 +309,12 @@ class RegistaGateway:
         work_item_type: str,
         custom_fields: dict[str, Any] | None = None,
     ) -> tuple[WorkItem, Event]:
-        """Create a work item. ``on_behalf_of`` is intentionally not threaded:
-        regista's ``create_work_item`` does not accept it (a regista-side
-        limitation; agent-delegated creation is a future concern). Transitions
-        and comments do thread ``on_behalf_of``.
+        """Create a work item with the authenticated actor and producer identity.
+
+        Dossier's ``on_behalf_of`` claim is carried in signed application
+        payloads for transitions, comments, and producer events. Creation uses
+        regista's actor/producer envelope fields directly; it has no separate
+        delegation argument in this gateway method.
 
         ``custom_fields`` must include ``title`` (required by the workflow v2)
         and typically includes ``description``, ``assignee``, and ``priority``.
@@ -251,33 +329,39 @@ class RegistaGateway:
         prefers asymmetric candidates, so the create is signed per-actor — it
         just relies on regista's resolution rather than an explicit pin.
         """
-        self.human_signing_identity(actor, "create")
+        identity = self.human_signing_identity(actor, "create")
         cf = dict(custom_fields) if custom_fields else {}
         if "display_key" not in cf:
             with self._mint_lock:
                 cf["display_key"] = self._mint_display_key()
-                return cast(
-                    tuple[WorkItem, Event],
-                    self._reg.create_work_item(
+                try:
+                    result = self._reg.create_work_item(
                         workflow_name=WORKFLOW_NAME,
                         work_item_type=work_item_type,
                         actor_id=actor.actor_id,
                         actor_kind=actor.actor_kind,
                         actor_metadata=_metadata(actor),
                         custom_fields=cf,
-                    ),
-                )
-        return cast(
-            tuple[WorkItem, Event],
-            self._reg.create_work_item(
+                    )
+                    self._record_human_signing_success(actor, identity, "create")
+                    return result
+                except RegistaError as exc:
+                    self._translate_v6_human_signing_error(actor, identity, "create", exc)
+                    raise
+        try:
+            result = self._reg.create_work_item(
                 workflow_name=WORKFLOW_NAME,
                 work_item_type=work_item_type,
                 actor_id=actor.actor_id,
                 actor_kind=actor.actor_kind,
                 actor_metadata=_metadata(actor),
                 custom_fields=cf,
-            ),
-        )
+            )
+            self._record_human_signing_success(actor, identity, "create")
+            return result
+        except RegistaError as exc:
+            self._translate_v6_human_signing_error(actor, identity, "create", exc)
+            raise
 
     def transition(
         self,
@@ -296,20 +380,26 @@ class RegistaGateway:
         :exc:`~dossier.signing.HumanSigningRefusedError` and nothing is appended.
         """
         identity = self.human_signing_identity(actor, f"transition:{transition_name}")
-        return cast(
-            Event,
-            self._reg.transition(
+        try:
+            result = self._reg.transition(
                 work_item_id,
                 transition_name,
                 actor.actor_id,
                 actor_kind=actor.actor_kind,
                 actor_metadata=_metadata(actor),
-                payload=payload,
+                payload=authoritative_payload(actor, payload),
                 custom_fields=custom_fields,
-                on_behalf_of=actor.on_behalf_of,
                 key_id=identity.key_id,
-            ),
-        )
+            )
+            self._record_human_signing_success(
+                actor, identity, f"transition:{transition_name}"
+            )
+            return result
+        except RegistaError as exc:
+            self._translate_v6_human_signing_error(
+                actor, identity, f"transition:{transition_name}", exc
+            )
+            raise
 
     def comment(
         self,
@@ -319,19 +409,55 @@ class RegistaGateway:
         body: str,
     ) -> Event:
         identity = self.human_signing_identity(actor, "comment")
-        return cast(
-            Event,
-            self._reg.append_event(
+        try:
+            result = self._reg.append_event(
                 work_item_id,
                 actor.actor_id,
                 actor_kind=actor.actor_kind,
                 actor_metadata=_metadata(actor),
                 transition="comment",
-                payload={"body": body},
-                on_behalf_of=actor.on_behalf_of,
+                payload=authoritative_payload(actor, {"body": body}),
                 key_id=identity.key_id,
-            ),
-        )
+            )
+            self._record_human_signing_success(actor, identity, "comment")
+            return result
+        except RegistaError as exc:
+            self._translate_v6_human_signing_error(actor, identity, "comment", exc)
+            raise
+
+    def append_work_item_event(
+        self,
+        *,
+        actor: Actor,
+        work_item_id: uuid.UUID,
+        transition: str,
+        payload: dict[str, Any] | None = None,
+    ) -> Event:
+        """Append an attributed, non-state-changing work-item event.
+
+        This is the public gateway seam for provenance producers such as
+        tool-call begin/end records. State changes still use :meth:`transition`
+        and comments use :meth:`comment`; callers never need to reach into the
+        underlying regista handle or supply an actor from request data.
+        """
+        identity = self.human_signing_identity(actor, f"event:{transition}")
+        try:
+            result = self._reg.append_event(
+                work_item_id,
+                actor.actor_id,
+                actor_kind=actor.actor_kind,
+                actor_metadata=_metadata(actor),
+                transition=transition,
+                payload=authoritative_payload(actor, payload),
+                key_id=identity.key_id,
+            )
+            self._record_human_signing_success(actor, identity, f"event:{transition}")
+            return result
+        except RegistaError as exc:
+            self._translate_v6_human_signing_error(
+                actor, identity, f"event:{transition}", exc
+            )
+            raise
 
     def append_note_event(
         self,
@@ -342,23 +468,27 @@ class RegistaGateway:
         payload: dict[str, Any] | None = None,
     ) -> Event:
         identity = self.human_signing_identity(actor, f"note:{transition}")
-        return cast(
-            Event,
-            self._reg.append_event(
+        try:
+            result = self._reg.append_event(
                 entity_id,
                 actor.actor_id,
                 actor_kind=actor.actor_kind,
                 actor_metadata=_metadata(actor),
                 transition=transition,
-                payload=payload,
-                on_behalf_of=actor.on_behalf_of,
+                payload=authoritative_payload(actor, payload),
                 entity_kind="note",
                 key_id=identity.key_id,
-            ),
-        )
+            )
+            self._record_human_signing_success(actor, identity, f"note:{transition}")
+            return result
+        except RegistaError as exc:
+            self._translate_v6_human_signing_error(
+                actor, identity, f"note:{transition}", exc
+            )
+            raise
 
     def get_issue(self, work_item_id: uuid.UUID) -> WorkItem | None:
-        return cast(WorkItem | None, self._reg.get_work_item(work_item_id))
+        return self._reg.get_work_item(work_item_id)
 
     def list_issues(
         self,
@@ -367,7 +497,7 @@ class RegistaGateway:
         assignee: str | None = None,
         page_size: int = 100,
     ) -> Any:
-        field_filters = {"assignee": assignee} if assignee else None
+        field_filters: dict[str, object] | None = {"assignee": assignee} if assignee else None
         return self._reg.query_work_items(
             workflow_name=WORKFLOW_NAME,
             current_states=current_states,
@@ -376,7 +506,7 @@ class RegistaGateway:
         )
 
     def history(self, work_item_id: uuid.UUID) -> list[Event]:
-        return cast(list[Event], self._reg.read_events(work_item_id=work_item_id, limit=10_000))
+        return self._reg.read_events(work_item_id=work_item_id, limit=10_000)
 
     def read_recent_events(
         self,
@@ -391,10 +521,7 @@ class RegistaGateway:
         filtering by *actor_id* or *transition* name. Results are
         descending by ``(timestamp, event_seq)`` per regista's contract.
         """
-        return cast(
-            list[Event],
-            self._reg.read_events(actor_id=actor_id, transition=transition, limit=limit),
-        )
+        return self._reg.read_events(actor_id=actor_id, transition=transition, limit=limit)
 
     def read_events_by_transition(self, transition: str, limit: int = 10_000) -> list[Event]:
         """Read events across the project filtered by transition name.
@@ -404,7 +531,7 @@ class RegistaGateway:
         by the agent-activity window (Plan 017) to discover cairn
         ``session_attestation`` and ``tool_call_*`` events.
         """
-        return cast(list[Event], self._reg.read_events(transition=transition, limit=limit))
+        return self._reg.read_events(transition=transition, limit=limit)
 
     def list_links(self, work_item_id: uuid.UUID) -> list[Any]:
         """Return all live (non-removed) links from *work_item_id*.
@@ -447,16 +574,17 @@ class RegistaGateway:
     def list_catalog_projects(self) -> list[str]:
         """Return project schema names from the shared catalog (Plan 014 WI-1.1)."""
         reg = self._reg
-        if hasattr(reg, "list_projects"):
+        list_projects = getattr(reg, "list_projects", None)
+        if callable(list_projects):
             try:
-                entries = reg.list_projects()
+                entries = list_projects()
                 return [e.schema_name for e in entries]
             except Exception:
                 return []
         return []
 
     def integrity(self, work_item_id: uuid.UUID | None = None) -> ReplayReport:
-        return cast(ReplayReport, self._reg.replay(work_item_id=work_item_id))
+        return self._reg.replay(work_item_id=work_item_id)
 
     def verify_event(self, event: Event) -> dict[str, Any]:
         """Return verification info for a single event's signature.
@@ -520,12 +648,40 @@ class RegistaGateway:
         return info
 
     def has_principal_ops(self) -> bool:
-        """True when the backend is real regista with principal-key ops."""
-        return hasattr(self._reg, "principals")
+        """True when the configured principal registry exposes key operations.
+
+        With an estate-wide lifecycle project configured, that project is the
+        sole source of principal-key state. Falling back to the work-project
+        handle here would put legacy writes in the wrong schema.
+        """
+        principal_reg = self._lifecycle_reg or self._reg
+        return hasattr(principal_reg, "principals")
 
     def has_lifecycle_ops(self) -> bool:
         """True when the backend exposes a durable principal lifecycle facade."""
-        return hasattr(self._reg, "principal_lifecycle")
+        return self._lifecycle_reg is not None and hasattr(
+            self._lifecycle_reg, "principal_lifecycle"
+        )
+
+    @property
+    def lifecycle_handle_key(self) -> int | None:
+        """Stable process-local identity for the shared lifecycle handle."""
+        return id(self._lifecycle_reg) if self._lifecycle_reg is not None else None
+
+    def verify_lifecycle_trust(self) -> None:
+        """Verify the pinned genesis against the live estate trust log.
+
+        Regista owns the trust-log walk and exposes this narrow read-only seam;
+        dossier must not reach into its connection manager or private trust-log
+        implementation. This is intentionally separate from the cheap pool
+        liveness probe used for ordinary work health.
+        """
+        if self._lifecycle_reg is None:
+            raise RuntimeError("the estate-wide lifecycle project is not configured")
+        verify_trust_log = getattr(self._lifecycle_reg, "verify_trust_log", None)
+        if not callable(verify_trust_log):
+            raise RuntimeError("the lifecycle handle has no public trust-log verifier")
+        verify_trust_log()
 
     @property
     def principal_lifecycle(self) -> PrincipalLifecycle:
@@ -535,7 +691,8 @@ class RegistaGateway:
                 LifecycleErrorCode.DURABLE_OPERATION_REQUIRED,
                 "principal lifecycle is not available on this backend",
             )
-        return cast(PrincipalLifecycle, self._reg.principal_lifecycle)
+        assert self._lifecycle_reg is not None
+        return self._lifecycle_reg.principal_lifecycle
 
     def _test_store(self) -> Any | None:
         if not _TESTING:
@@ -553,9 +710,10 @@ class RegistaGateway:
         store = self._test_store()
         if store is not None:
             return cast(list[dict[str, Any]], store.list(principal_id))
-        if self.has_principal_ops():
+        principal_reg = self._lifecycle_reg or self._reg
+        if hasattr(principal_reg, "principals"):
             try:
-                return cast(list[dict[str, Any]], self._reg.principals.list(principal_id))
+                return principal_reg.principals.list(principal_id)
             except Exception:
                 return []
         return []
@@ -566,13 +724,10 @@ class RegistaGateway:
         Returns an empty list when the backend does not support principal
         entities (e.g. InMemoryRegista without an injected test store).
         """
-        reg = self._reg
+        reg = self._lifecycle_reg or self._reg
         if hasattr(reg, "read_principal_enrollment_events"):
             try:
-                return cast(
-                    list[Event],
-                    reg.read_principal_enrollment_events(principal_id=principal_id),
-                )
+                return reg.read_principal_enrollment_events(principal_id=principal_id)
             except Exception:
                 logger.debug("read_principal_enrollment_events failed", exc_info=True)
         return []
@@ -595,24 +750,19 @@ class RegistaGateway:
 
         _private_key, public_key = generate_ed25519_keypair()
 
-        if self.has_principal_ops():
+        principal_reg = self._lifecycle_reg or self._reg
+        if hasattr(principal_reg, "principals"):
             if rotate:
-                entry = cast(
-                    dict[str, Any],
-                    self._reg.principals.rotate(
-                        principal_id,
-                        public_key,
-                        registered_by=registered_by,
-                    ),
+                entry = principal_reg.principals.rotate(
+                    principal_id,
+                    public_key,
+                    registered_by=registered_by,
                 )
             else:
-                entry = cast(
-                    dict[str, Any],
-                    self._reg.principals.register(
-                        principal_id,
-                        public_key,
-                        registered_by=registered_by,
-                    ),
+                entry = principal_reg.principals.register(
+                    principal_id,
+                    public_key,
+                    registered_by=registered_by,
                 )
         else:
             store = self._test_store()
@@ -692,9 +842,10 @@ class RegistaGateway:
                 return cast(dict[str, Any], store.get_active(principal_id))
             except Exception:
                 return None
-        if self.has_principal_ops():
+        principal_reg = self._lifecycle_reg or self._reg
+        if hasattr(principal_reg, "principals"):
             try:
-                return cast(dict[str, Any], self._reg.principals.get_active(principal_id))
+                return principal_reg.principals.get_active(principal_id)
             except Exception:
                 return None
         return None
@@ -787,13 +938,13 @@ class RegistaGateway:
         Returns a dict with ``operation_id``, ``digest``, ``state``, and
         ``challenge`` (the possession challenge as a dict).
         """
+        initiator = _require_lifecycle_actor(actor)
         if len(public_key) != 32:
             raise LifecycleContractError(
                 LifecycleErrorCode.INVALID_REQUEST,
                 f"Ed25519 public key must be 32 bytes, got {len(public_key)}",
             )
         lifecycle = self.principal_lifecycle
-        initiator = actor or SYSTEM_ACTOR
         idempotency_key = self._lifecycle_idempotency_key(
             "enroll",
             initiator.actor_id,
@@ -808,7 +959,7 @@ class RegistaGateway:
             scheme="ed25519",
             custody_mode=CustodyMode(custody_mode),
             reason=reason,
-            requested_authority="admin",
+            requested_authority="registrar",
             policy_version=CONTRACT_VERSION,
         )
         operation = lifecycle.prepare_enrollment(
@@ -842,13 +993,13 @@ class RegistaGateway:
         generates a new keypair and sends the new public key; the old key is
         superseded on commit.
         """
+        initiator = _require_lifecycle_actor(actor)
         if len(public_key) != 32:
             raise LifecycleContractError(
                 LifecycleErrorCode.INVALID_REQUEST,
                 f"Ed25519 public key must be 32 bytes, got {len(public_key)}",
             )
         lifecycle = self.principal_lifecycle
-        initiator = actor or SYSTEM_ACTOR
         idempotency_key = self._lifecycle_idempotency_key(
             "rotate",
             initiator.actor_id,
@@ -863,7 +1014,7 @@ class RegistaGateway:
             scheme="ed25519",
             custody_mode=CustodyMode(custody_mode),
             reason=reason,
-            requested_authority="admin",
+            requested_authority="registrar",
             policy_version=CONTRACT_VERSION,
             old_key_id=old_key_id,
         )
@@ -881,6 +1032,30 @@ class RegistaGateway:
             "challenge": challenge.to_dict(),
         }
 
+    def submit_rotation_authorization(
+        self,
+        operation_id: str,
+        old_key_signature: bytes,
+    ) -> dict[str, Any]:
+        """Submit the superseded key's detached signature for a rotation."""
+
+        lifecycle = self.principal_lifecycle
+        submit = getattr(lifecycle, "submit_rotation_authorization", None)
+        if not callable(submit):
+            raise LifecycleContractError(
+                LifecycleErrorCode.DURABLE_OPERATION_REQUIRED,
+                "rotation authorization is not available on this regista backend",
+            )
+        submit_rotation_authorization = cast(
+            Callable[[str, bytes], Any], submit
+        )
+        operation = submit_rotation_authorization(operation_id, old_key_signature)
+        return {
+            "operation_id": operation.operation_id,
+            "state": operation.state.value,
+            "digest": operation.digest.value,
+        }
+
     def submit_possession_proof(
         self,
         operation_id: str,
@@ -894,11 +1069,25 @@ class RegistaGateway:
         """
         lifecycle = self.principal_lifecycle
         operation = lifecycle.submit_possession(operation_id, proof)
-        return {
+        result: dict[str, Any] = {
             "operation_id": operation.operation_id,
             "state": operation.state.value,
             "digest": operation.digest.value,
         }
+        if operation.operation_type.value == "rotation":
+            authorization_bytes = getattr(
+                lifecycle, "rotation_authorization_bytes", None
+            )
+            if not callable(authorization_bytes):
+                raise LifecycleContractError(
+                    LifecycleErrorCode.DURABLE_OPERATION_REQUIRED,
+                    "rotation authorization is not available on this regista backend",
+                )
+            rotation_authorization_bytes = cast(Callable[[str], bytes], authorization_bytes)
+            result["old_key_authorization"] = base64.b64encode(
+                rotation_authorization_bytes(operation_id)
+            ).decode("ascii")
+        return result
 
     def record_effective_receipt(
         self,
@@ -999,8 +1188,8 @@ class RegistaGateway:
         admin and then commit the operation; this method does not approve or
         commit, so it never self-approves.
         """
+        initiator = _require_lifecycle_actor(actor)
         lifecycle = self.principal_lifecycle
-        initiator = actor or SYSTEM_ACTOR
         principal_kind = self._resolve_principal_kind(principal_id)
         idempotency_key = self._lifecycle_idempotency_key(
             "revoke", initiator.actor_id, principal_id, key_id
@@ -1011,7 +1200,7 @@ class RegistaGateway:
             actor_id=initiator.actor_id,
             key_id=key_id,
             reason=reason,
-            requested_authority="admin",
+            requested_authority="registrar",
             policy_version=CONTRACT_VERSION,
         )
         operation = lifecycle.prepare_revocation(request, idempotency_key=idempotency_key)
@@ -1062,11 +1251,9 @@ class RegistaGateway:
         store = self._test_store()
         if store is not None:
             return cast(dict[str, Any], store.revoke(principal_id, key_id, reason=reason))
-        if self.has_principal_ops():
-            return cast(
-                dict[str, Any],
-                self._reg.principals.revoke(principal_id, key_id, reason=reason),
-            )
+        principal_reg = self._lifecycle_reg or self._reg
+        if hasattr(principal_reg, "principals"):
+            return principal_reg.principals.revoke(principal_id, key_id, reason=reason)
         return None
 
     def _lifecycle_idempotency_key(

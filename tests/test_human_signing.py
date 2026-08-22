@@ -34,9 +34,16 @@ import base64
 import json
 import logging
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
-from regista.testing import InMemoryRegista
+from regista.testing import (
+    InMemoryRegista,
+    Producer,
+    make_v6_keyset,
+    open_v6_epoch,
+    set_v6_producer_env,
+)
 from test_ldap import _MockEntry
 
 from dossier.actors import Actor
@@ -44,13 +51,15 @@ from dossier.auth.backends import LdapBackend, LocalBackend, Principal
 from dossier.auth.resolver import principal_to_actor
 from dossier.authz import AccessGrant
 from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.signing import HumanSigningRefusedError, parse_policy
 
 # The qualification's actual identifiers, so the reproduction is not merely
 # shaped like the defect but is the defect.
 QUAL_STABLE_ID = "4814fec5-7b84-4f61-ae43-99a91dc76a63"
-QUAL_PRINCIPAL = "qual-human"
+QUAL_PRINCIPAL = "human:qual"
+QUAL_AUTHOR = "agent:qual-author"
+QUAL_REVIEWER = "agent:qual-reviewer"
+LDAP_PRINCIPAL = "human:ldap"
 
 # The human gate requires a non-empty review note on every verdict.
 ACCEPT_PAYLOAD = {"review_note": "accepted after review"}
@@ -59,72 +68,27 @@ ACCEPT_PAYLOAD = {"review_note": "accepted after review"}
 # ── fixtures ──────────────────────────────────────────────────────────────
 
 
-def _add_ed25519_principal(
-    key_path: Path, key_dir: Path, principal_id: str
-) -> tuple[str, bytes]:
-    """Register a per-principal Ed25519 key in the key-set manifest.
-
-    Mirrors what ``agent-suite bootstrap --user <principal_id>`` /
-    ``regista provision-principal`` leave behind: a 0600 private key file plus a
-    manifest entry binding ``key_id`` → ``principal_id`` with the public half
-    inline for verification. Returns ``(key_id, public_key)``.
-    """
-    import nacl.signing
-
-    signing_key = nacl.signing.SigningKey.generate()
-    key_dir.mkdir(parents=True, exist_ok=True)
-    private_path = key_dir / f"{principal_id}_ed25519.key"
-    private_path.write_bytes(bytes(signing_key))
-    private_path.chmod(0o600)
-
-    public_key = bytes(signing_key.verify_key)
-    key_id = f"pk_{principal_id.replace('-', '_')}"
-    manifest = json.loads(key_path.read_text())
-    manifest["keys"].append(
-        {
-            "key_id": key_id,
-            "scheme": "ed25519",
-            "principal_id": principal_id,
-            "secret_ref": f"file:{private_path}",
-            "public_key": base64.b64encode(public_key).decode("ascii"),
-            "role": "actor",
-            "status": "active",
-        }
-    )
-    key_path.write_text(json.dumps(manifest, indent=2))
-    return key_id, public_key
-
-
 @pytest.fixture
 def suite(tmp_path):
-    """A store HMAC key plus per-principal Ed25519 keys for the qual cast.
-
-    Deliberately includes both: the store key is what the defect falls back to,
-    so a fixture without it could not reproduce the downgrade.
-    """
-    key_path = tmp_path / "keys.json"
-    store = generate_keyset(key_path)
-    store_key_id = store["keys"][0]["key_id"]
-    key_dir = tmp_path / "principals"
-
-    keys: dict[str, bytes] = {}
-    ids: dict[str, str] = {}
-    for principal in (QUAL_PRINCIPAL, "qual-author", "qual-reviewer", "ldap-human"):
-        key_id, public_key = _add_ed25519_principal(key_path, key_dir, principal)
-        keys[principal] = public_key
-        ids[principal] = key_id
+    """A clean v6 keyset for the qualification cast."""
+    principals = (QUAL_PRINCIPAL, QUAL_AUTHOR, QUAL_REVIEWER, LDAP_PRINCIPAL)
+    keyset = make_v6_keyset(tmp_path, principals=principals, filename="keys.json")
+    keys = {principal: keyset.key_for(principal).public_key for principal in principals}
+    ids = {principal: keyset.key_for(principal).key_id for principal in principals}
 
     return {
-        "key_path": key_path,
-        "key_dir": key_dir,
-        "store_key_id": store_key_id,
+        "key_path": Path(keyset.path),
+        "keyset": keyset,
+        "principals": principals,
         "public_keys": keys,
         "key_ids": ids,
     }
 
 
 def _gateway(suite, *, policy="warn", project="wi035"):
+    set_v6_producer_env(overwrite=True)
     reg = InMemoryRegista(project=project, hmac_key_path=str(suite["key_path"]))
+    open_v6_epoch(reg, suite["keyset"], principals=suite["principals"])
     gw = RegistaGateway(reg, project_name=project, human_signing=policy)
     gw.register_workflow()
     InMemoryRegista._catalog.clear()
@@ -164,7 +128,7 @@ def _local_users_file(tmp_path: Path, *, principal_id: str | None) -> Path:
     return path
 
 
-def _agent(actor_id="qual-author"):
+def _agent(actor_id=QUAL_AUTHOR):
     return Actor(
         actor_id=actor_id,
         actor_kind="agent",
@@ -179,6 +143,7 @@ def _drive_to_review(gw, author, *, reviewer=None):
     The same shape as the qualification run: three agent legs then a human
     acceptance. Stops one step short so the caller owns the human transition.
     """
+    _set_producer("glm")
     wi, _ = gw.create_issue(
         actor=author,
         work_item_type="bug",
@@ -187,13 +152,27 @@ def _drive_to_review(gw, author, *, reviewer=None):
     wid = wi.work_item_id
     gw.transition(actor=author, work_item_id=wid, transition_name="start")
     gw.transition(actor=author, work_item_id=wid, transition_name="submit_for_review")
+    _set_producer("kimi")
     gw.transition(
         actor=reviewer or _reviewer(),
         work_item_id=wid,
         transition_name="adversarial_pass",
         payload={"review_note": "cross-lineage review complete"},
     )
+    _set_producer("fable")
     return wid
+
+
+def _set_producer(lineage: str) -> None:
+    set_v6_producer_env(
+        Producer(
+            harness="dossier-test",
+            harness_version="dossier-test/1",
+            model=f"model-{lineage}",
+            model_lineage=lineage,
+        ),
+        overwrite=True,
+    )
 
 
 def _reviewer():
@@ -204,7 +183,7 @@ def _reviewer():
     ``qual-reviewer`` leg for exactly that reason.
     """
     return Actor(
-        actor_id="qual-reviewer",
+        actor_id=QUAL_REVIEWER,
         actor_kind="agent",
         display_name="Qual Reviewer",
         model_lineage="kimi",
@@ -269,7 +248,7 @@ def test_local_users_file_rejects_a_malformed_principal_id(tmp_path):
             ]
         )
     )
-    with pytest.raises(ValueError, match="alphanumeric"):
+    with pytest.raises(ValueError, match="canonical principal grammar"):
         LocalBackend(path)
 
 
@@ -292,9 +271,9 @@ def test_ldap_identity_binds_via_the_configured_attribute():
 
     entry = _MockEntry(
         "cn=Ldap Human,dc=example,dc=test",
-        {"objectGUID": b"\x00" * 16, "employeeNumber": "ldap-human"},
+        {"objectGUID": b"\x00" * 16, "employeeNumber": LDAP_PRINCIPAL},
     )
-    assert backend._read_principal_id(entry, "lhuman") == "ldap-human"
+    assert backend._read_principal_id(entry, "lhuman") == LDAP_PRINCIPAL
 
 
 def test_ldap_identity_is_unbound_when_no_attribute_is_configured():
@@ -345,25 +324,18 @@ def test_binding_keeps_acl_entries_written_against_the_stable_id(tmp_path):
 # ── the defect: reproduction and fix ──────────────────────────────────────
 
 
-def test_unbound_human_acceptance_falls_back_to_the_store_hmac_key(gw_warn, suite):
-    """The defect itself, reproduced: seq 5 of the qualification chain.
-
-    Kept as a passing test on purpose. It is the *precondition* of the fix, and it
-    documents that the fallback still exists in regista — dossier's job is to
-    ensure a human write never reaches it silently, not to remove it.
-    """
+def test_unbound_human_acceptance_never_falls_back_to_store_hmac(gw_warn):
+    """Clean v6 refuses an unbound human instead of producing a shared signature."""
     author = _agent()
     wid = _drive_to_review(gw_warn, author)
     unbound = Actor(
         actor_id=QUAL_STABLE_ID, actor_kind="human", display_name="Qual Human"
     )
 
-    event = gw_warn.transition(
-        actor=unbound, work_item_id=wid, transition_name="accept", payload=ACCEPT_PAYLOAD
-    )
-
-    assert event.scheme_id == "hmac-sha256"
-    assert event.key_id == suite["store_key_id"]
+    with pytest.raises(HumanSigningRefusedError):
+        gw_warn.transition(
+            actor=unbound, work_item_id=wid, transition_name="accept", payload=ACCEPT_PAYLOAD
+        )
 
 
 def test_bound_human_acceptance_is_signed_with_that_humans_own_key(gw_warn, suite):
@@ -389,7 +361,6 @@ def test_bound_human_acceptance_is_signed_with_that_humans_own_key(gw_warn, suit
 
     assert event.scheme_id == "ed25519"
     assert event.key_id == suite["key_ids"][QUAL_PRINCIPAL]
-    assert event.key_id != suite["store_key_id"]
     assert event.actor_id == QUAL_PRINCIPAL
 
 
@@ -426,7 +397,7 @@ def test_bound_human_signature_verifies_against_the_registered_public_key(
     assert gw_warn._reg.verify_event_signature(event, public_key=public_key) is True
 
     # ...and it must NOT verify under another principal's public key
-    other = suite["public_keys"]["qual-author"]
+    other = suite["public_keys"][QUAL_AUTHOR]
     assert gw_warn._reg.verify_event_signature(event, public_key=other) is False
 
 
@@ -551,7 +522,7 @@ def test_require_policy_names_the_missing_key_when_the_binding_exists(gw_require
             stable_id=QUAL_STABLE_ID,
             display_name="Nobody",
             source="local",
-            principal_id="never-provisioned",
+            principal_id="human:never-provisioned",
         )
     )
 
@@ -587,13 +558,11 @@ def test_require_policy_permits_a_bound_human(gw_require, suite):
     assert event.key_id == suite["key_ids"][QUAL_PRINCIPAL]
 
 
-def test_warn_policy_logs_the_downgrade_loudly(gw_warn, caplog):
-    """``warn`` is the escape hatch, and it is not allowed to be quiet.
+def test_warn_policy_models_v6_fallback_attempt_and_refusal(gw_warn, caplog):
+    """Warn records the attempt, then records that clean v6 refused it.
 
-    The qualification's complaint was that "nothing in the UI, the response, or
-    the doctor says the acceptance was signed with a shared symmetric key". This
-    covers the log; the route test covers the response and the UI; the health test
-    covers the doctor.
+    The pre-flight cannot claim that a symmetric event was written: v6 rejects
+    that fallback after the pre-flight returns.
     """
     author = _agent()
     wid = _drive_to_review(gw_warn, author)
@@ -602,23 +571,64 @@ def test_warn_policy_logs_the_downgrade_loudly(gw_warn, caplog):
     )
 
     with caplog.at_level(logging.WARNING, logger="dossier.signing"):
-        gw_warn.transition(
-            actor=unbound,
-            work_item_id=wid,
-            transition_name="accept",
-            payload=ACCEPT_PAYLOAD,
-        )
+        with pytest.raises(HumanSigningRefusedError):
+            gw_warn.transition(
+                actor=unbound,
+                work_item_id=wid,
+                transition_name="accept",
+                payload=ACCEPT_PAYLOAD,
+            )
 
-    downgrades = [
-        r for r in caplog.records if r.message == "provenance.human_signature_downgraded"
+    attempted = [
+        r
+        for r in caplog.records
+        if r.message == "provenance.human_signature_fallback_attempted"
     ]
-    assert len(downgrades) == 1
-    record = downgrades[0]
-    assert record.levelno == logging.WARNING
-    assert record.actor_id == QUAL_STABLE_ID
-    assert record.operation == "transition:accept"
-    assert "cannot attribute" in record.consequence
-    assert "agent-suite bootstrap --user" in record.remediation
+    refused = [
+        r
+        for r in caplog.records
+        if r.message == "provenance.human_signature_fallback_refused"
+    ]
+    assert len(attempted) == 1
+    assert len(refused) == 1
+    assert attempted[0].outcome == "fallback_attempted"
+    assert "write outcome is not known" in attempted[0].consequence
+    assert refused[0].outcome == "fallback_refused"
+    assert "no event was written" in refused[0].consequence
+    assert "shared-key fallback" in refused[0].consequence
+    assert all(
+        r.message != "provenance.human_signature_fallback_written"
+        for r in caplog.records
+    )
+
+
+def test_warn_policy_records_written_fallback_on_legacy_backend(caplog):
+    """A legacy backend may write the fallback, which gets a distinct outcome."""
+    reg = MagicMock()
+    reg.create_work_item.return_value = (object(), object())
+    gw = RegistaGateway(reg, project_name="legacy_signing", human_signing="warn")
+    actor = Actor(
+        actor_id=QUAL_STABLE_ID,
+        actor_kind="human",
+        display_name="Qual Human",
+    )
+    try:
+        with caplog.at_level(logging.WARNING, logger="dossier.signing"):
+            _wi, event = gw.create_issue(
+                actor=actor,
+                work_item_type="bug",
+                custom_fields={"title": "legacy fallback", "display_key": "LEGACY-1"},
+            )
+    finally:
+        gw.close()
+
+    assert event is not None
+    assert any(
+        record.message == "provenance.human_signature_fallback_written"
+        and record.outcome == "fallback_written"
+        and "event was written" in record.consequence
+        for record in caplog.records
+    )
 
 
 def test_signing_identity_is_a_read_only_probe(gw_warn, suite):
@@ -650,19 +660,23 @@ def test_revoked_key_does_not_silently_become_a_store_signature(tmp_path):
     re-enabled store-key signing, offboarding would *weaken* the record instead of
     closing it.
     """
-    key_path = tmp_path / "keys.json"
-    generate_keyset(key_path)
-    key_dir = tmp_path / "principals"
-    _add_ed25519_principal(key_path, key_dir, "leaver")
-    _add_ed25519_principal(key_path, key_dir, "qual-author")
-    _add_ed25519_principal(key_path, key_dir, "qual-reviewer")
-    manifest = json.loads(key_path.read_text())
+    keyset = make_v6_keyset(
+        tmp_path,
+        principals=("human:leaver", QUAL_AUTHOR, QUAL_REVIEWER),
+        filename="keys.json",
+    )
+    manifest = json.loads(Path(keyset.path).read_text())
     for entry in manifest["keys"]:
-        if entry.get("principal_id") == "leaver":
+        if entry.get("principal_id") == "human:leaver":
             entry["status"] = "revoked"
-    key_path.write_text(json.dumps(manifest))
-
-    reg = InMemoryRegista(project="wi035_rev", hmac_key_path=str(key_path))
+    Path(keyset.path).write_text(json.dumps(manifest))
+    set_v6_producer_env(overwrite=True)
+    reg = InMemoryRegista(project="wi035_rev", hmac_key_path=keyset.path)
+    open_v6_epoch(
+        reg,
+        keyset,
+        principals=("human:leaver", QUAL_AUTHOR, QUAL_REVIEWER),
+    )
     gw = RegistaGateway(reg, project_name="wi035_rev", human_signing="require")
     gw.register_workflow()
     InMemoryRegista._catalog.clear()
@@ -672,7 +686,7 @@ def test_revoked_key_does_not_silently_become_a_store_signature(tmp_path):
                 stable_id=QUAL_STABLE_ID,
                 display_name="Leaver",
                 source="local",
-                principal_id="leaver",
+                principal_id="human:leaver",
             )
         )
         wid = _drive_to_review(gw, _agent())
@@ -774,6 +788,7 @@ def test_doctor_reports_an_unbound_local_identity(gw_warn, suite, tmp_path):
     assert QUAL_PRINCIPAL in check["detail"]
     assert "no principal_id recorded" in check["detail"]
     assert "shared store key" in check["detail"]
+    assert "clean v6" in check["detail"]
     assert health["degraded"] is True
 
 
@@ -929,8 +944,8 @@ def test_route_refuses_the_acceptance_with_an_actionable_409(suite, tmp_path):
         gw.close()
 
 
-def test_route_marks_the_downgrade_on_the_response_and_the_page(suite, tmp_path):
-    """``warn`` records the action but never lets it pass unremarked."""
+def test_route_refuses_warn_policy_in_a_clean_v6_epoch(suite, tmp_path):
+    """A clean v6 epoch cannot record the legacy shared-key downgrade."""
     gw, client = _web(suite, tmp_path, policy="warn", principal_id=None)
     try:
         csrf, wid = _login_and_reach_review(gw, client)
@@ -943,16 +958,14 @@ def test_route_marks_the_downgrade_on_the_response_and_the_page(suite, tmp_path)
             },
             follow_redirects=False,
         )
-        assert resp.status_code == 303
-        assert resp.headers["X-Dossier-Human-Signing"] == "downgraded"
-        assert "signing=downgraded" in resp.headers["location"]
+        assert resp.status_code == 409
+        assert resp.headers["X-Dossier-Human-Signing"] == "refused"
+        assert "signing=downgraded" not in resp.headers.get("location", "")
 
-        page = client.get(resp.headers["location"])
+        page = client.get(f"/p/wi035_web/issues/{wid}")
         assert page.status_code == 200
-        assert 'data-testid="signing-downgraded"' in page.text
-        assert "Recorded without your signature" in page.text
-        # and the history row is honest about which key sealed it
-        assert 'data-testid="shared-key-signature"' in page.text
+        assert 'data-testid="signing-downgraded"' not in page.text
+        assert gw.get_issue(wid).current_state == "in_human_review"
     finally:
         InMemoryRegista._catalog.clear()
         gw.close()

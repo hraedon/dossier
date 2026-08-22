@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, Any
+import time
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from . import secrets as suite_secrets
 from .gateway import RegistaGateway
@@ -73,6 +75,12 @@ class GatewayRegistry:
         # process. A literal/bare-path manifest returns ``None`` cleanup, so
         # today's plaintext installs incur nothing here.
         self._key_cleanups: dict[str, suite_secrets.CleanupFn] = {}
+        # One estate-wide trust-log connection is shared by every work-project
+        # gateway. It is registry-owned so individual gateways cannot close it
+        # while another project is still using the lifecycle facade.
+        self._lifecycle_regista: Any | None = None
+        self._lifecycle_verified_at: float | None = None
+        self._lifecycle_verification_report: Any | None = None
         if known_projects:
             self._known_projects: set[str] = set(known_projects)
         elif settings:
@@ -152,6 +160,14 @@ class GatewayRegistry:
                 gw.close()
             except Exception:
                 logger.debug("gateway close failed during close_all", exc_info=True)
+        if self._lifecycle_regista is not None:
+            try:
+                self._lifecycle_regista.close()
+            except Exception:
+                logger.debug("shared lifecycle close failed during close_all", exc_info=True)
+            self._lifecycle_regista = None
+            self._lifecycle_verified_at = None
+            self._lifecycle_verification_report = None
         # Scrub any materialized key-set temp files so they do not outlive the
         # registry (Plan 013 WI-4.1). atexit is the safety net; this is the
         # prompt path so a process that re-uses the registry (CLI doctor) does
@@ -163,6 +179,31 @@ class GatewayRegistry:
                 logger.debug("key cleanup failed during close_all", exc_info=True)
         self._key_cleanups.clear()
         self._gateways.clear()
+
+    def verify_lifecycle_trust(self, *, max_age_seconds: float = 30.0) -> Any:
+        """Verify the shared trust log, caching only successful reports briefly.
+
+        Health pollers must not turn an O(n) cryptographic chain walk into an
+        unbounded per-request load. Failures are never cached, so recovery is
+        visible on the next probe.
+        """
+        if max_age_seconds < 0:
+            raise ValueError("max_age_seconds must be non-negative")
+        with self._lock:
+            lifecycle = self._lifecycle_regista
+            if lifecycle is None:
+                raise RuntimeError("the estate-wide lifecycle project is not configured")
+            now = time.monotonic()
+            if (
+                self._lifecycle_verified_at is not None
+                and self._lifecycle_verification_report is not None
+                and now - self._lifecycle_verified_at <= max_age_seconds
+            ):
+                return self._lifecycle_verification_report
+            report = lifecycle.verify_trust_log()
+            self._lifecycle_verified_at = time.monotonic()
+            self._lifecycle_verification_report = report
+            return report
 
     def _build(self, project: str) -> RegistaGateway:
         import regista
@@ -185,18 +226,47 @@ class GatewayRegistry:
 
         key_path, cleanup = suite_secrets.materialize_key_manifest(s.hmac_key_path)
         reg: Any = None
+        lifecycle_reg: Any = None
+        created_lifecycle = False
         try:
+            dsn = suite_secrets.resolve_dsn(s.database_url)
+            if dsn is None:
+                raise ValueError("a database URL is required to build a regista gateway")
             reg = regista.Regista(
-                suite_secrets.resolve_dsn(s.database_url),
+                dsn,
                 project,
                 key_path,
                 require_ssl=s.require_ssl,
                 approval_verifier=DossierApprovalVerifier(s.session_secret),
             )
+            if s.trust_log_project:
+                if s.trust_log_project == project:
+                    raise ValueError(
+                        "REGISTA_TRUST_LOG_PROJECT must be distinct from the work project"
+                    )
+                lifecycle_reg = self._lifecycle_regista
+                if lifecycle_reg is None:
+                    # The trust-genesis keyword is introduced by the sibling
+                    # lifecycle contract. Keep construction compatible with
+                    # the published lock's older type surface while passing
+                    # the argument at runtime when the feature is available.
+                    regista_constructor = cast(Callable[..., Any], regista.Regista)
+                    lifecycle_reg = regista_constructor(
+                        dsn,
+                        s.trust_log_project,
+                        key_path,
+                        require_ssl=s.require_ssl,
+                        approval_verifier=DossierApprovalVerifier(s.session_secret),
+                        trust_genesis_path=s.trust_genesis_path or None,
+                    )
+                    self._lifecycle_regista = lifecycle_reg
+                    created_lifecycle = True
             gw = RegistaGateway(
                 reg,
                 project_name=project,
                 human_signing=s.human_signing,
+                lifecycle_regista=lifecycle_reg,
+                owns_lifecycle_regista=False,
             )
             gw.register_workflow()
         except BaseException:
@@ -209,6 +279,15 @@ class GatewayRegistry:
                     reg.close()
                 except Exception:
                     logger.debug("reg.close failed during _build cleanup", exc_info=True)
+            if created_lifecycle and lifecycle_reg is not None:
+                try:
+                    lifecycle_reg.close()
+                except Exception:
+                    logger.debug(
+                        "lifecycle_reg.close failed during _build cleanup",
+                        exc_info=True,
+                    )
+                self._lifecycle_regista = None
             if cleanup is not None:
                 cleanup()
             raise

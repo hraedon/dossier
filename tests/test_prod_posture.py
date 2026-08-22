@@ -14,14 +14,12 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from regista.testing import InMemoryRegista
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings, load_settings
 from dossier.gateway import RegistaGateway
 from dossier.health import build_health
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 
 _PROJECT = "dossier_test"
@@ -47,6 +45,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": _hash_pw("s3cret"),
                     "groups": [],
+                    "principal_id": "human:alice",
                 }
             ]
         ),
@@ -85,14 +84,9 @@ def _settings(
 
 
 def _make_gateway(tmp_path: Path, project: str = _PROJECT) -> RegistaGateway:
-    key_path = tmp_path / f"keys_{project}.json"
-    generate_keyset(key_path)
-    gw = RegistaGateway(
-        InMemoryRegista(project=project, hmac_key_path=str(key_path)),
-        project_name=project,
-    )
-    gw.register_workflow()
-    return gw
+    from conftest import make_v6_gateway
+
+    return make_v6_gateway(tmp_path, project)
 
 
 @pytest.fixture

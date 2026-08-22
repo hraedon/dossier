@@ -12,7 +12,9 @@ from typing import Any, Final, NoReturn, assert_never
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
-from regista import ErrorCode, LifecycleContractError, LifecycleErrorCode, RegistaError, WorkItem
+from regista import ErrorCode as ErrorCode  # type: ignore[attr-defined]
+from regista import LifecycleContractError, LifecycleErrorCode, WorkItem
+from regista import RegistaError as RegistaError  # type: ignore[attr-defined]
 from regista.principal_lifecycle import (
     CustodyMode,
     EffectiveReceipt,
@@ -37,6 +39,7 @@ from .assurance import (
     assurance_label,
     compute_assurance_verdict,
 )
+from .attribution import event_delegation_claim
 from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
@@ -211,6 +214,10 @@ def _http_status_for_lifecycle_error(code: LifecycleErrorCode) -> int:
     if code is LifecycleErrorCode.APPROVAL_EVIDENCE_REQUIRED:
         return status.HTTP_403_FORBIDDEN
     if code is LifecycleErrorCode.RECEIPT_OBSERVED_AT_INVALID:
+        return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.AUTHORITY_REQUIRED:
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    if code is LifecycleErrorCode.AUTHORITY_MISMATCH:
         return status.HTTP_400_BAD_REQUEST
     assert_never(code)
 
@@ -1307,7 +1314,7 @@ def create_app(
         }
 
         try:
-            wi, _ = gw.create_issue(
+            wi, _created_event = gw.create_issue(
                 actor=actor,
                 work_item_type=work_item_type,
                 custom_fields=custom_fields,
@@ -1430,6 +1437,7 @@ def create_app(
                     "principal_id": actor.principal_id,
                     "transition": transition_name,
                     "reason": exc.identity.reason,
+                    "outcome": exc.outcome.value,
                 },
             )
             return _render_issue_detail_error(
@@ -1465,8 +1473,8 @@ def create_app(
                 last_ev = events[-1] if events else None
                 on_behalf_principal: str | None = None
                 if last_ev is not None:
-                    ob = getattr(last_ev, "on_behalf_of", None)
-                    if isinstance(ob, dict):
+                    ob = event_delegation_claim(last_ev)
+                    if ob is not None:
                         pid = ob.get("principal_id")
                         if pid:
                             on_behalf_principal = str(pid)
@@ -2200,6 +2208,28 @@ def create_app(
             )
         try:
             result = gw.submit_possession_proof(operation_id, proof)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(result)
+
+    @app.post(
+        "/admin/p/{project}/lifecycle/{operation_id}/rotation-authorization",
+        response_model=None,
+    )
+    async def submit_rotation_authorization_route(
+        project: str,
+        operation_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        """Submit the superseded key's detached signature for a rotation."""
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        body = _require_json_object(await _read_json(request))
+        signature = _decode_b64(_require_str(body, "old_key_signature"), "old_key_signature")
+        try:
+            result = gw.submit_rotation_authorization(operation_id, signature)
         except LifecycleContractError as exc:
             _handle_lifecycle_error(exc)
         return JSONResponse(result)

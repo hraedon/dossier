@@ -215,6 +215,11 @@ class Settings:
     # LDAP binding posture without constructing an LDAP config (which is strict
     # about server/bind values the doctor has no business requiring).
     ldap_principal_id_attr: str = ""
+    # Estate-wide principal lifecycle writes target this distinct trust-log
+    # project. Empty means the lifecycle capability is not configured; there is
+    # deliberately no implicit fallback to the ordinary work project.
+    trust_log_project: str = ""
+    trust_genesis_path: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -303,6 +308,28 @@ def load_settings(strict: bool = True) -> Settings:
     database_url = _resolve_env("REGISTA_DSN", "DOSSIER_DATABASE_URL")
     project = os.environ.get("DOSSIER_PROJECT", "dossier")
     hmac_key_path = _resolve_env("REGISTA_KEY_PATH", "DOSSIER_HMAC_KEY_PATH")
+    trust_log_project = _resolve_env("REGISTA_TRUST_LOG_PROJECT", "DOSSIER_TRUST_LOG_PROJECT")
+    # Trust-genesis is a suite-wide contract, not a dossier-local alias.
+    trust_genesis_path = os.environ.get("REGISTA_TRUST_GENESIS_PATH", "")
+    trust_values_present = bool(trust_log_project.strip()) or bool(
+        trust_genesis_path.strip()
+    )
+    if trust_values_present and (
+        not trust_log_project.strip() or not trust_genesis_path.strip()
+    ):
+        if strict or env_mode == "prod":
+            raise RuntimeError(
+                "REGISTA_TRUST_LOG_PROJECT and REGISTA_TRUST_GENESIS_PATH must "
+                "be configured together"
+            )
+    if (
+        trust_log_project.strip()
+        and trust_log_project.strip() == project.strip()
+        and (strict or env_mode == "prod")
+    ):
+        raise RuntimeError(
+            "REGISTA_TRUST_LOG_PROJECT must be distinct from DOSSIER_PROJECT"
+        )
     session_secret = os.environ.get("DOSSIER_SESSION_SECRET", "")
     session_max_age_raw = os.environ.get("DOSSIER_SESSION_MAX_AGE_SECONDS", "43200")
     secure_cookies_raw = os.environ.get("DOSSIER_SECURE_COOKIES", "true")
@@ -417,6 +444,8 @@ def load_settings(strict: bool = True) -> Settings:
         database_url=database_url,
         project=project,
         hmac_key_path=hmac_key_path,
+        trust_log_project=trust_log_project,
+        trust_genesis_path=trust_genesis_path,
         session_secret=session_secret,
         session_max_age_seconds=session_max_age_seconds,
         secure_cookies=secure_cookies,

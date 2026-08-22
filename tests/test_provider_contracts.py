@@ -242,7 +242,12 @@ class TestKnowledgeProviderAdapterConformance:
         from dossier.knowledge import KnowledgeProviderAdapter
 
         adapter = KnowledgeProviderAdapter(gateway)
-        alice = Actor(actor_id="alice", actor_kind="human", display_name="Alice")
+        alice = Actor(
+            actor_id="human:alice",
+            actor_kind="human",
+            display_name="Alice",
+            principal_id="human:alice",
+        )
 
         note_id = adapter.create_note(actor=alice, title="Adapter note", body="body")
         assert isinstance(note_id, str)
@@ -395,7 +400,7 @@ class TestGatewaySatisfiesContracts:
         assert isinstance(history, list)
         assert len(history) >= 1
 
-        transitions = gateway.transitions_from("open", 2)
+        transitions = gateway.transitions_from("open", 3)
         assert isinstance(transitions, list)
 
     def test_gateway_identity_provider_methods_return_expected_types(

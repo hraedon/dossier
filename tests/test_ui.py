@@ -159,7 +159,7 @@ def test_json_login_still_works(client):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["actor_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["actor_id"] == "human:alice"
     assert body["display_name"] == "Alice"
 
 

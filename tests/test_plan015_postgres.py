@@ -19,31 +19,37 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from _trust_lifecycle_fixtures import TRUST_ROOT, provision_trust_log
 from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
 from fastapi.testclient import TestClient
 from regista import Regista
 from regista.client_signer import ClientSigner
 from regista.principal_lifecycle import PossessionChallenge
-from regista.testing import InMemoryRegista, drop_project_schema
+from regista.testing import InMemoryRegista, drop_project_schema, make_v6_keyset, open_v6_epoch
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.auth.passwords import hash_password
 from dossier.config import Settings
 from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry, project_to_slug
 
 _DSN = "postgresql://regista_test:regista_test@localhost:5432/regista_test"
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
-_BOB_ID = "22222222-2222-2222-2222-222222222222"
+_ALICE_ID = "human:alice"
+_BOB_ID = "human:bob"
+
+
+def _new_principal(label: str) -> str:
+    return f"human:{label}-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture(scope="module")
 def pg_client(tmp_path_factory):
     key_path = tmp_path_factory.mktemp("pg_keys") / "keys.json"
-    generate_keyset(key_path)
+    principals = (_ALICE_ID, _BOB_ID, TRUST_ROOT)
+    keyset = make_v6_keyset(key_path.parent, principals=principals, filename=key_path.name)
+    work_principals = (_ALICE_ID, _BOB_ID)
     project = f"dossier_plan015_{uuid.uuid4().hex[:8]}"
 
     prev_admin_ids = os.environ.get("DOSSIER_ADMIN_IDS", "")
@@ -55,14 +61,23 @@ def pg_client(tmp_path_factory):
         reg = Regista.create_project(
             _DSN,
             project,
-            hmac_key_path=str(key_path),
+            hmac_key_path=keyset.path,
             approval_verifier=DossierApprovalVerifier("test-session-secret-not-for-prod"),
+        )
+        open_v6_epoch(reg, keyset, principals=work_principals)
+        trust_dir = tmp_path_factory.mktemp("trust_log")
+        trust_reg, trust_genesis_path = provision_trust_log(
+            _DSN,
+            project,
+            keyset,
+            trust_dir,
+            DossierApprovalVerifier("test-session-secret-not-for-prod"),
         )
     except Exception as exc:
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
         pytest.skip(f"Postgres unavailable: {exc}")
 
-    gw = RegistaGateway(reg, project_name=project)
+    gw = RegistaGateway(reg, project_name=project, lifecycle_regista=trust_reg)
     gw.register_workflow()
     InMemoryRegista._catalog.clear()
 
@@ -78,7 +93,9 @@ def pg_client(tmp_path_factory):
         users_path=str(_users_file(tmp_path)),
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
-            # explicit: this fixture exercises features, not authz (WI-017)
+        trust_log_project=f"{project}_trust",
+        trust_genesis_path=str(trust_genesis_path),
+        # explicit: this fixture exercises features, not authz (WI-017)
         project_access_mode="open",
     )
     backend = LocalBackend(_users_file(tmp_path))
@@ -94,6 +111,7 @@ def pg_client(tmp_path_factory):
         InMemoryRegista._catalog.clear()
         gw.close()
         drop_project_schema(_DSN, project)
+        drop_project_schema(_DSN, f"{project}_trust")
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
 
 
@@ -108,6 +126,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _ALICE_ID,
                 },
                 {
                     "stable_id": _BOB_ID,
@@ -115,6 +134,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Bob",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _BOB_ID,
                 },
             ]
         ),
@@ -240,7 +260,7 @@ def test_pg_legacy_enroll_is_fail_closed(pg_client):
     roster_page = pg_client.get("/admin/principals")
     csrf = _extract_csrf(roster_page.text)
 
-    new_principal = f"new-user-{uuid.uuid4().hex[:8]}"
+    new_principal = _new_principal("new-user")
     resp = pg_client.post(
         "/admin/principals/enroll",
         data={"principal_id": new_principal, "csrf_token": csrf},
@@ -256,7 +276,7 @@ def test_pg_legacy_enroll_is_fail_closed(pg_client):
 
 def test_pg_enroll_via_signer_emits_event_and_shows_fingerprint(pg_client):
     """The client-signer enrollment flow registers the key and emits an event."""
-    new_principal = f"new-user-{uuid.uuid4().hex[:8]}"
+    new_principal = _new_principal("new-user")
     _enroll_via_signer(pg_client, new_principal)
 
     _login(pg_client)
@@ -274,7 +294,7 @@ def test_pg_enroll_via_signer_emits_event_and_shows_fingerprint(pg_client):
     assert entry["public_key"] not in roster.text
 
     events = gw.read_principal_enrollment_events(new_principal)
-    enroll_events = [e for e in events if e.transition == "principal_enrolled"]
+    enroll_events = [e for e in events if e.transition == "principal_key_enrolled"]
     assert len(enroll_events) == 1
     payload = enroll_events[0].payload
     assert payload["principal_id"] == new_principal
@@ -284,7 +304,7 @@ def test_pg_enroll_via_signer_emits_event_and_shows_fingerprint(pg_client):
 def test_pg_rotate_is_fail_closed(pg_client):
     # Web key rotation is disabled against real regista until the client-side
     # custody helper can produce a possession proof. See Foundation B.
-    principal = f"rotate-fc-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("rotate-fc")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -311,7 +331,7 @@ def test_pg_rotate_is_fail_closed(pg_client):
 
 
 def test_pg_revoke_key(pg_client):
-    principal = f"revoke-user-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("revoke-user")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -357,9 +377,11 @@ def test_pg_revoke_key(pg_client):
 
     # The durable lifecycle operation committed and emitted a signed event.
     events = gw.read_principal_enrollment_events(principal)
-    revoke_events = [e for e in events if getattr(e, "transition", "") == "principal_revoked"]
+    revoke_events = [
+        e for e in events if getattr(e, "transition", "") == "principal_key_revoked"
+    ]
     assert len(revoke_events) == 1
-    assert revoke_events[0].payload["old_key_id"] == active["key_id"]
+    assert revoke_events[0].payload["key_id"] == active["key_id"]
 
     # No private key material is exposed.
     for event in events:
@@ -370,7 +392,7 @@ def test_pg_revoke_key(pg_client):
 
 def test_pg_revoke_self_approval_rejected_http(pg_client):
     # The same admin cannot initiate and approve a protected revocation.
-    principal = f"revoke-self-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("revoke-self")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -409,7 +431,7 @@ def test_pg_revoke_self_approval_rejected_http(pg_client):
 
 def test_pg_revoke_digest_binding_is_server_authoritative(pg_client):
     # A tampered client-supplied digest is rejected before approval.
-    principal = f"revoke-digest-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("revoke-digest")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -445,12 +467,12 @@ def test_pg_revoke_digest_binding_is_server_authoritative(pg_client):
 
 def test_pg_enroll_idempotent_via_signer(pg_client):
     """The client-signer enrollment produces exactly one enrolled event."""
-    principal = f"idempotent-user-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("idempotent-user")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
     events = gw.read_principal_enrollment_events(principal)
-    enroll_events = [e for e in events if e.transition == "principal_enrolled"]
+    enroll_events = [e for e in events if e.transition == "principal_key_enrolled"]
     assert len(enroll_events) == 1
     first_fingerprint = enroll_events[0].payload["fingerprint"]
 
@@ -462,7 +484,7 @@ def test_pg_enroll_idempotent_via_signer(pg_client):
 
 def test_pg_revoke_principal_lifecycle_returns_receipt_and_revokes(pg_client):
     # Drive the gateway directly so we can inspect the registry receipt.
-    principal = f"revoke-lifecycle-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("revoke-lifecycle")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -514,12 +536,14 @@ def test_pg_revoke_principal_lifecycle_returns_receipt_and_revokes(pg_client):
 
     assert gw.get_principal_key(principal) is None
     events = gw.read_principal_enrollment_events(principal)
-    revoke_events = [e for e in events if getattr(e, "transition", "") == "principal_revoked"]
+    revoke_events = [
+        e for e in events if getattr(e, "transition", "") == "principal_key_revoked"
+    ]
     assert len(revoke_events) == 1
 
 
 def test_pg_revocation_is_idempotent(pg_client):
-    principal = f"revoke-idem-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("revoke-idem")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -549,12 +573,14 @@ def test_pg_revocation_is_idempotent(pg_client):
     )
 
     events = gw.read_principal_enrollment_events(principal)
-    revoke_events = [e for e in events if getattr(e, "transition", "") == "principal_revoked"]
+    revoke_events = [
+        e for e in events if getattr(e, "transition", "") == "principal_key_revoked"
+    ]
     assert len(revoke_events) == 1
 
 
 def test_pg_approve_operation_seam_requires_dual_control(pg_client):
-    principal = f"approve-dual-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("approve-dual")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -610,7 +636,7 @@ def test_pg_approve_operation_seam_requires_dual_control(pg_client):
 
 
 def test_pg_approve_operation_seam_rejects_digest_mismatch(pg_client):
-    principal = f"approve-digest-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("approve-digest")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -650,7 +676,7 @@ def test_pg_approve_operation_seam_rejects_digest_mismatch(pg_client):
 
 def test_pg_lifecycle_contract_error_is_not_500(pg_client):
     # A mismatched digest on the approval seam maps to HTTP 400, not 500.
-    principal = f"lifecycle-http-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("lifecycle-http")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -663,18 +689,18 @@ def test_pg_lifecycle_contract_error_is_not_500(pg_client):
     from dossier.actors import Actor
 
     initiator = Actor(
-        actor_id="initiator-admin",
+        actor_id=_ALICE_ID,
         actor_kind="human",
-        display_name="Initiator",
+        display_name="Alice",
     )
-    lifecycle = gw._reg.principal_lifecycle
+    lifecycle = gw.principal_lifecycle
     request = RevocationRequest(
         principal_id=principal,
         principal_kind=PrincipalKind.HUMAN,
         actor_id=initiator.actor_id,
         key_id=active["key_id"],
         reason="test http mapping",
-        requested_authority="admin",
+        requested_authority="registrar",
         policy_version=CONTRACT_VERSION,
     )
     operation = lifecycle.prepare_revocation(
@@ -693,7 +719,7 @@ def test_pg_lifecycle_contract_error_is_not_500(pg_client):
 
 def test_pg_approve_requires_explicit_digest(pg_client):
     """Approval without an explicit digest is rejected (Fix 2 regression)."""
-    principal = f"approve-nodigest-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("approve-nodigest")
     _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -728,7 +754,7 @@ def test_pg_approve_requires_explicit_digest(pg_client):
 
 def test_pg_approve_rejects_stale_digest(pg_client):
     """Approval with a digest from a different operation is rejected."""
-    principal = f"approve-stale-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("approve-stale")
     prepared = _enroll_via_signer(pg_client, principal)
 
     gw = _gw(pg_client)

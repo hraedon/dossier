@@ -27,8 +27,11 @@ regista's ``same_lineage()`` returns ``False`` when the reviewer's lineage is
 is a fail-open for a UI whose entire point is not over-claiming. dossier does
 not recompute anything to fix this: it takes regista's level plus the
 evidence regista returned, and **downgrades any independence claim that has
-no lineage evidence behind it**, flagging the verdict as degraded. Rendering
-less than the engine claims is always safe; rendering more never is.
+no lineage evidence behind it**, flagging the verdict as degraded. If the
+locked spine does not expose the v6 author-lineage evidence field, dossier
+marks independence as unverifiable rather than reconstructing lineage from
+``actor_metadata``. Rendering less than the engine claims is always safe;
+rendering more never is.
 
 Display vocabulary (unchanged, four levels):
 
@@ -46,7 +49,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from regista import Event, gate_rationale
+from regista import Event as Event  # type: ignore[attr-defined]
+from regista import gate_rationale
 
 # The gate profile dossier renders against. It affects only the ``reason``
 # field (and ``gate_permits_done``), never ``assurance_level`` — dossier is
@@ -71,18 +75,6 @@ _INDEPENDENCE_DOWNGRADE = {
 
 _UNKNOWN_LEVEL = "unreviewed"
 
-# Mirrors ``regista._assurance._REVIEW_VERDICTS`` (regista 0.5.3). regista uses
-# it to decide which events count as *authorship* when collecting author
-# lineages; dossier needs the same partition to answer "did an agent author
-# this item without declaring a lineage?". It is mirrored rather than imported
-# because it is private to regista. If regista adds a verdict, the worst case
-# here is that dossier treats that verdict as authorship and downgrades an
-# independence claim it could have kept — i.e. it fails toward under-claiming.
-_REVIEW_VERDICTS = frozenset(
-    {"accept", "request_changes", "adversarial_pass", "reject", "comment"}
-)
-
-
 @dataclass(frozen=True, slots=True)
 class AssuranceVerdict:
     """What dossier renders, plus the provenance of the answer.
@@ -100,11 +92,16 @@ class AssuranceVerdict:
     degraded: bool
     degradation_reason: str | None
     undeclared_agent_author: bool = False
+    author_lineage_evidence_available: bool = True
 
     @property
     def independence_verifiable(self) -> bool:
         """True when the evidence for an independence claim holds up."""
-        return bool(self.reviewer_lineage) and not self.undeclared_agent_author
+        return (
+            self.author_lineage_evidence_available
+            and bool(self.reviewer_lineage)
+            and not self.undeclared_agent_author
+        )
 
 
 def compute_assurance_verdict(events: Sequence[Event]) -> AssuranceVerdict:
@@ -118,34 +115,23 @@ def compute_assurance_verdict(events: Sequence[Event]) -> AssuranceVerdict:
     """
     event_list = list(events)
     rationale = gate_rationale(event_list, _GATE_PROFILE)
+    declared_by_engine = rationale.get("agent_author_undeclared")
+    author_lineage_evidence_available = isinstance(declared_by_engine, bool)
+    undeclared_agent_author = (
+        bool(declared_by_engine) if author_lineage_evidence_available else False
+    )
     return _verdict_from_rationale(
         rationale,
-        undeclared_agent_author=_has_undeclared_agent_author(event_list),
+        undeclared_agent_author=undeclared_agent_author,
+        author_lineage_evidence_available=author_lineage_evidence_available,
     )
-
-
-def _has_undeclared_agent_author(events: Sequence[Event]) -> bool:
-    """Did an *agent* author this item without declaring a model lineage?
-
-    A human author with no lineage is not a problem — a human and a model are
-    trivially independent. An agent author whose lineage is undeclared is:
-    the reviewer's lineage cannot be shown to differ from it.
-    """
-    for event in events:
-        if getattr(event, "transition", None) in _REVIEW_VERDICTS:
-            continue
-        if getattr(event, "actor_kind", None) != "agent":
-            continue
-        meta = getattr(event, "actor_metadata", None)
-        if not (isinstance(meta, dict) and meta.get("model_lineage")):
-            return True
-    return False
 
 
 def _verdict_from_rationale(
     rationale: dict[str, Any],
     *,
     undeclared_agent_author: bool = False,
+    author_lineage_evidence_available: bool = True,
 ) -> AssuranceVerdict:
     raw_level = rationale.get("assurance_level")
     # AssuranceLevel is a StrEnum; str() gives the wire value either way.
@@ -172,12 +158,15 @@ def _verdict_from_rationale(
                 "dossier build does not know how to render; showing the floor"
             ),
             undeclared_agent_author=undeclared_agent_author,
+            author_lineage_evidence_available=author_lineage_evidence_available,
         )
 
     downgrade = _INDEPENDENCE_DOWNGRADE.get(regista_level)
     if downgrade is not None:
         missing = _missing_independence_evidence(
-            reviewer_lineage, undeclared_agent_author
+            reviewer_lineage,
+            undeclared_agent_author,
+            author_lineage_evidence_available,
         )
         if missing is not None:
             return AssuranceVerdict(
@@ -189,6 +178,7 @@ def _verdict_from_rationale(
                 degraded=True,
                 degradation_reason=missing,
                 undeclared_agent_author=undeclared_agent_author,
+                author_lineage_evidence_available=author_lineage_evidence_available,
             )
 
     return AssuranceVerdict(
@@ -200,14 +190,21 @@ def _verdict_from_rationale(
         degraded=False,
         degradation_reason=None,
         undeclared_agent_author=undeclared_agent_author,
+        author_lineage_evidence_available=author_lineage_evidence_available,
     )
 
 
 def _missing_independence_evidence(
     reviewer_lineage: str | None,
     undeclared_agent_author: bool,
+    author_lineage_evidence_available: bool,
 ) -> str | None:
     """Why an independence claim cannot be verified, or ``None`` if it can."""
+    if not author_lineage_evidence_available:
+        return (
+            "independence not verifiable: regista did not provide the v6 author-"
+            "lineage evidence needed to evaluate the independence claim"
+        )
     if not reviewer_lineage:
         return (
             "independence not verifiable: the reviewer declared no model "

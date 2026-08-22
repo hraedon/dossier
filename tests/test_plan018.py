@@ -19,15 +19,13 @@ from typing import Any
 import pytest
 from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
+from conftest import make_v6_gateway
 from fastapi.testclient import TestClient
 from helpers import AGENT_GLM, ALICE, BOB
-from regista.testing import InMemoryRegista
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
-from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 from dossier.notifications import NotificationEmitter, NotificationEvent, notification_health_check
 from dossier.views import (
@@ -39,7 +37,7 @@ from dossier.views import (
 
 _PROJECT = "dossier_test"
 _PROJECT_SLUG = "dossier-test"
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
+_ALICE_ID = "human:alice"
 
 _PROJECT_A = "dossier_test"
 _PROJECT_B = "cert_watch"
@@ -62,6 +60,7 @@ def _users_file(tmp_path):
                     "display_name": "Alice",
                     "password": _hash_pw("s3cret"),
                     "groups": [],
+                    "principal_id": _ALICE_ID,
                 }
             ]
         ),
@@ -90,12 +89,7 @@ def _settings(tmp_path, **kwargs: Any) -> Settings:
 
 
 def _make_gateway(tmp_path, project_name):
-    key_path = tmp_path / f"keys_{project_name}.json"
-    generate_keyset(key_path)
-    reg = InMemoryRegista(project=project_name, hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg, project_name=project_name)
-    gw.register_workflow()
-    return gw
+    return make_v6_gateway(tmp_path, project_name)
 
 
 def _create_issue_via_ui(client, project_slug, title, **fields):
@@ -327,7 +321,7 @@ def test_my_work_distinguishes_agent_on_behalf(client, gateway, make_issue):
     gw = _gw(client)
 
     agent_for_alice = type(AGENT_GLM)(
-        actor_id="agent-glm",
+        actor_id="agent:glm",
         actor_kind="agent",
         display_name="GLM Agent",
         model_lineage="glm",
@@ -354,7 +348,7 @@ def test_my_work_agent_in_review_shows_under_my_flag(client, gateway, make_issue
     gw = _gw(client)
 
     agent_for_alice = type(AGENT_GLM)(
-        actor_id="agent-glm",
+        actor_id="agent:glm",
         actor_kind="agent",
         display_name="GLM Agent",
         model_lineage="glm",
@@ -436,7 +430,7 @@ def test_activity_feed_filter_by_actor_kind(client, gateway, make_issue):
 
     wi2 = make_issue(title="Agent action", actor=AGENT_GLM)
     agent_for_alice = type(AGENT_GLM)(
-        actor_id="agent-glm",
+        actor_id="agent:glm",
         actor_kind="agent",
         display_name="GLM Agent",
         model_lineage="glm",
@@ -474,7 +468,7 @@ def test_activity_feed_shows_on_behalf(client, gateway, make_issue):
     wi = make_issue(title="On behalf item")
     gw = _gw(client)
     agent_for_alice = type(AGENT_GLM)(
-        actor_id="agent-glm",
+        actor_id="agent:glm",
         actor_kind="agent",
         display_name="GLM Agent",
         model_lineage="glm",
@@ -863,7 +857,7 @@ def test_read_my_work_distinguishes_human_vs_agent(gateway, make_issue):
 def test_read_my_work_agent_on_behalf(gateway, make_issue):
     wi = make_issue(title="Agent on behalf")
     agent_for_alice = type(AGENT_GLM)(
-        actor_id="agent-glm",
+        actor_id="agent:glm",
         actor_kind="agent",
         display_name="GLM Agent",
         model_lineage="glm",
@@ -880,11 +874,11 @@ def test_read_my_work_agent_on_behalf(gateway, make_issue):
 def test_read_my_work_principal_id_with_prefix(gateway, make_issue):
     wi = make_issue(title="Prefixed principal")
     agent_for_alice = type(AGENT_GLM)(
-        actor_id="agent-glm",
+        actor_id="agent:glm",
         actor_kind="agent",
         display_name="GLM Agent",
         model_lineage="glm",
-        on_behalf_of={"principal_id": f"human:{ALICE.actor_id}"},
+        on_behalf_of={"principal_id": ALICE.actor_id},
     )
     gateway.transition(actor=agent_for_alice, work_item_id=wi.work_item_id, transition_name="start")
 

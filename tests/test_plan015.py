@@ -22,9 +22,9 @@ pytestmark = pytest.mark.skipif(
     reason="file-backend key custody is POSIX; Windows uses the DPAPI backend",
 )
 
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
-_SECOND_ADMIN_ID = "22222222-2222-2222-2222-222222222222"
-_NEW_PRINCIPAL_ID = "33333333-3333-3333-3333-333333333333"
+_ALICE_ID = "human:alice"
+_SECOND_ADMIN_ID = "human:second-admin"
+_NEW_PRINCIPAL_ID = "human:new-user"
 
 
 # ---- fixtures ----
@@ -300,9 +300,10 @@ def test_approve_operation_seam_requires_durable_backend(gateway, principal_stor
     from dossier.actors import Actor
 
     approver = Actor(
-        actor_id="second-admin",
+        actor_id="human:second-admin",
         actor_kind="human",
         display_name="Second Admin",
+        principal_id=_SECOND_ADMIN_ID,
     )
     with pytest.raises(LifecycleContractError):
         gateway.approve_operation(
@@ -407,14 +408,15 @@ def test_gateway_custody_never_returns_private_key(gateway, principal_store, tmp
     from dossier.actors import Actor
 
     actor = Actor(
-        actor_id="custody-test-actor",
+        actor_id="human:custody-test-actor",
         actor_kind="human",
         display_name="Custody Test",
+        principal_id="human:custody-test-actor",
         model_lineage=None,
         on_behalf_of=None,
     )
     result = gateway.enroll_principal(
-        "custody-test-principal",
+        "human:custody-test-principal",
         actor=actor,
         private_key_dir=str(tmp_path / "principals"),
     )
@@ -443,12 +445,12 @@ def test_principal_key_manager_stores_private_key(tmp_path):
     from dossier.keys import PrincipalKeyManager
 
     mgr = PrincipalKeyManager(tmp_path / "principals")
-    public_key = mgr.generate_and_store("test-principal")
+    public_key = mgr.generate_and_store("human:test-principal")
     assert len(public_key) == 32
 
     import os
 
-    key_path = tmp_path / "principals" / "test-principal_ed25519.key"
+    key_path = tmp_path / "principals" / "human:test-principal_ed25519.key"
     assert os.path.exists(key_path)
     mode = os.stat(key_path).st_mode & 0o777
     assert mode == 0o600
@@ -506,8 +508,8 @@ def test_key_manifest_written_with_owner_only_permissions(tmp_path):
     key_dir = tmp_path / "principals"
     manifest_path = tmp_path / "keys.json"
     mgr = PrincipalKeyManager(key_dir, key_manifest_path=manifest_path)
-    private_key, _public_key = mgr.generate("test-principal")
-    mgr.store_private_key("test-principal", "pk_test", private_key)
+    private_key, _public_key = mgr.generate("human:test-principal")
+    mgr.store_private_key("human:test-principal", "pk_test", private_key)
 
     assert manifest_path.exists()
     mode = os.stat(manifest_path).st_mode & 0o777

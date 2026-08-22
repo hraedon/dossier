@@ -20,6 +20,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from _trust_lifecycle_fixtures import TRUST_ROOT, provision_trust_log
 from conftest import extract_csrf as _extract_csrf
 from fastapi.testclient import TestClient
 from regista import Regista
@@ -28,26 +29,31 @@ from regista.principal_lifecycle import (
     EffectiveChallenge,
     PossessionChallenge,
 )
-from regista.testing import InMemoryRegista, drop_project_schema
+from regista.testing import InMemoryRegista, drop_project_schema, make_v6_keyset, open_v6_epoch
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.auth.passwords import hash_password
 from dossier.config import Settings
 from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry, project_to_slug
 
 _DSN = "postgresql://regista_test:regista_test@localhost:5432/regista_test"
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
-_BOB_ID = "22222222-2222-2222-2222-222222222222"
-_CHARLIE_ID = "33333333-3333-3333-3333-333333333333"
+_ALICE_ID = "human:alice"
+_BOB_ID = "human:bob"
+_CHARLIE_ID = "human:charlie"
+
+
+def _new_principal(label: str) -> str:
+    return f"human:{label}-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture(scope="module")
 def pg_client(tmp_path_factory):
     key_path = tmp_path_factory.mktemp("pg_keys") / "keys.json"
-    generate_keyset(key_path)
+    principals = (_ALICE_ID, _BOB_ID, _CHARLIE_ID, TRUST_ROOT)
+    keyset = make_v6_keyset(key_path.parent, principals=principals, filename=key_path.name)
+    work_principals = (_ALICE_ID, _BOB_ID, _CHARLIE_ID)
     project = f"dossier_signer_{uuid.uuid4().hex[:8]}"
 
     prev_admin_ids = os.environ.get("DOSSIER_ADMIN_IDS", "")
@@ -59,14 +65,23 @@ def pg_client(tmp_path_factory):
         reg = Regista.create_project(
             _DSN,
             project,
-            hmac_key_path=str(key_path),
+            hmac_key_path=keyset.path,
             approval_verifier=DossierApprovalVerifier("test-session-secret-not-for-prod"),
+        )
+        open_v6_epoch(reg, keyset, principals=work_principals)
+        trust_dir = tmp_path_factory.mktemp("trust_log")
+        trust_reg, trust_genesis_path = provision_trust_log(
+            _DSN,
+            project,
+            keyset,
+            trust_dir,
+            DossierApprovalVerifier("test-session-secret-not-for-prod"),
         )
     except Exception as exc:
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
         pytest.skip(f"Postgres unavailable: {exc}")
 
-    gw = RegistaGateway(reg, project_name=project)
+    gw = RegistaGateway(reg, project_name=project, lifecycle_regista=trust_reg)
     gw.register_workflow()
     InMemoryRegista._catalog.clear()
 
@@ -82,6 +97,8 @@ def pg_client(tmp_path_factory):
         users_path=str(_users_file(tmp_path)),
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
+        trust_log_project=f"{project}_trust",
+        trust_genesis_path=str(trust_genesis_path),
         # explicit: this fixture exercises features, not authz (WI-017)
         project_access_mode="open",
     )
@@ -99,6 +116,7 @@ def pg_client(tmp_path_factory):
         InMemoryRegista._catalog.clear()
         gw.close()
         drop_project_schema(_DSN, project)
+        drop_project_schema(_DSN, f"{project}_trust")
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
 
 
@@ -113,6 +131,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _ALICE_ID,
                 },
                 {
                     "stable_id": _BOB_ID,
@@ -120,6 +139,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Bob",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _BOB_ID,
                 },
                 {
                     "stable_id": _CHARLIE_ID,
@@ -127,6 +147,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Charlie",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _CHARLIE_ID,
                 },
             ]
         ),
@@ -195,6 +216,8 @@ def _possession_challenge(data: dict) -> PossessionChallenge:
         verifier_nonce=data["verifier_nonce"],
         issued_at=datetime.fromisoformat(data["issued_at"]),
         expires_at=datetime.fromisoformat(data["expires_at"]),
+        trust_domain_id=data.get("trust_domain_id"),
+        enrollment_request_digest=data.get("enrollment_request_digest"),
     )
 
 
@@ -274,7 +297,7 @@ def _complete_effective(client: TestClient, signer: ClientSigner, operation_id: 
 
 def test_signer_enrollment_end_to_end(pg_client: TestClient):
     _TRANSCRIPT.clear()
-    principal = f"signer-enroll-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-enroll")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -313,7 +336,7 @@ def test_signer_enrollment_end_to_end(pg_client: TestClient):
 
 
 def test_signer_rotation_end_to_end(pg_client: TestClient):
-    principal = f"signer-rotate-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-rotate")
     signer_v1 = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -343,6 +366,16 @@ def test_signer_rotation_end_to_end(pg_client: TestClient):
     proof = signer_v2.sign_possession(_possession_challenge(rotated["challenge"]))
     resp = _submit_possession(pg_client, rotated["operation_id"], proof.to_dict())
     assert resp.status_code == 200, resp.text
+    old_signature = signer_v1.sign_rotation_authorization(
+        base64.b64decode(resp.json()["old_key_authorization"], validate=True)
+    )
+    resp = pg_client.post(
+        f"/admin/p/{_slug(pg_client)}/lifecycle/{rotated['operation_id']}"
+        "/rotation-authorization",
+        json={"old_key_signature": base64.b64encode(old_signature).decode("ascii")},
+        headers={"X-CSRF-Token": _csrf_token(pg_client)},
+    )
+    assert resp.status_code == 200, resp.text
     _approve_and_commit(pg_client, rotated["operation_id"], rotated["digest"])
     result = _complete_effective(pg_client, signer_v2, rotated["operation_id"])
     assert result["state"] == "effective"
@@ -354,7 +387,7 @@ def test_signer_rotation_end_to_end(pg_client: TestClient):
 
 
 def test_possession_rejects_forged_signature(pg_client: TestClient):
-    principal = f"signer-forge-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-forge")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -370,7 +403,7 @@ def test_possession_rejects_wrong_key_signature(pg_client: TestClient):
     # A structurally valid proof signed by a DIFFERENT key than the one being
     # enrolled must fail verification — the server checks against the
     # operation's public key, not just signature well-formedness.
-    principal = f"signer-wrongkey-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-wrongkey")
     signer = _new_signer(pg_client, principal)
     attacker = _new_signer(pg_client, principal)
 
@@ -388,7 +421,7 @@ def test_possession_rejects_wrong_key_signature(pg_client: TestClient):
 
 
 def test_possession_challenge_replay_rejected(pg_client: TestClient):
-    principal = f"signer-replay-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-replay")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -401,7 +434,7 @@ def test_possession_challenge_replay_rejected(pg_client: TestClient):
 
 
 def test_effective_challenge_rejected_before_commit(pg_client: TestClient):
-    principal = f"signer-earlyeff-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-earlyeff")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -419,7 +452,7 @@ def test_effective_challenge_rejected_before_commit(pg_client: TestClient):
 
 
 def test_effective_receipt_replay_rejected(pg_client: TestClient):
-    principal = f"signer-effreplay-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-effreplay")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -451,7 +484,7 @@ def test_effective_receipt_replay_rejected(pg_client: TestClient):
 
 
 def test_prepare_requires_admin(pg_client: TestClient):
-    principal = f"signer-nonadmin-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-nonadmin")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "charlie")  # not in DOSSIER_ADMIN_IDS
@@ -467,7 +500,7 @@ def test_prepare_requires_admin(pg_client: TestClient):
 
 
 def test_prepare_rejects_malformed_requests(pg_client: TestClient):
-    principal = f"signer-badreq-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-badreq")
     _login_as(pg_client, "alice")
     url = f"/admin/p/{_slug(pg_client)}/lifecycle/enroll/prepare"
 
@@ -508,7 +541,7 @@ def test_prepare_rejects_malformed_requests(pg_client: TestClient):
 
 
 def test_possession_operation_id_mismatch_rejected(pg_client: TestClient):
-    principal = f"signer-mismatch-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-mismatch")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -523,7 +556,7 @@ def test_possession_operation_id_mismatch_rejected(pg_client: TestClient):
 def test_effective_receipt_rejects_future_observed_at(pg_client: TestClient):
     """A receipt with observed_at after the challenge window is rejected by
     regista core chronology validation (RECEIPT_OBSERVED_AT_INVALID → 400)."""
-    principal = f"signer-future-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-future")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -554,7 +587,7 @@ def test_effective_receipt_rejects_future_observed_at(pg_client: TestClient):
 def test_effective_receipt_rejects_predated_observed_at(pg_client: TestClient):
     """A receipt with observed_at before the challenge window is rejected by
     regista core chronology validation (RECEIPT_OBSERVED_AT_INVALID → 400)."""
-    principal = f"signer-predated-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-predated")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")
@@ -585,7 +618,7 @@ def test_effective_receipt_rejects_predated_observed_at(pg_client: TestClient):
 def test_effective_receipt_rejects_naive_observed_at(pg_client: TestClient):
     """A receipt with a timezone-naive observed_at is rejected (dossier parsing
     layer requires timezone-aware timestamps)."""
-    principal = f"signer-naive-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("signer-naive")
     signer = _new_signer(pg_client, principal)
 
     _login_as(pg_client, "alice")

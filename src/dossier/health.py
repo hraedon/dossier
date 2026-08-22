@@ -149,6 +149,7 @@ def build_health(
 
     checks.extend(_tls_checks(settings, prod=prod))
     checks.append(_suite_env_check())
+    checks.append(_principal_lifecycle_check(settings, registry, projects))
     checks.extend(_secrets_backend_checks(settings))
     checks.append(_notification_sink_check(settings))
     checks.append(_project_access_check(settings, prod=prod))
@@ -171,6 +172,114 @@ def build_health(
             "chain_ok": chain_ok,
         },
         "checks": checks,
+    }
+
+
+def _principal_lifecycle_check(
+    settings: Settings,
+    registry: GatewayRegistry,
+    projects: list[str],
+) -> dict[str, Any]:
+    """Report the estate-wide trust-log topology without replaying it.
+
+    Lifecycle writes deliberately use a second Regista project. A partial
+    configuration or a gateway that was built without that handle is therefore
+    an operator-visible gap, not an unavailable feature hidden behind a healthy
+    work-project probe.
+    """
+    trust_project = settings.trust_log_project.strip()
+    genesis_path = settings.trust_genesis_path.strip()
+    if not trust_project and not genesis_path:
+        return {
+            "name": "principal_lifecycle",
+            "status": "skip",
+            "detail": "estate-wide trust-log lifecycle is not configured",
+        }
+    if not trust_project or not genesis_path:
+        missing = []
+        if not trust_project:
+            missing.append("REGISTA_TRUST_LOG_PROJECT")
+        if not genesis_path:
+            missing.append("REGISTA_TRUST_GENESIS_PATH")
+        return {
+            "name": "principal_lifecycle",
+            "status": "fail",
+            "detail": "lifecycle configuration incomplete; missing " + ", ".join(missing),
+        }
+    if trust_project == settings.project:
+        return {
+            "name": "principal_lifecycle",
+            "status": "fail",
+            "detail": "trust-log project must be distinct from the work project",
+        }
+    if not Path(genesis_path).is_file():
+        return {
+            "name": "principal_lifecycle",
+            "status": "fail",
+            "detail": "configured trust-genesis document is not a readable file",
+        }
+    if not projects:
+        return {
+            "name": "principal_lifecycle",
+            "status": "warn",
+            "detail": (
+                f"trust-log project {trust_project!r} configured but no work "
+                "projects were available to probe"
+            ),
+        }
+
+    unconfigured: list[str] = []
+    unreachable: list[str] = []
+    seen_handles: set[int] = set()
+    handle_verifiers: list[Any] = []
+    # The registry owns the gateway instances. Verify each shared lifecycle
+    # handle once, never once per work project, and never substitute a cheap
+    # SELECT 1 for trust-genesis/trust-log agreement.
+    for project in projects:
+        try:
+            gateway = registry.get(project)
+            has_lifecycle_ops = getattr(gateway, "has_lifecycle_ops", None)
+            if not callable(has_lifecycle_ops) or not has_lifecycle_ops():
+                unconfigured.append(project)
+                continue
+            handle_key = getattr(gateway, "lifecycle_handle_key", None)
+            verify_trust = getattr(gateway, "verify_lifecycle_trust", None)
+            if not isinstance(handle_key, int) or not callable(verify_trust):
+                unreachable.append(f"{project} (verification unavailable)")
+                continue
+            if handle_key in seen_handles:
+                continue
+            seen_handles.add(handle_key)
+            handle_verifiers.append(verify_trust)
+        except Exception as exc:
+            unreachable.append(f"{project} ({type(exc).__name__})")
+    if not unreachable and not unconfigured:
+        registry_verifier = getattr(registry, "verify_lifecycle_trust", None)
+        verifiers = [registry_verifier] if callable(registry_verifier) else handle_verifiers
+        for verify_trust in verifiers:
+            try:
+                verify_trust()
+            except Exception as exc:
+                unreachable.append(f"trust-log ({type(exc).__name__})")
+    if unreachable:
+        return {
+            "name": "principal_lifecycle",
+            "status": "fail",
+            "detail": "lifecycle trust-log unreachable for: " + ", ".join(unreachable),
+        }
+    if unconfigured:
+        return {
+            "name": "principal_lifecycle",
+            "status": "fail",
+            "detail": "lifecycle gateway is not configured for: " + ", ".join(unconfigured),
+        }
+    return {
+        "name": "principal_lifecycle",
+        "status": "ok",
+        "detail": (
+            f"trust-log project {trust_project!r} reachable for "
+            f"{len(projects)} work project(s)"
+        ),
     }
 
 
@@ -521,11 +630,12 @@ def _human_signing_check(
 
     A human's acceptance is the signature the whole review gate exists to
     record. When the acting identity has no regista principal bound to it, the
-    write falls through to the *shared* store HMAC key: the event still seals
-    into the chain, `regista verify` reports it as ``unverifiable (symmetric
-    scheme)``, and the record attributes nothing to anyone. Before this check the
-    only place that showed up was an offline bundle verification, long after the
-    acceptance.
+    A legacy backend may fall through to the *shared* store HMAC key: the event
+    still seals into the chain, `regista verify` reports it as ``unverifiable
+    (symmetric scheme)``, and the record attributes nothing to anyone. A clean
+    v6 epoch has no shared write key and refuses the same action. Before this
+    check the gap only showed up in an offline bundle verification, long after
+    the acceptance.
 
     Bounded like the rest of health: it reads the identity source (a local users
     file) and the loaded signing key-set. No chain replay, no directory
@@ -554,7 +664,10 @@ def _human_signing_check(
                     + (
                         "will be refused"
                         if policy == "require"
-                        else "falls back to the shared store key"
+                        else (
+                            "is refused by clean v6 (legacy backends may fall back to "
+                            "the shared store key)"
+                        )
                     )
                     + f". Fix: set it to the directory attribute holding the suite "
                     f"principal_id, then {PROVISION_HINT}"
@@ -595,8 +708,8 @@ def _human_signing_check(
     consequence = (
         "their actions will be refused"
         if policy == "require"
-        else "their actions fall back to the shared store key and cannot be "
-        "attributed to them"
+        else "clean v6 refuses their actions; legacy backends may fall back to "
+        "the shared store key, which cannot attribute them"
     )
     return {
         "name": name,

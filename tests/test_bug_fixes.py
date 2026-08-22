@@ -177,10 +177,8 @@ def test_assurance_no_author_lineage_undeclared_reviewer_is_self_reviewed():
     assert level == "self-reviewed"
 
 
-def test_assurance_no_author_lineage_declared_reviewer_is_independently_reviewed():
-    """Edge case: when the author has no declared lineage (e.g. human author)
-    and the reviewer has a declared model_lineage, the review is cross-lineage
-    — a human author and an agent reviewer are trivially independent."""
+def test_assurance_no_author_lineage_declared_reviewer_stays_conservative():
+    """No author lineage means v6 cannot prove reviewer distinctness."""
     events = [
         _make_event(
             transition="created",
@@ -196,7 +194,7 @@ def test_assurance_no_author_lineage_declared_reviewer_is_independently_reviewed
         ),
     ]
     level = compute_assurance_level(events)
-    assert level == "independently-reviewed"
+    assert level == "self-reviewed"
 
 
 def test_assurance_reject_does_not_set_review_flags():

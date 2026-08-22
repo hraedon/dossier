@@ -251,7 +251,7 @@ def test_invalid_deferred_transition_rejected(gateway, make_issue, transition_na
             actor=AGENT_KIMI,
             work_item_id=wi.work_item_id,
             transition_name="adversarial_pass",
-            payload={"review_note": "pass"},
+            payload={"review_note": "pass", "same_lineage_acknowledged": True},
         )
     elif setup_state == "done":
         gateway.transition(
