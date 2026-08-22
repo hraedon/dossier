@@ -397,6 +397,7 @@ def test_health_fails_for_acl_changed_to_invalid_after_startup(tmp_path: Path) -
     health = build_health(settings, GatewayRegistry(known_projects=[]))
     check = next(c for c in health["checks"] if c["name"] == "project_access")
     assert check["status"] == "fail"
+    assert "project 'x' must be public or name a principal/group" in check["detail"]
 
 
 # ── WI-017: deny-by-default + the bootstrap recovery path ────────────────

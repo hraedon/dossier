@@ -208,6 +208,10 @@ def _cmd_users_add(args: argparse.Namespace) -> int:
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
+    running_health = _read_running_health()
+    if running_health is not None:
+        return _emit_health(running_health, use_json=args.json)
+
     from .config import load_settings
     from .health import build_health
     from .multi import GatewayRegistry
@@ -222,10 +226,42 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     health = build_health(settings, registry)
     registry.close_all()
 
-    if args.json:
+    return _emit_health(health, use_json=args.json)
+
+
+def _read_running_health() -> dict[str, Any] | None:
+    """Read the service's health when it is running; otherwise use local checks."""
+    import urllib.error
+    import urllib.request
+
+    base_url = os.environ.get("DOSSIER_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    try:
+        response = urllib.request.urlopen(f"{base_url}/healthz", timeout=1.0)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 503:
+            return None
+        response = exc
+    except (OSError, ValueError):
+        return None
+    try:
+        payload = json.loads(response.read())
+    except (OSError, ValueError):
+        return None
+    finally:
+        response.close()
+    if not isinstance(payload, dict) or payload.get("component") != "dossier":
+        return None
+    if not isinstance(payload.get("checks"), list):
+        return None
+    return payload
+
+
+def _emit_health(health: dict[str, Any], *, use_json: bool) -> int:
+    if use_json:
         print(json.dumps(health, indent=2))
     else:
         print(f"dossier {health['version']} — component health")
+        print(f"  environment: {health.get('environment', '?')}")
         regista = health["regista"]
         print(
             f"  regista: reachable={regista['reachable']} "

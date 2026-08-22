@@ -185,6 +185,33 @@ def resolve_dsn(value: str | None) -> str | None:
     return str(result)
 
 
+def resolve_session_secret(value: str) -> str:
+    """Resolve a session secret while preserving literal-value compatibility."""
+    if not value:
+        return value
+    prefix = _provider_prefix(value)
+    if prefix is None:
+        return value
+    if prefix == "literal":
+        raise RuntimeError(
+            "literal: is not permitted for the session secret; use a bare value "
+            "for compatibility or env:/file:/vault:/azure: custody"
+        )
+    normalized = _normalize_for_regista(value)
+    try:
+        result: Any = _resolver().resolve_str(normalized)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to resolve session secret: {type(exc).__name__}"
+        ) from None
+    if prefix in _REMOTE_PROVIDERS and result == normalized:
+        raise RuntimeError(
+            f"session secret ref did not resolve — provider '{prefix}' may be "
+            "missing its SDK or the backend is unreachable"
+        )
+    return str(result)
+
+
 def resolve_secret_bytes(value: str | None) -> bytes | None:
     """Resolve a required-ref secret without permitting an implicit literal.
 

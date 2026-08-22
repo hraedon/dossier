@@ -56,10 +56,10 @@ class HumanSigningOutcome(StrEnum):
     FALLBACK_REFUSED = "fallback_refused"
 
 #: Schemes that carry non-repudiation: the signer holds a private key nobody
-#: else has, and a third party can verify with only the public half. Mirrors
-#: regista's ``asymmetric_scheme_ids()`` but is resolved from regista at call
-#: time so a new PQC scheme registered there is honoured here too.
-_FALLBACK_ASYMMETRIC_SCHEMES = frozenset({"ed25519"})
+#: else has, and a third party can verify with only the public half. The locked
+#: regista 0.7.1 public contract exposes Ed25519 for this path; extend this
+#: versioned set only when a future public regista API declares another scheme.
+_ASYMMETRIC_SCHEMES = frozenset({"ed25519"})
 
 #: The provisioning command an operator runs to close the gap. Kept as one
 #: string so the refusal message, the doctor detail, and the docs cannot drift.
@@ -75,13 +75,7 @@ PROVISION_HINT = (
 
 def asymmetric_schemes() -> frozenset[str]:
     """Signing schemes that bind an event to a key only the actor holds."""
-    try:
-        from regista._signing_scheme import asymmetric_scheme_ids
-
-        ids = frozenset(asymmetric_scheme_ids())
-    except Exception:  # pragma: no cover - regista always ships this today
-        return _FALLBACK_ASYMMETRIC_SCHEMES
-    return ids or _FALLBACK_ASYMMETRIC_SCHEMES
+    return _ASYMMETRIC_SCHEMES
 
 
 class _KeyExporter(Protocol):

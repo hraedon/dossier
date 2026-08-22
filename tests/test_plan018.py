@@ -898,6 +898,29 @@ def test_read_activity_feed_excludes_comments(gateway, make_issue):
     assert any(e.transition == "start" for e in entries)
 
 
+def test_read_activity_feed_pushes_transition_filter_to_store(
+    gateway, make_issue, monkeypatch
+):
+    wi = make_issue(title="Filtered activity")
+    gateway.transition(actor=ALICE, work_item_id=wi.work_item_id, transition_name="start")
+    original = gateway.read_recent_events
+    received: dict[str, str | None] = {}
+
+    def read_recent_events(*, limit, actor_id=None, transition=None):
+        received["transition"] = transition
+        return original(limit=limit, actor_id=actor_id, transition=transition)
+
+    monkeypatch.setattr(gateway, "read_recent_events", read_recent_events)
+    entries = read_activity_feed(
+        gateway,
+        _PROJECT_SLUG,
+        transition_filter="start",
+    )
+
+    assert received["transition"] == "start"
+    assert entries and all(entry.transition == "start" for entry in entries)
+
+
 def test_build_digest_empty(gateway):
     digest = build_digest([(_PROJECT_SLUG, gateway)], ALICE.actor_id)
     assert digest["is_empty"] is True

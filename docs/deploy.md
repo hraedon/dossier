@@ -169,7 +169,7 @@ variables explicitly; dossier never falls back to the current work project.
 | `REGISTA_PRODUCER_HARNESS` / `_VERSION` | required process-level v6 producer identity; set to the actual harness and release |
 | `REGISTA_PRODUCER_MODEL` / `_MODEL_LINEAGE` | optional model producer metadata; set both together, or leave both unset |
 | `DOSSIER_PROJECT` / `DOSSIER_PROJECTS` | regista project(s) to front |
-| `DOSSIER_SESSION_SECRET` | signed-cookie secret (>= 32 bytes; never committed) |
+| `DOSSIER_SESSION_SECRET` | signed-cookie secret or backend ref (resolved value >= 32 bytes; never committed) |
 | `DOSSIER_SECURE_COOKIES` | `true` for TLS deploys, `false` for dev |
 | `DOSSIER_AUTH_BACKEND` | `local` (JSON users) or `ldap` (the workplace directory) |
 | `DOSSIER_PROJECT_ACCESS_MODE` | `enforce` (the default, deny-by-default), `audit`, or `open` (explicit opt-in) |
@@ -185,9 +185,14 @@ variables explicitly; dossier never falls back to the current work project.
 | `DOSSIER_LDAP_PRINCIPAL_ID_ATTR` | directory attribute holding each human's regista `principal_id`; unset = LDAP identities are unbound (WI-035) |
 | `DOSSIER_HUMAN_SIGNING` | `require` (refuse a human write that could only be signed with the shared store key — the default in prod) or `warn` (record it, loudly). See the migration below |
 
-Either `REGISTA_DSN` or `REGISTA_KEY_PATH` may be a secret-backend ref
+`REGISTA_DSN`, `REGISTA_KEY_PATH`, and `DOSSIER_SESSION_SECRET` may be secret-backend refs
 (`env:`/`file:`/`vault:`/`azure:`) so no plaintext secret sits on the host
 (Plan 013 WI-4.1). A literal DSN / bare key path passes through unchanged.
+
+The CLI doctor prefers the running service's `/healthz` report at
+`DOSSIER_BASE_URL` (default `http://127.0.0.1:8000`) so it grades the service's
+resolved configuration rather than the caller's environment. If the service is
+unreachable, it falls back to local configuration checks.
 
 ## Health check
 

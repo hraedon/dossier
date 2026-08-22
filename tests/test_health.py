@@ -145,3 +145,73 @@ def test_health_probes_the_separate_principal_lifecycle_gateway(tmp_path):
     body = build_health(settings, _Registry())
     check = next(c for c in body["checks"] if c["name"] == "principal_lifecycle")
     assert check["status"] == "ok"
+
+
+def test_health_annotates_graded_environment(tmp_path):
+    """PR #14: the doctor report states which environment it graded."""
+    from dossier.health import build_health
+
+    class _NoProjects:
+        def list_projects(self):
+            return []
+
+        def get(self, project):
+            raise AssertionError("no projects")
+
+    for mode in ("dev", "prod"):
+        settings = Settings(
+            database_url="",
+            project=_PROJECT,
+            hmac_key_path="",
+            session_secret="test-session-secret-not-for-prod",
+            session_max_age_seconds=43200,
+            secure_cookies=False,
+            require_ssl=False,
+            auth_backend="local",
+            users_path=str(tmp_path / "users.json"),
+            principal_key_dir=str(tmp_path / "principals"),
+            project_access_mode="open",
+            env_mode=mode,  # type: ignore[arg-type]
+        )
+        body = build_health(settings, _NoProjects())
+        assert body["environment"] == mode
+
+
+def test_doctor_grades_unresolvable_session_secret_ref(tmp_path):
+    """PR #14: when a session-secret ref cannot resolve, the doctor grades it
+    as a ``fail`` finding instead of crashing."""
+    from dossier.health import build_health
+
+    settings = Settings(
+        database_url="",
+        project=_PROJECT,
+        hmac_key_path="",
+        session_secret="",
+        session_secret_ref="env:DOSSIER_DEFINITELY_UNSET_SECRET_X9Z",
+        session_max_age_seconds=43200,
+        secure_cookies=False,
+        require_ssl=False,
+        auth_backend="local",
+        users_path=str(tmp_path / "users.json"),
+        principal_key_dir=str(tmp_path / "principals"),
+        project_access_mode="open",
+    )
+
+    class _NoProjects:
+        def list_projects(self):
+            return []
+
+        def get(self, project):
+            raise AssertionError("no projects")
+
+    body = build_health(settings, _NoProjects())
+    secret_check = next(
+        c for c in body["checks"] if c["name"] == "session_secret"
+    )
+    assert secret_check["status"] == "fail"
+    ref_check = next(
+        c for c in body["checks"]
+        if c["name"] == "secrets_backend:DOSSIER_SESSION_SECRET"
+    )
+    assert ref_check["status"] == "fail"
+    assert "unresolvable" in ref_check["detail"]

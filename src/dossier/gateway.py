@@ -7,7 +7,8 @@ import logging
 import re
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, cast
 
 import regista
@@ -141,10 +142,8 @@ class RegistaGateway:
     all work items' ``display_key`` custom fields (a read) — dossier owns no
     counter table. The minted key is stored as a ``display_key`` custom field
     in the regista create event, so the write goes through regista, not a
-    side-channel. A process-level ``threading.Lock`` serializes the
-    mint-then-create operation so two concurrent creates in the same process
-    cannot produce the same key (WI-011). Multi-process deployments still
-    require a regista-side sequence or advisory lock for full correctness.
+    side-channel. A process-level lock and a project-scoped PostgreSQL advisory
+    lock serialize mint-then-create across threads and worker processes.
 
     Because it is the only mutation path, it is also the only place the
     per-actor signing policy can be enforced without leaving a bypass: every
@@ -332,8 +331,8 @@ class RegistaGateway:
         identity = self.human_signing_identity(actor, "create")
         cf = dict(custom_fields) if custom_fields else {}
         if "display_key" not in cf:
-            with self._mint_lock:
-                cf["display_key"] = self._mint_display_key()
+            with self._display_key_lock() as lock_connection:
+                cf["display_key"] = self._mint_display_key(lock_connection)
                 try:
                     result = self._reg.create_work_item(
                         workflow_name=WORKFLOW_NAME,
@@ -362,6 +361,29 @@ class RegistaGateway:
         except RegistaError as exc:
             self._translate_v6_human_signing_error(actor, identity, "create", exc)
             raise
+
+    @contextmanager
+    def _display_key_lock(self) -> Iterator[Any | None]:
+        """Serialize display-key minting within this process and PostgreSQL."""
+        with self._mint_lock:
+            manager = getattr(self._reg, "_mgr", None)
+            connect = getattr(manager, "connect", None)
+            if not callable(connect):
+                yield None
+                return
+            lock_id = int.from_bytes(
+                hashlib.sha256(
+                    f"dossier:display-key:v1:{self._project_name}".encode()
+                ).digest()[:8],
+                byteorder="big",
+                signed=True,
+            )
+            with connect() as conn:
+                conn.execute("SELECT pg_advisory_lock(%s)", [lock_id])
+                try:
+                    yield conn
+                finally:
+                    conn.execute("SELECT pg_advisory_unlock(%s)", [lock_id])
 
     def transition(
         self,
@@ -1313,7 +1335,7 @@ class RegistaGateway:
             cursor = page.cursor
         return keys
 
-    def _mint_display_key(self) -> str:
+    def _mint_display_key(self, connection: Any | None = None) -> str:
         """Mint a ``<PREFIX>-<N>`` display key for a new work item.
 
         ``N`` is ``max(existing sequences) + 1``, where existing sequences are
@@ -1323,22 +1345,33 @@ class RegistaGateway:
         and sanitized to ``[A-Z0-9_]`` (spaces and hyphens become underscores;
         other characters are stripped).
 
-        Must be called under ``self._mint_lock`` to prevent a TOCTOU race
+        Must be called under :meth:`_display_key_lock` to prevent a TOCTOU race
         between the scan and the create.
         """
         prefix = self._display_prefix()
-        existing = self._existing_display_keys()
-        max_n = 0
-        pfx = f"{prefix}-"
-        for key in existing:
-            if key.startswith(pfx):
-                suffix = key[len(pfx) :]
-                try:
-                    n = int(suffix)
-                    if n > max_n:
-                        max_n = n
-                except ValueError:
-                    pass
+        if connection is not None:
+            pattern = f"^{prefix}-([0-9]+)$"
+            row = connection.execute(
+                "SELECT COALESCE(MAX((regexp_match("
+                "custom_fields->>'display_key', %s))[1]::bigint), 0) AS max_sequence "
+                "FROM work_items_current WHERE workflow_name = %s "
+                "AND custom_fields ? 'display_key'",
+                [pattern, WORKFLOW_NAME],
+            ).fetchone()
+            max_n = int(row["max_sequence"])
+        else:
+            existing = self._existing_display_keys()
+            max_n = 0
+            pfx = f"{prefix}-"
+            for key in existing:
+                if key.startswith(pfx):
+                    suffix = key[len(pfx) :]
+                    try:
+                        n = int(suffix)
+                        if n > max_n:
+                            max_n = n
+                    except ValueError:
+                        pass
         return f"{prefix}-{max_n + 1}"
 
     def _display_prefix(self) -> str:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import hmac
 import json
 import logging
@@ -8,21 +7,13 @@ import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, NoReturn, assert_never
+from typing import Any, Final
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
 from regista import ErrorCode as ErrorCode  # type: ignore[attr-defined]
-from regista import LifecycleContractError, LifecycleErrorCode, WorkItem
+from regista import LifecycleContractError, WorkItem
 from regista import RegistaError as RegistaError  # type: ignore[attr-defined]
-from regista.principal_lifecycle import (
-    CustodyMode,
-    EffectiveReceipt,
-    EffectiveReceiptStatus,
-    PossessionProof,
-    PrincipalKind,
-    ProofFormat,
-)
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -33,11 +24,6 @@ from .administration import (
     read_access_policy,
     read_admin_summary,
     read_project_list,
-)
-from .assurance import (
-    assurance_class,
-    assurance_label,
-    compute_assurance_verdict,
 )
 from .attribution import event_delegation_claim
 from .auth.backends import CredentialBackend, Principal
@@ -65,6 +51,7 @@ from .evidence import (
     read_integrity_report,
 )
 from .gateway import RegistaGateway, packaged_workflow_version
+from .issue_views import render_issue_detail
 from .keys import _validate_principal_id
 from .knowledge import (
     NoteDetail,
@@ -74,6 +61,39 @@ from .knowledge import (
     list_notes,
     search_notes,
     verify_note,
+)
+from .lifecycle_http import (
+    decode_b64 as _decode_b64,
+)
+from .lifecycle_http import (
+    decode_public_key as _decode_public_key,
+)
+from .lifecycle_http import (
+    handle_lifecycle_error as _handle_lifecycle_error,
+)
+from .lifecycle_http import (
+    optional_str as _optional_str,
+)
+from .lifecycle_http import (
+    parse_custody_mode as _parse_custody_mode,
+)
+from .lifecycle_http import (
+    parse_effective_receipt as _parse_effective_receipt,
+)
+from .lifecycle_http import (
+    parse_possession_proof as _parse_possession_proof,
+)
+from .lifecycle_http import (
+    parse_principal_kind as _parse_principal_kind,
+)
+from .lifecycle_http import (
+    read_json as _read_json,
+)
+from .lifecycle_http import (
+    require_json_object as _require_json_object,
+)
+from .lifecycle_http import (
+    require_str as _require_str,
 )
 from .multi import GatewayRegistry, project_to_slug, slug_to_project
 from .notifications import (
@@ -178,169 +198,6 @@ def _configure_admin_ids() -> None:
     ids = {s.strip() for s in raw.split(",") if s.strip()}
     _ADMIN_ACTOR_IDS.clear()
     _ADMIN_ACTOR_IDS.update(ids)
-
-
-def _http_status_for_lifecycle_error(code: LifecycleErrorCode) -> int:
-    if code is LifecycleErrorCode.OPERATION_NOT_FOUND:
-        return status.HTTP_404_NOT_FOUND
-    if code is LifecycleErrorCode.APPROVAL_DIGEST_MISMATCH:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.OPERATION_DIGEST_MISMATCH:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.OPERATION_EXPIRED:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.INVALID_OPERATION_STATE:
-        return status.HTTP_409_CONFLICT
-    if code is LifecycleErrorCode.DURABLE_OPERATION_REQUIRED:
-        return status.HTTP_503_SERVICE_UNAVAILABLE
-    if code is LifecycleErrorCode.INVALID_REQUEST:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.UNSUPPORTED_SCHEME:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.CHALLENGE_NOT_FOUND:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.CHALLENGE_EXPIRED:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.CHALLENGE_ALREADY_USED:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.PROOF_BINDING_MISMATCH:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.PROOF_VERIFICATION_FAILED:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.OPERATION_ALREADY_COMMITTED:
-        return status.HTTP_409_CONFLICT
-    if code is LifecycleErrorCode.APPROVER_IS_ACTOR:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.APPROVAL_EVIDENCE_REQUIRED:
-        return status.HTTP_403_FORBIDDEN
-    if code is LifecycleErrorCode.RECEIPT_OBSERVED_AT_INVALID:
-        return status.HTTP_400_BAD_REQUEST
-    if code is LifecycleErrorCode.AUTHORITY_REQUIRED:
-        return status.HTTP_503_SERVICE_UNAVAILABLE
-    if code is LifecycleErrorCode.AUTHORITY_MISMATCH:
-        return status.HTTP_400_BAD_REQUEST
-    assert_never(code)
-
-
-def _handle_lifecycle_error(exc: LifecycleContractError) -> NoReturn:
-    raise HTTPException(
-        _http_status_for_lifecycle_error(exc.code),
-        exc.message,
-    )
-
-
-def _require_json_object(body: Any) -> dict[str, Any]:
-    if not isinstance(body, dict):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "a JSON object body is required")
-    return body
-
-
-def _require_str(body: dict[str, Any], field: str) -> str:
-    value = body.get(field)
-    if not isinstance(value, str) or not value:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{field} is required")
-    return value
-
-
-def _optional_str(body: dict[str, Any], field: str) -> str | None:
-    value = body.get(field)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{field} must be a string")
-    return value
-
-
-def _decode_b64(raw: str, field: str) -> bytes:
-    try:
-        return base64.b64decode(raw, validate=True)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{field} must be base64")
-
-
-def _decode_public_key(raw: str) -> bytes:
-    key = _decode_b64(raw, "public_key")
-    if len(key) != 32:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"public_key must decode to 32 bytes, got {len(key)}",
-        )
-    return key
-
-
-def _parse_possession_proof(body: dict[str, Any]) -> PossessionProof:
-    fmt = _require_str(body, "format")
-    try:
-        proof_format = ProofFormat(fmt)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported proof format {fmt!r}")
-    return PossessionProof(
-        format=proof_format,
-        challenge_id=_require_str(body, "challenge_id"),
-        operation_id=_require_str(body, "operation_id"),
-        operation_digest=_require_str(body, "operation_digest"),
-        signature=_decode_b64(_require_str(body, "signature"), "signature"),
-    )
-
-
-async def _read_json(request: Request) -> Any:
-    try:
-        return await request.json()
-    except json.JSONDecodeError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "a JSON body is required")
-
-
-def _parse_principal_kind(body: dict[str, Any]) -> PrincipalKind:
-    raw = _optional_str(body, "principal_kind") or PrincipalKind.HUMAN.value
-    try:
-        return PrincipalKind(raw)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported principal_kind {raw!r}")
-
-
-def _parse_custody_mode(body: dict[str, Any]) -> str:
-    raw = _optional_str(body, "custody_mode") or CustodyMode.FILE.value
-    try:
-        CustodyMode(raw)
-    except ValueError:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"unsupported custody_mode {raw!r}")
-    return raw
-
-
-def _parse_effective_receipt(body: dict[str, Any]) -> EffectiveReceipt:
-    status_raw = _require_str(body, "status")
-    try:
-        receipt_status = EffectiveReceiptStatus(status_raw)
-    except ValueError:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, f"unsupported receipt status {status_raw!r}"
-        )
-    observed_raw = _require_str(body, "observed_at")
-    try:
-        observed_at = datetime.fromisoformat(observed_raw)
-    except ValueError:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "observed_at must be an ISO-8601 timestamp"
-        )
-    if observed_at.tzinfo is None:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "observed_at must be timezone-aware"
-        )
-    signature_raw = _optional_str(body, "signature")
-    signature = _decode_b64(signature_raw, "signature") if signature_raw else None
-    return EffectiveReceipt(
-        operation_id=_require_str(body, "operation_id"),
-        operation_digest=_require_str(body, "operation_digest"),
-        project=_require_str(body, "project"),
-        principal_id=_require_str(body, "principal_id"),
-        fingerprint=_require_str(body, "fingerprint"),
-        client_type=_require_str(body, "client_type"),
-        client_version=_require_str(body, "client_version"),
-        status=receipt_status,
-        observed_at=observed_at,
-        challenge_id=_optional_str(body, "challenge_id"),
-        signature=signature,
-    )
 
 
 async def _credential_login(
@@ -610,46 +467,17 @@ def create_app(
         wi = gw.get_issue(work_item_id)
         if wi is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
-        events = gw.history(work_item_id)
-        transitions = transitions_for(gw, wi)
-        integrity = gw.integrity(work_item_id=work_item_id)
-        links = gw.list_links(work_item_id)
-
-        event_verifications: dict[int, dict[str, Any]] = {}
-        for i, event in enumerate(events):
-            try:
-                event_verifications[i] = gw.verify_event(event)
-            except Exception:
-                event_verifications[i] = {
-                    "verified": False,
-                    "principal_id": None,
-                    "fingerprint": None,
-                    "scheme": None,
-                }
-        verdict = compute_assurance_verdict(events)
-        assurance = verdict.level
-
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
-        return templates.TemplateResponse(
+        return render_issue_detail(
+            templates,
             request,
-            "issue_detail.html",
-            {
-                **ctx,
-                "issue": wi,
-                "events": events,
-                "transitions": transitions,
-                "integrity_drift": integrity.replayed_drift,
-                "project_slug": project,
-                "links": links,
-                "error": error,
-                "event_verifications": event_verifications,
-                "assurance_level": assurance,
-                "assurance_label": assurance_label(assurance),
-                "assurance_css": assurance_class(assurance),
-                "assurance_verdict": verdict,
-                "signing_downgraded": None,
-            },
+            gw,
+            wi,
+            project_slug=project,
+            context=ctx,
+            transitions=transitions_for(gw, wi),
+            error=error,
             status_code=status_code,
             headers=headers,
         )
@@ -1345,54 +1173,21 @@ def create_app(
         wi = gw.get_issue(work_item_id)
         if wi is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "issue not found")
-        events = gw.history(work_item_id)
-        transitions = transitions_for(gw, wi)
-        integrity = gw.integrity(work_item_id=work_item_id)
-        links = gw.list_links(work_item_id)
-
-        event_verifications: dict[int, dict[str, Any]] = {}
-        for i, event in enumerate(events):
-            try:
-                event_verifications[i] = gw.verify_event(event)
-            except Exception:
-                event_verifications[i] = {
-                    "verified": False,
-                    "principal_id": None,
-                    "fingerprint": None,
-                    "scheme": None,
-                }
-
-        verdict = compute_assurance_verdict(events)
-        assurance = verdict.level
-
         ctx = actor_context(request, actor)
         ctx["current_project"] = slug_to_project(project)
-        return templates.TemplateResponse(
+        return render_issue_detail(
+            templates,
             request,
-            "issue_detail.html",
-            {
-                **ctx,
-                "issue": wi,
-                "events": events,
-                "transitions": transitions,
-                "integrity_drift": integrity.replayed_drift,
-                "project_slug": project,
-                "links": links,
-                "error": None,
-                "event_verifications": event_verifications,
-                "assurance_level": assurance,
-                "assurance_label": assurance_label(assurance),
-                "assurance_css": assurance_class(assurance),
-                "assurance_verdict": verdict,
-                # WI-035: set when the human was redirected here after an action
-                # that could only be signed with the shared store key. The reason
-                # is re-derived rather than trusted from the query string.
-                "signing_downgraded": (
-                    gw.signing_identity(actor).reason
-                    if signing == "downgraded" and actor.actor_kind == "human"
-                    else None
-                ),
-            },
+            gw,
+            wi,
+            project_slug=project,
+            context=ctx,
+            transitions=transitions_for(gw, wi),
+            signing_downgraded=(
+                gw.signing_identity(actor).reason
+                if signing == "downgraded" and actor.actor_kind == "human"
+                else None
+            ),
         )
 
     @app.post("/p/{project}/issues/{work_item_id}/transitions")

@@ -9,9 +9,11 @@ dependencies = [
     # log, actors, and signing. Distribution name is `regista-hraedon` on PyPI
     # (import name remains `regista`). For dev, install editable from sibling:
     #   uv pip install -e ../regista
-    # Dossier consumes the public trust-log verifier and v6 lifecycle authority
-    # APIs introduced in regista 0.7.1. Keep the upper bound inside the 0.x
-    # compatibility line; SUITE.lock pins the exact published artifact.
+    # The temporary pre-v6 >=0.5.4,<0.6 cap protected legacy envelope writes
+    # from resolving to regista 0.6. The clean v6 port now consumes the public
+    # trust-log verifier and lifecycle authority APIs introduced in 0.7.1.
+    # Keep the upper bound inside the 0.x compatibility line; SUITE.lock pins
+    # the exact published artifact.
     "regista-hraedon>=0.7.1,<0.8",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
