@@ -7,9 +7,8 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import extract_csrf, login
+from conftest import extract_csrf, login, make_v6_gateway
 from fastapi.testclient import TestClient
-from regista.testing import InMemoryRegista
 
 from dossier.actors import Actor
 from dossier.app import create_app
@@ -23,7 +22,6 @@ from dossier.authz import (
 from dossier.config import Settings, load_settings
 from dossier.gateway import RegistaGateway
 from dossier.health import build_health
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 
 _ALICE_ID = "11111111-1111-1111-1111-111111111111"
@@ -238,6 +236,7 @@ def _users_path(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": _hash_password("alice-password"),
                     "groups": ["team-a"],
+                    "principal_id": "human:alice",
                 },
                 {
                     "stable_id": _BOB_ID,
@@ -245,6 +244,7 @@ def _users_path(tmp_path: Path) -> Path:
                     "display_name": "Bob",
                     "password": _hash_password("bob-password"),
                     "groups": ["team-b"],
+                    "principal_id": "human:bob",
                 },
             ]
         ),
@@ -254,14 +254,7 @@ def _users_path(tmp_path: Path) -> Path:
 
 
 def _gateway(tmp_path: Path, project: str) -> RegistaGateway:
-    key_path = tmp_path / f"{project}-keys.json"
-    generate_keyset(key_path)
-    gateway = RegistaGateway(
-        InMemoryRegista(project=project, hmac_key_path=str(key_path)),
-        project_name=project,
-    )
-    gateway.register_workflow()
-    return gateway
+    return make_v6_gateway(tmp_path, project)
 
 
 def _settings(

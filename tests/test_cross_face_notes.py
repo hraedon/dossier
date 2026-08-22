@@ -57,7 +57,7 @@ AGENT_NOTES_REFLECTION_PAYLOAD: dict[str, Any] = {
 }
 
 AGENT = Actor(
-    actor_id="agent-notes",
+    actor_id="agent:notes",
     actor_kind="agent",
     display_name="Agent Notes",
     model_lineage="notes",
@@ -191,7 +191,7 @@ class TestDossierReadsAgentNotesPayload:
         # dossier renders the canonical "name" as the title.
         assert note.title == "Adopt token-bucket rate limiting"
         assert note.memory_type == "decision"
-        assert note.actor_id == "agent-notes"
+        assert note.actor_id == "agent:notes"
 
     def test_get_note_detail_renders_agent_notes_payload(
         self, gateway: RegistaGateway
@@ -231,9 +231,9 @@ class TestDossierReadsAgentNotesPayload:
         notes = list_notes(gateway)
         assert len(notes) == 2
         by_title = {n.title: n for n in notes}
-        assert by_title["Dossier note"].actor_id == "alice"
+        assert by_title["Dossier note"].actor_id == "human:alice"
         assert by_title["Dossier note"].memory_type == "note"
-        assert by_title["Adopt token-bucket rate limiting"].actor_id == "agent-notes"
+        assert by_title["Adopt token-bucket rate limiting"].actor_id == "agent:notes"
         assert by_title["Adopt token-bucket rate limiting"].memory_type == "decision"
 
 

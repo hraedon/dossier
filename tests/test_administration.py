@@ -5,7 +5,7 @@ from conftest import login as _login
 from helpers import ALICE
 
 _PROJECT_SLUG = "dossier-test"
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
+_ALICE_ID = "human:alice"
 
 
 @pytest.fixture

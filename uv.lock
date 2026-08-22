@@ -253,7 +253,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "regista-hraedon", specifier = ">=0.5.4,<0.6" },
+    { name = "regista-hraedon", specifier = ">=0.7.1,<0.8" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16,<1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
@@ -984,7 +984,7 @@ wheels = [
 
 [[package]]
 name = "regista-hraedon"
-version = "0.5.4"
+version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "jsonschema" },
@@ -996,9 +996,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "structlog" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/68/ef/1df183aa29f1422b160c78255d894f5b91c752c46fb40daa2c5e059a2717/regista_hraedon-0.5.4.tar.gz", hash = "sha256:ce2d721005b6d52059378b755c821289eddcca77cc5d88749b650da7fd2a05a7", size = 947326, upload-time = "2026-07-29T15:33:15.316Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/96/33/13435932695f05aa1a81621ed1ba5ec9477ca810f9f388c0826c9a019381/regista_hraedon-0.7.1.tar.gz", hash = "sha256:25795e4babc7695ed487a90ab09c0270cc4cb81780bd3e899adc59700c04009b", size = 2276268, upload-time = "2026-08-22T13:32:05.101Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/2f/13922f6a5729306f937cb0e5286b9f92d8f4134d554abd380e8ac41b5b65/regista_hraedon-0.5.4-py3-none-any.whl", hash = "sha256:b4d3890fc9f20f84ce629abf3bad9664f3940819868643dc83c2a48b0cd7c1a6", size = 290267, upload-time = "2026-07-29T15:33:13.849Z" },
+    { url = "https://files.pythonhosted.org/packages/ea/e8/bb64fa6cb94715b7ffc947663fd42ee1c728e24269641ffa4fdfbe38c610/regista_hraedon-0.7.1-py3-none-any.whl", hash = "sha256:a5ea7f27eedfd4b59cbd20e0d9cf652b871268443b9a990ac62cd664d3d3f227", size = 652690, upload-time = "2026-08-22T13:32:06.984Z" },
 ]
 
 [[package]]

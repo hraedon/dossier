@@ -23,10 +23,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from regista import Event, WorkItem
+from regista import Event as Event  # type: ignore[attr-defined]
+from regista import WorkItem
 
 from . import web
 from .assurance import assurance_class, assurance_label, compute_assurance_level
+from .attribution import event_delegation_claim
 from .gateway import RegistaGateway
 
 _REVIEW_STATES = frozenset({"in_review", "in_human_review"})
@@ -147,8 +149,8 @@ def _last_transition_event(events: list[Event]) -> Event | None:
 
 
 def _matches_principal(event: Event, actor_id: str) -> bool:
-    ob = getattr(event, "on_behalf_of", None)
-    if not isinstance(ob, dict):
+    ob = event_delegation_claim(event)
+    if ob is None:
         return False
     pid = ob.get("principal_id")
     if pid is None:
@@ -301,7 +303,7 @@ def read_activity_feed(
         transition=transition_filter,
     )
 
-    wi_cache: dict[uuid.UUID, WorkItem] = {}
+    wi_cache: dict[uuid.UUID, WorkItem | None] = {}
 
     def _get_wi(wid: uuid.UUID) -> WorkItem | None:
         if wid not in wi_cache:
@@ -326,8 +328,8 @@ def read_activity_feed(
 
         session_id: str | None = None
         session_url: str | None = None
-        ob = getattr(ev, "on_behalf_of", None)
-        if isinstance(ob, dict):
+        ob = event_delegation_claim(ev)
+        if ob is not None:
             sid = ob.get("session_id")
             if sid:
                 session_id = str(sid)

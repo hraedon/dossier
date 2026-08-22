@@ -25,14 +25,13 @@ from typing import Any
 import pytest
 from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
+from conftest import make_v6_gateway
 from fastapi.testclient import TestClient
 from regista.testing import InMemoryRegista
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
-from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 from dossier.notifications import (
     EVENT_CLASSES,
@@ -46,7 +45,7 @@ from dossier.notifications import (
 
 _PROJECT = "dossier_test"
 _PROJECT_SLUG = "dossier-test"
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
+_ALICE_ID = "human:alice"
 
 
 def _hash_pw(pw: str) -> str:
@@ -66,6 +65,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": _hash_pw("s3cret"),
                     "groups": [],
+                    "principal_id": "human:alice",
                 }
             ]
         ),
@@ -304,11 +304,7 @@ def test_emit_for_transition_uses_context_aware_deep_link():
 
 def _app(tmp_path, **kwargs):
     settings = _settings(tmp_path, **kwargs)
-    key_path = tmp_path / "keys.json"
-    generate_keyset(key_path)
-    reg = InMemoryRegista(project=_PROJECT, hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg, project_name=_PROJECT)
-    gw.register_workflow()
+    gw = make_v6_gateway(tmp_path, _PROJECT)
     InMemoryRegista._catalog.clear()
     registry = GatewayRegistry(known_projects=[_PROJECT])
     registry.add(_PROJECT, gw)

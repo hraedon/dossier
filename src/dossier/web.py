@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from regista import Event, WorkItem
+from regista import Event as Event  # type: ignore[attr-defined]
+from regista import WorkItem
 
 from .actors import Actor
+from .attribution import event_delegation_claim
 
 _TRANSITION_LABELS: dict[str, str] = {
     "created": "created",
@@ -67,8 +69,8 @@ def actor_display(event: Event) -> str:
 
 
 def on_behalf_display(event: Event) -> str | None:
-    delegation = getattr(event, "on_behalf_of", None)
-    if not isinstance(delegation, dict):
+    delegation = event_delegation_claim(event)
+    if delegation is None:
         return None
     name = delegation.get("principal_display_name")
     if name:

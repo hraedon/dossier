@@ -19,6 +19,7 @@ from pathlib import Path
 import httpx
 import psycopg
 import pytest
+from _trust_lifecycle_fixtures import TRUST_ROOT, provision_trust_log
 from conftest import extract_csrf as _extract_csrf
 from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
@@ -26,27 +27,32 @@ from psycopg import sql
 from regista import Regista
 from regista.client_signer import ClientSigner
 from regista.principal_lifecycle import PossessionChallenge
-from regista.testing import InMemoryRegista, drop_project_schema
+from regista.testing import InMemoryRegista, drop_project_schema, make_v6_keyset, open_v6_epoch
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.auth.passwords import hash_password
 from dossier.config import Settings
 from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry, project_to_slug
 
 _DSN = "postgresql://regista_test:regista_test@localhost:5432/regista_test"
-_ALICE_ID = "11111111-1111-1111-1111-111111111111"
-_BOB_ID = "22222222-2222-2222-2222-222222222222"
+_ALICE_ID = "human:alice"
+_BOB_ID = "human:bob"
 _SESSION_SECRET = "test-session-secret-not-for-prod"
 _SIGNER = TimestampSigner(_SESSION_SECRET)
+
+
+def _new_principal(label: str) -> str:
+    return f"human:{label}-{uuid.uuid4().hex[:8]}"
 
 
 @pytest.fixture(scope="module")
 def pg_client(tmp_path_factory):
     key_path = tmp_path_factory.mktemp("pg_keys") / "keys.json"
-    generate_keyset(key_path)
+    principals = (_ALICE_ID, _BOB_ID, TRUST_ROOT)
+    keyset = make_v6_keyset(key_path.parent, principals=principals, filename=key_path.name)
+    work_principals = (_ALICE_ID, _BOB_ID)
     project = f"dossier_stepup_{uuid.uuid4().hex[:8]}"
 
     prev_admin_ids = os.environ.get("DOSSIER_ADMIN_IDS", "")
@@ -58,14 +64,23 @@ def pg_client(tmp_path_factory):
         reg = Regista.create_project(
             _DSN,
             project,
-            hmac_key_path=str(key_path),
+            hmac_key_path=keyset.path,
             approval_verifier=DossierApprovalVerifier(_SESSION_SECRET),
+        )
+        open_v6_epoch(reg, keyset, principals=work_principals)
+        trust_dir = tmp_path_factory.mktemp("trust_log")
+        trust_reg, trust_genesis_path = provision_trust_log(
+            _DSN,
+            project,
+            keyset,
+            trust_dir,
+            DossierApprovalVerifier(_SESSION_SECRET),
         )
     except Exception as exc:
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
         pytest.skip(f"Postgres unavailable: {exc}")
 
-    gw = RegistaGateway(reg, project_name=project)
+    gw = RegistaGateway(reg, project_name=project, lifecycle_regista=trust_reg)
     gw.register_workflow()
     InMemoryRegista._catalog.clear()
 
@@ -81,6 +96,8 @@ def pg_client(tmp_path_factory):
         users_path=str(_users_file(tmp_path)),
         auth_backend="local",
         principal_key_dir=str(tmp_path / "principals"),
+        trust_log_project=f"{project}_trust",
+        trust_genesis_path=str(trust_genesis_path),
         # explicit: this fixture exercises features, not authz (WI-017)
         project_access_mode="open",
     )
@@ -98,6 +115,7 @@ def pg_client(tmp_path_factory):
         InMemoryRegista._catalog.clear()
         gw.close()
         drop_project_schema(_DSN, project)
+        drop_project_schema(_DSN, f"{project}_trust")
         os.environ["DOSSIER_ADMIN_IDS"] = prev_admin_ids
 
 
@@ -112,6 +130,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _ALICE_ID,
                 },
                 {
                     "stable_id": _BOB_ID,
@@ -119,6 +138,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Bob",
                     "password": hash_password("s3cret"),
                     "groups": [],
+                    "principal_id": _BOB_ID,
                 },
             ]
         ),
@@ -243,11 +263,12 @@ def _approve(client: TestClient, prepared: dict) -> httpx.Response:
 
 
 def _read_step_up_evidence(project: str, operation_id: str) -> dict | None:
+    trust_project = f"{project}_trust"
     with psycopg.connect(_DSN) as conn:
         row = conn.execute(
             sql.SQL(
                 "SELECT step_up_evidence FROM {}.lifecycle_approvals WHERE operation_id = %s"
-            ).format(sql.Identifier(project)),
+            ).format(sql.Identifier(trust_project)),
             [operation_id],
         ).fetchone()
     if row is None or row[0] is None:
@@ -290,7 +311,7 @@ def test_step_up_requires_authenticated_session(pg_client: TestClient):
 
 
 def test_approve_rejected_with_stale_auth_time(pg_client: TestClient):
-    principal = f"stepup-stale-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("stepup-stale")
     prepared = _enrollment_awaiting_approval(pg_client, principal)
 
     _login_as(pg_client, "bob")
@@ -304,7 +325,7 @@ def test_approve_rejected_with_stale_auth_time(pg_client: TestClient):
 
 
 def test_approve_allowed_after_step_up_reentry(pg_client: TestClient):
-    principal = f"stepup-reentry-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("stepup-reentry")
     prepared = _enrollment_awaiting_approval(pg_client, principal)
 
     _login_as(pg_client, "bob")
@@ -321,7 +342,7 @@ def test_approve_allowed_after_step_up_reentry(pg_client: TestClient):
 
 
 def test_step_up_evidence_recorded_on_approval(pg_client: TestClient):
-    principal = f"stepup-evidence-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("stepup-evidence")
     prepared = _enrollment_awaiting_approval(pg_client, principal)
 
     # Bob's fresh login is recent auth; the approval proceeds with evidence.
@@ -366,7 +387,7 @@ def test_step_up_throttled_after_repeated_failures(pg_client: TestClient):
 
 def test_approval_evidence_verified_true_in_database(pg_client: TestClient):
     """The ApprovalVerifier records evidence_verified=true on a valid approval."""
-    principal = f"stepup-verified-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("stepup-verified")
     prepared = _enrollment_awaiting_approval(pg_client, principal)
 
     _login_as(pg_client, "bob")
@@ -377,9 +398,9 @@ def test_approval_evidence_verified_true_in_database(pg_client: TestClient):
     with psycopg.connect(_DSN) as conn:
         row = conn.execute(
             sql.SQL(
-                "SELECT evidence_verified FROM {}.lifecycle_approvals "
-                "WHERE operation_id = %s"
-            ).format(sql.Identifier(_project(pg_client))),
+                    "SELECT evidence_verified FROM {}.lifecycle_approvals "
+                    "WHERE operation_id = %s"
+                ).format(sql.Identifier(f"{_project(pg_client)}_trust")),
             [prepared["operation_id"]],
         ).fetchone()
     assert row is not None
@@ -393,7 +414,7 @@ def test_approval_without_evidence_rejected_by_core(pg_client: TestClient):
 
     from dossier.actors import Actor
 
-    principal = f"stepup-noev-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("stepup-noev")
     prepared = _enrollment_awaiting_approval(pg_client, principal)
 
     gw = _gw(pg_client)
@@ -414,7 +435,7 @@ def test_approval_with_forged_evidence_rejected_by_core(pg_client: TestClient):
 
     from dossier.actors import Actor
 
-    principal = f"stepup-forged-{uuid.uuid4().hex[:8]}"
+    principal = _new_principal("stepup-forged")
     prepared = _enrollment_awaiting_approval(pg_client, principal)
 
     gw = _gw(pg_client)

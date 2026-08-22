@@ -58,7 +58,7 @@ class Actor:
 
 
 SYSTEM_ACTOR = Actor(
-    actor_id="dossier-system",
+    actor_id="service:dossier",
     actor_kind="system",
     display_name="dossier system",
 )

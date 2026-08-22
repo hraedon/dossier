@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -43,6 +44,11 @@ def _on_behalf(session_id: str = _SESSION_ID) -> dict[str, Any]:
         "session_id": session_id,
         "principal_display_name": _PRINCIPAL_DISPLAY,
     }
+
+
+def _agent_for_session(session_id: str) -> Any:
+    """Model the authenticated cairn actor carrying the trusted delegation."""
+    return replace(AGENT_R, on_behalf_of=_on_behalf(session_id))
 
 
 def _session_attestation_payload(session_id: str = _SESSION_ID) -> dict[str, Any]:
@@ -121,15 +127,14 @@ def _tool_call_fail_payload(
 
 
 def _attest_session(gateway, session_id: str = _SESSION_ID) -> Event:
-    return gateway._reg.append_event(
-        work_item_id=uuid.UUID(session_id),
-        actor_id=AGENT_R.actor_id,
-        actor_kind="agent",
-        actor_metadata={"role": "agent", "phase": "session_attestation"},
+    return gateway.append_note_event(
+        actor=_agent_for_session(session_id),
+        entity_id=uuid.UUID(session_id),
         transition="session_attestation",
-        payload=_session_attestation_payload(session_id),
-        on_behalf_of=_on_behalf(session_id),
-        entity_kind="session",
+        payload={
+            **_session_attestation_payload(session_id),
+            "on_behalf_of": _on_behalf(session_id),
+        },
     )
 
 
@@ -141,18 +146,18 @@ def _begin_tool_call(
     session_id: str = _SESSION_ID,
 ) -> uuid.UUID:
     wi, _ = gateway.create_issue(
-        actor=AGENT_R,
+        actor=_agent_for_session(session_id),
         work_item_type="bug",
         custom_fields={"title": f"Tool call: {tool}"},
     )
-    gateway._reg.append_event(
+    gateway.append_work_item_event(
+        actor=_agent_for_session(session_id),
         work_item_id=wi.work_item_id,
-        actor_id=AGENT_R.actor_id,
-        actor_kind="agent",
-        actor_metadata={"role": "agent", "phase": "begin"},
         transition="tool_call_begin",
-        payload=_tool_call_begin_payload(tool=tool, files=files, session_id=session_id),
-        on_behalf_of=_on_behalf(session_id),
+        payload={
+            **_tool_call_begin_payload(tool=tool, files=files, session_id=session_id),
+            "on_behalf_of": _on_behalf(session_id),
+        },
     )
     return wi.work_item_id
 
@@ -168,17 +173,17 @@ def _end_tool_call(
     truncated: bool = False,
     session_id: str = _SESSION_ID,
 ) -> Event:
-    return gateway._reg.append_event(
+    return gateway.append_work_item_event(
+        actor=_agent_for_session(session_id),
         work_item_id=work_item_id,
-        actor_id=AGENT_R.actor_id,
-        actor_kind="agent",
-        actor_metadata={"role": "agent", "phase": "end"},
         transition="tool_call_end",
-        payload=_tool_call_end_payload(
-            tool=tool, files=files, exit_code=exit_code,
-            stdout=stdout, truncated=truncated, session_id=session_id,
-        ),
-        on_behalf_of=_on_behalf(session_id),
+        payload={
+            **_tool_call_end_payload(
+                tool=tool, files=files, exit_code=exit_code,
+                stdout=stdout, truncated=truncated, session_id=session_id,
+            ),
+            "on_behalf_of": _on_behalf(session_id),
+        },
     )
 
 
@@ -190,14 +195,14 @@ def _fail_tool_call(
     error: str = "command failed",
     session_id: str = _SESSION_ID,
 ) -> Event:
-    return gateway._reg.append_event(
+    return gateway.append_work_item_event(
+        actor=_agent_for_session(session_id),
         work_item_id=work_item_id,
-        actor_id=AGENT_R.actor_id,
-        actor_kind="agent",
-        actor_metadata={"role": "agent", "phase": "end"},
         transition="tool_call_fail",
-        payload=_tool_call_fail_payload(tool=tool, error=error, session_id=session_id),
-        on_behalf_of=_on_behalf(session_id),
+        payload={
+            **_tool_call_fail_payload(tool=tool, error=error, session_id=session_id),
+            "on_behalf_of": _on_behalf(session_id),
+        },
     )
 
 
@@ -221,7 +226,7 @@ def _make_event(
         event_id=ev_id,
         work_item_id=wid,
         event_seq=event_seq,
-        actor_id="agent-relay",
+        actor_id="agent:relay",
         actor_kind="agent",
         actor_metadata=None,
         key_id="test-key",
@@ -770,12 +775,8 @@ def test_invalid_signature_makes_the_session_unverified(gateway, monkeypatch):
     assert any("did not verify" in f for f in detail.verification.signature_findings)
 
 
-def test_unregistered_signer_is_attribution_not_failure(gateway):
-    """A sound signature from an unregistered key: intact, but unattributable.
-
-    The in-memory test store signs with an HMAC keyset that is not in the
-    public-key registry, which is exactly this case.
-    """
+def test_registered_v6_signer_is_attributed_without_a_downgrade(gateway):
+    """A v6 fixture accepts every writer key before ordinary events are signed."""
     _attest_session(gateway)
     wid = _begin_tool_call(gateway, tool="Edit")
     _end_tool_call(gateway, wid, tool="Edit")
@@ -786,9 +787,8 @@ def test_unregistered_signer_is_attribution_not_failure(gateway):
     assert v.status == "verified"
     assert v.signature_findings == []
     assert v.signatures_checked == 3
-    assert v.unattributed_signatures == 3
-    assert v.attribution_note is not None
-    assert "cannot" in v.attribution_note
+    assert v.unattributed_signatures == 0
+    assert v.attribution_note is None
 
 
 def test_signature_check_error_is_a_finding(gateway, monkeypatch):
@@ -855,9 +855,9 @@ def test_session_detail_route_renders_the_verification_panel(client, gateway):
     assert "provenance verification" in text
     assert "chain verified" in text
     assert "signatures checked" in text
-    # The attribution gap is stated, not hidden behind the green verdict.
-    assert "attribution" in text
-    assert "public-key registry" in text
+    # The v6 fixture's accepted actor keys are attributable; no legacy HMAC
+    # downgrade should be rendered.
+    assert "public-key registry" not in text
 
 
 def test_session_detail_route_renders_an_unverifiable_session(

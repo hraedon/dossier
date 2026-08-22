@@ -21,6 +21,9 @@ status — the last packaging gap before a team can log in.
 - **regista provision** already run for each project you front (`regista
   provision --project <slug>`). dossier assumes the spine exists and fails with
   an actionable message if it does not (Plan 013 WI-2.2).
+- **An initialized estate trust log** for principal lifecycle operations. The
+  trust-log project is distinct from every work project and is initialized once
+  from the operator-pinned, signed genesis document plus its root seed.
 - **A TLS certificate + key** (operator-provisioned). For a workplace deploy,
   this is an internal-CA or public-CA cert for the host dossier runs on. For a
   local validation, a self-signed pair is fine. **No cert is ever committed.**
@@ -51,6 +54,20 @@ docker compose -f deploy/docker-compose.yml up -d postgres
 regista provision --project dossier        # creates the schema + service role
 # place the HMAC keyset where suite.env's REGISTA_KEY_PATH points:
 regista keys generate --path secrets/dossier-keys.json
+
+# 3a. Provision the estate trust log once (root seed is operator-held; never
+#     commit or place it in the work-project keyset).
+regista provision --project trust-log
+regista --project trust-log trust init-log \
+  --genesis "$REGISTA_TRUST_GENESIS_PATH" \
+  --key /run/secrets/trust-log-root-seed
+
+# 3b. Set the process-level v6 producer identity in suite.env before starting
+#     dossier. Harness + version are required; model + lineage are paired.
+REGISTA_PRODUCER_HARNESS=dossier
+REGISTA_PRODUCER_HARNESS_VERSION=0.1.0
+# REGISTA_PRODUCER_MODEL=MODEL-NAME
+# REGISTA_PRODUCER_MODEL_LINEAGE=MODEL-LINEAGE
 
 # 4. Bring up dossier over TLS.
 docker compose -f deploy/docker-compose.yml up -d --build
@@ -136,12 +153,21 @@ All config is env-driven (process env > `suite.env` > tool default). The
 canonical spine vars are shared across the suite; dossier-specific concerns
 keep their `DOSSIER_*` names.
 
+Principal lifecycle writes are a two-chain operation: dossier's work projects
+remain ordinary v6 project chains, while enrollment, rotation, and revocation
+events are appended to the estate-wide trust-log project. Configure both trust
+variables explicitly; dossier never falls back to the current work project.
+
 | Variable | Purpose |
 |---|---|
 | `DOSSIER_ENV` | `dev` (default) or `prod` — promotes safe defaults and escalates doctor posture gaps (Plan 015 WI-1.1) |
 | `DOSSIER_ALLOWED_HOSTS` | comma-separated allowed Host headers; wires `TrustedHostMiddleware` when set |
 | `REGISTA_DSN` | Postgres DSN (canonical; alias `DOSSIER_DATABASE_URL`) |
 | `REGISTA_KEY_PATH` | HMAC keyset path (canonical; alias `DOSSIER_HMAC_KEY_PATH`) |
+| `REGISTA_TRUST_LOG_PROJECT` | distinct estate-wide trust-log schema for principal lifecycle events |
+| `REGISTA_TRUST_GENESIS_PATH` | operator-pinned signed trust-genesis document for lifecycle authority |
+| `REGISTA_PRODUCER_HARNESS` / `_VERSION` | required process-level v6 producer identity; set to the actual harness and release |
+| `REGISTA_PRODUCER_MODEL` / `_MODEL_LINEAGE` | optional model producer metadata; set both together, or leave both unset |
 | `DOSSIER_PROJECT` / `DOSSIER_PROJECTS` | regista project(s) to front |
 | `DOSSIER_SESSION_SECRET` | signed-cookie secret or backend ref (resolved value >= 32 bytes; never committed) |
 | `DOSSIER_SECURE_COOKIES` | `true` for TLS deploys, `false` for dev |
@@ -178,12 +204,13 @@ unreachable, it falls back to local configuration checks.
   "version": "0.0.1",
   "ok": true,
   "degraded": true,
-  "regista": {"reachable": true, "project": "dossier", "chain_ok": true},
+  "regista": {"reachable": true, "project": "dossier", "chain_ok": null},
   "checks": [
     {"name": "tls", "status": "ok", "detail": "cert=/run/secrets/tls/cert.pem"},
     {"name": "suite_env", "status": "ok", "detail": "loaded /path/to/suite.env"},
     {"name": "auth_backend", "status": "ok", "detail": "ldap configured (bind not checked in health probe)"},
     {"name": "session_secret", "status": "ok", "detail": null},
+    {"name": "principal_lifecycle", "status": "ok", "detail": "trust-log project 'trust-log' reachable for 1 work project(s)"},
     {"name": "secrets_backend", "status": "skip", "detail": "no backend refs configured (plaintext/file path)"}
   ]
 }
@@ -221,9 +248,9 @@ exception — it is deny-by-default in dev too (WI-017). **Set
   recovery path.
 - `human_signing` defaults to `require` (WI-035): a human action that could
   only be signed with the shared store HMAC key is **refused** rather than
-  recorded without attribution. This is the one prod default that can stop a
-  working deployment, so it has a migration — see below — and an explicit
-  escape hatch, `DOSSIER_HUMAN_SIGNING=warn`.
+  recorded without attribution. Clean regista v6 epochs have no shared write
+  key, so `warn` is only a legacy-backend compatibility mode; on v6 it logs the
+  attempted downgrade and refuses too.
 - The doctor escalates posture gaps from `warn` to `fail` in prod: open
   access, missing TLS, missing/short session secret, missing `users_path` for
   the local backend, and unbound human signing identities. In dev these remain
@@ -247,8 +274,9 @@ chain came out as `unverifiable (symmetric scheme)`. The rationale is in
 [provenance-model.md](provenance-model.md); this is the operational path.
 
 **Upgrading changes nothing until you bind an identity.** An unbound identity keeps
-the `actor_id` it always had. What changes is that the downgrade is now reported —
-and, under `DOSSIER_ENV=prod`, refused. So do this in order.
+the `actor_id` it always had. On a legacy backend, `warn` reports the downgrade
+while provisioning is in progress; on a clean v6 epoch the write is refused in
+every posture until it is bound. So do this in order.
 
 ### 1. See where you stand
 
@@ -270,9 +298,10 @@ cannot refuse an acceptance before anyone has a key:
 DOSSIER_HUMAN_SIGNING=warn
 ```
 
-Every human write still works, and each one that falls back logs
+On a legacy backend, each fallback logs
 `provenance.human_signature_downgraded` and returns
-`X-Dossier-Human-Signing: downgraded`.
+`X-Dossier-Human-Signing: downgraded`. A clean v6 epoch refuses the write after
+logging the attempted downgrade, so operators must provision before accepting work.
 
 ### 3. Provision a signing key per human
 
@@ -349,15 +378,15 @@ artifact + local validation is delivered; the live validation is owner-gated:
 - **Real certificate provisioning** — the cert+key pair. Self-signed is used
   for local validation; production uses a CA-signed cert.
 
-## Multi-worker lifecycle challenges: schema 44 / DURABLE_ONE_USE required
+## Multi-worker lifecycle challenges: schema 50 / DURABLE_ONE_USE required
 
 The key-lifecycle exchange (enrollment, rotation, effective-use) requires
 `ChallengeStorageScope.DURABLE_ONE_USE` for multi-worker correctness: challenges
-are persisted to the database (schema ≥ 44) and rehydratable by any worker.
+are persisted to the database (schema ≥ 50) and rehydratable by any worker.
 This is the **only supported path** for production multi-worker deployments.
 
 **Requirement:** the `SUITE.lock` `[spine].version` must pin a regista release
-that ships schema 44 and `DURABLE_ONE_USE`. If the pinned release exposes only
+that ships schema 50 and `DURABLE_ONE_USE`. If the pinned release exposes only
 `PROCESS_LOCAL_FOUNDATION`, multi-worker deployment is **not supported** and
 the operator must run a single worker (`--workers 1`) until the spine is
 upgraded. Sticky sessions are not a supported workaround — they mask a

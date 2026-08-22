@@ -5,18 +5,42 @@ import json
 import pytest
 from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
+from conftest import make_v6_gateway
 from fastapi.testclient import TestClient
-from regista.testing import InMemoryRegista
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
-from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 
 _PROJECT_A = "dossier_test"
 _PROJECT_B = "cert_watch"
+
+
+def test_lifecycle_trust_verification_caches_success(monkeypatch):
+    """Frequent health polls must not replay the whole trust log each time."""
+    from types import SimpleNamespace
+
+    calls = 0
+
+    class _Lifecycle:
+        def verify_trust_log(self):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(verified=True)
+
+    ticks = iter((10.0, 10.0, 20.0, 41.0, 41.0))
+    monkeypatch.setattr("dossier.multi.time.monotonic", lambda: next(ticks))
+    registry = GatewayRegistry(known_projects=[_PROJECT_A])
+    registry._lifecycle_regista = _Lifecycle()
+
+    first = registry.verify_lifecycle_trust(max_age_seconds=30)
+    second = registry.verify_lifecycle_trust(max_age_seconds=30)
+    third = registry.verify_lifecycle_trust(max_age_seconds=30)
+
+    assert first is second
+    assert third.verified is True
+    assert calls == 2
 
 
 def _hash_pw(pw: str) -> str:
@@ -36,6 +60,7 @@ def _users_file(tmp_path):
                     "display_name": "Alice",
                     "password": _hash_pw("s3cret"),
                     "groups": [],
+                    "principal_id": "human:alice",
                 }
             ]
         ),
@@ -62,12 +87,7 @@ def _settings(tmp_path):
 
 
 def _make_gateway(tmp_path, project_name):
-    key_path = tmp_path / f"keys_{project_name}.json"
-    generate_keyset(key_path)
-    reg = InMemoryRegista(project=project_name, hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg, project_name=project_name)
-    gw.register_workflow()
-    return gw
+    return make_v6_gateway(tmp_path, project_name)
 
 
 @pytest.fixture

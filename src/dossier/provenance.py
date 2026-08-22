@@ -7,7 +7,7 @@ channels (Plan 017 principle: "render the record, don't re-derive it").
 
 cairn attests into its own regista project:
 
-- ``session_attestation`` events (``entity_kind="session"``) carry the
+- ``session_attestation`` events (``entity_kind="note"``) carry the
   harness name/version, principal (``on_behalf_of``), and scope statement.
 - ``tool_call_begin``/``end``/``fail`` events are bound to cairn-managed work
   items, with ``on_behalf_of`` carrying ``session_id`` + ``principal_id``.
@@ -29,8 +29,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from regista import Event
+from regista import Event as Event  # type: ignore[attr-defined]
 
+from .attribution import event_delegation_claim
 from .gateway import RegistaGateway
 
 _TOOL_CALL_TRANSITIONS = frozenset({
@@ -180,8 +181,8 @@ class SessionDetail:
 
 
 def extract_session_id(event: Event) -> str | None:
-    ob = getattr(event, "on_behalf_of", None)
-    if isinstance(ob, dict):
+    ob = event_delegation_claim(event)
+    if ob is not None:
         sid = ob.get("session_id")
         if sid:
             return str(sid)
@@ -194,8 +195,8 @@ def extract_session_id(event: Event) -> str | None:
 
 
 def extract_principal(event: Event) -> tuple[str, str | None]:
-    ob = getattr(event, "on_behalf_of", None)
-    if isinstance(ob, dict):
+    ob = event_delegation_claim(event)
+    if ob is not None:
         pid = ob.get("principal_id")
         display = ob.get("principal_display_name")
         if pid:

@@ -56,6 +56,10 @@ def http_status_for_lifecycle_error(code: LifecycleErrorCode) -> int:
         return status.HTTP_403_FORBIDDEN
     if code is LifecycleErrorCode.RECEIPT_OBSERVED_AT_INVALID:
         return status.HTTP_400_BAD_REQUEST
+    if code is LifecycleErrorCode.AUTHORITY_REQUIRED:
+        return status.HTTP_503_SERVICE_UNAVAILABLE
+    if code is LifecycleErrorCode.AUTHORITY_MISMATCH:
+        return status.HTTP_400_BAD_REQUEST
     assert_never(code)
 
 

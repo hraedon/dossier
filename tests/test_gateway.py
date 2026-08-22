@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import pytest
 import regista
+from conftest import make_v6_gateway
 from helpers import ALICE, BOB, CAROL, DAVE
 
-from dossier.gateway import WORKFLOW_NAME, packaged_workflow_yaml
+from dossier.gateway import WORKFLOW_NAME, RegistaGateway, packaged_workflow_yaml
 
 
 def test_gateway_registers_regista_canonical_verbatim():
@@ -14,6 +16,103 @@ def test_gateway_registers_regista_canonical_verbatim():
     assert WORKFLOW_NAME == "canonical"
 
 
+def test_principal_registry_writes_use_the_lifecycle_project():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    work_reg = SimpleNamespace(principals=MagicMock())
+    lifecycle_reg = SimpleNamespace(principals=MagicMock())
+    gateway = RegistaGateway(
+        work_reg,
+        project_name="work",
+        lifecycle_regista=lifecycle_reg,
+    )
+
+    gateway._generate_and_register("service:example")
+
+    lifecycle_reg.principals.register.assert_called_once()
+    work_reg.principals.register.assert_not_called()
+
+
+def test_delegation_claim_is_authoritative_and_payload_is_not_mutated():
+    from dossier.actors import Actor
+    from dossier.attribution import authoritative_payload
+
+    actor = Actor(
+        actor_id="agent:trusted",
+        actor_kind="agent",
+        display_name="Trusted agent",
+        on_behalf_of={"principal_id": "human:trusted", "session_id": "s-1"},
+    )
+    caller_payload = {
+        "on_behalf_of": {"principal_id": "human:attacker"},
+        "review_note": "accepted",
+    }
+
+    result = authoritative_payload(actor, caller_payload)
+
+    assert result == {
+        "on_behalf_of": {"principal_id": "human:trusted", "session_id": "s-1"},
+        "review_note": "accepted",
+    }
+    assert caller_payload["on_behalf_of"] == {"principal_id": "human:attacker"}
+
+
+def test_delegation_claim_is_stripped_when_actor_has_none():
+    from dossier.actors import Actor
+    from dossier.attribution import authoritative_payload
+
+    result = authoritative_payload(
+        Actor(actor_id="human:trusted", actor_kind="human", display_name="Human"),
+        {"on_behalf_of": {"principal_id": "human:attacker"}, "body": "comment"},
+    )
+
+    assert result == {"body": "comment"}
+
+
+def test_durable_lifecycle_prepares_require_a_real_actor():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from regista import LifecycleContractError, LifecycleErrorCode
+
+    from dossier.actors import SYSTEM_ACTOR
+
+    lifecycle = SimpleNamespace(principal_lifecycle=MagicMock())
+    gateway = RegistaGateway(
+        MagicMock(),
+        project_name="work",
+        lifecycle_regista=lifecycle,
+    )
+
+    for actor in (None, SYSTEM_ACTOR):
+        with pytest.raises(LifecycleContractError) as exc_info:
+            gateway.prepare_enrollment_with_key(
+                "human:target",
+                b"0" * 32,
+                actor=actor,
+            )
+        assert exc_info.value.code is LifecycleErrorCode.INVALID_REQUEST
+    lifecycle.principal_lifecycle.prepare_enrollment.assert_not_called()
+
+
+def test_lifecycle_health_uses_registas_public_trust_verifier():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    trust_verifier = MagicMock()
+    lifecycle = SimpleNamespace(verify_trust_log=trust_verifier)
+    gateway = RegistaGateway(
+        MagicMock(),
+        project_name="work",
+        lifecycle_regista=lifecycle,
+    )
+
+    gateway.verify_lifecycle_trust()
+
+    trust_verifier.assert_called_once_with()
+
+
 def test_create_and_history(gateway, make_issue):
     wi = make_issue(actor=ALICE, assignee="bob", priority="high")
     gateway.transition(actor=BOB, work_item_id=wi.work_item_id, transition_name="start")
@@ -22,30 +121,30 @@ def test_create_and_history(gateway, make_issue):
     transitions = [e.transition for e in events]
     assert transitions == ["created", "start", "comment"]
     assert all(e.actor_kind in {"human", "agent", "system"} for e in events)
-    assert events[0].actor_id == "alice"
-    assert events[1].actor_id == "bob"
+    assert events[0].actor_id == "human:alice"
+    assert events[1].actor_id == "human:bob"
 
 
 def test_history_events_carry_actor_kind_and_on_behalf_of(gateway, make_issue):
     from dossier.actors import Actor
 
     delegating = Actor(
-        actor_id="agent-7",
+        actor_id="agent:seven",
         actor_kind="agent",
         display_name="Agent Seven",
         on_behalf_of={
             "principal_kind": "human",
-            "principal_id": "alice",
+            "principal_id": "human:alice",
             "principal_display_name": "Alice",
         },
     )
     wi = make_issue(actor=ALICE)
     gateway.transition(actor=delegating, work_item_id=wi.work_item_id, transition_name="start")
     events = gateway.history(wi.work_item_id)
-    agent_event = next(e for e in events if e.actor_id == "agent-7")
+    agent_event = next(e for e in events if e.actor_id == "agent:seven")
     assert agent_event.actor_kind == "agent"
-    assert agent_event.on_behalf_of is not None
-    assert agent_event.on_behalf_of["principal_id"] == "alice"
+    assert agent_event.on_behalf_of is None
+    assert agent_event.payload["on_behalf_of"]["principal_id"] == "human:alice"
 
 
 def test_list_issues_filters_by_state_and_assignee(gateway, make_issue):
@@ -117,29 +216,7 @@ def test_display_key_not_overwritten_if_provided(gateway):
 
 
 def test_display_key_sanitizes_project_name(tmp_path):
-    import base64
-    import json
-    import secrets
-
-    from helpers import ALICE
-    from regista.testing import InMemoryRegista
-
-    from dossier.gateway import RegistaGateway
-
-    key_file = tmp_path / "keys.json"
-    key_file.write_text(json.dumps({
-        "keys": [
-            {
-                "key_id": "k",
-                "secret": base64.b64encode(secrets.token_bytes(32)).decode(),
-                "status": "active",
-                "scheme": "hmac-sha256",
-            }
-        ]
-    }))
-    reg = InMemoryRegista(project="agent-notes project!", hmac_key_path=str(key_file))
-    gw = RegistaGateway(reg, project_name="agent-notes project!")
-    gw.register_workflow()
+    gw = make_v6_gateway(tmp_path, "agent-notes project!")
     wi, _ = gw.create_issue(
         actor=ALICE, work_item_type="bug", custom_fields={"title": "Sanitize test"}
     )

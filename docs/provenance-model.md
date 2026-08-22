@@ -33,8 +33,11 @@ it.
 The review-assurance level — "was this self-reviewed, independently reviewed, or
 human-accepted?" — is a **provenance judgment**, so it belongs to the engine, not
 the face. dossier calls `regista.gate_rationale(events, "strict")` (regista's
-public API since 0.5.3, regista Plan 027) and renders the answer. `SUITE.lock`'s
-spine version and `pyproject.toml`'s floor are both `0.5.4` for this reason.
+public API since 0.5.3, regista Plan 027) and renders the answer. The runtime
+floor is `regista-hraedon>=0.7.1,<0.8` because dossier also consumes the public
+trust-log verification and lifecycle authority APIs. The exact `SUITE.lock`
+version/SHA pins the published 0.7.1 release pair
+until regista 0.7.1 is published.
 
 `src/dossier/assurance.py` is the only seam. It does two things and nothing else:
 
@@ -152,11 +155,12 @@ event.
 - **`require`** (the default when `DOSSIER_ENV=prod`) — the write is **refused**
   before anything is appended. The response is a `409` whose body names the identity,
   what is missing, and the provisioning command.
-- **`warn`** (the default outside prod, and the migration escape hatch) — the write is
-  recorded, and the downgrade is reported in four places: a
+- **`warn`** (the default outside prod, and a legacy migration escape hatch) — older
+  backends may record the write, with the downgrade reported in four places: a
   `provenance.human_signature_downgraded` WARNING, an
   `X-Dossier-Human-Signing: downgraded` response header, a callout on the issue page,
-  and the `human_signing` doctor check.
+  and the `human_signing` doctor check. A clean regista v6 epoch has no shared write
+  key, so dossier logs the attempted downgrade and refuses the write instead.
 
 Refusal is the default in production because the alternative is worse than an outage.
 A refused acceptance is a visible, recoverable operational problem with a named fix.

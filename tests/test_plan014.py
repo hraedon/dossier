@@ -16,15 +16,13 @@ import uuid
 import pytest
 from conftest import extract_csrf as _extract_csrf
 from conftest import login as _login
+from conftest import make_v6_gateway
 from fastapi.testclient import TestClient
 from helpers import AGENT_GLM, ALICE, BOB, CAROL
-from regista.testing import InMemoryRegista
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
-from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 
 _PROJECT_A = "dossier_test"
@@ -52,6 +50,7 @@ def _users_file(tmp_path):
                     "display_name": "Alice",
                     "password": _hash_pw("s3cret"),
                     "groups": [],
+                    "principal_id": "human:alice",
                 }
             ]
         ),
@@ -78,12 +77,7 @@ def _settings(tmp_path):
 
 
 def _make_gateway(tmp_path, project_name):
-    key_path = tmp_path / f"keys_{project_name}.json"
-    generate_keyset(key_path)
-    reg = InMemoryRegista(project=project_name, hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg, project_name=project_name)
-    gw.register_workflow()
-    return gw
+    return make_v6_gateway(tmp_path, project_name)
 
 
 @pytest.fixture
@@ -427,7 +421,7 @@ def test_issue_detail_assurance_level_self_reviewed(client):
     from dossier.actors import Actor
 
     agent_glm_2 = Actor(
-        actor_id="agent-glm-2",
+            actor_id="agent:glm-2",
         actor_kind="agent",
         display_name="GLM Agent 2",
         model_lineage="glm",

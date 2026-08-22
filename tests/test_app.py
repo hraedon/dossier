@@ -33,11 +33,11 @@ def test_login_flow_sets_actor(client):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["actor_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["actor_id"] == "human:alice"
     assert body["display_name"] == "Alice"
 
     me = client.get("/me").json()
-    assert me["actor_id"] == "11111111-1111-1111-1111-111111111111"
+    assert me["actor_id"] == "human:alice"
     assert me["actor_kind"] == "human"
     assert me["display_name"] == "Alice"
     assert me["on_behalf_of"] is None
@@ -159,11 +159,11 @@ def test_spoof_prevention_body_cannot_set_actor(client):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["actor_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["actor_id"] == "human:alice"
     assert body["actor_id"] != "attacker"
 
     me = client.get("/me").json()
-    assert me["actor_id"] == "11111111-1111-1111-1111-111111111111"
+    assert me["actor_id"] == "human:alice"
     assert me["actor_kind"] == "human"
     assert me["actor_kind"] != "system"
     assert me["on_behalf_of"] is None
@@ -183,7 +183,7 @@ def test_spoof_prevention_header_cannot_set_actor(client):
     me = client.get("/me", headers={"actor_id": "attacker", "actor_kind": "system"})
     assert me.status_code == 200
     body = me.json()
-    assert body["actor_id"] == "11111111-1111-1111-1111-111111111111"
+    assert body["actor_id"] == "human:alice"
     assert body["actor_kind"] == "human"
     assert body["on_behalf_of"] is None
 

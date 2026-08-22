@@ -9,7 +9,8 @@ them:
 
 1. Set `AGENT_SUITE_CONFIG` to the intended `suite.env` (or use the default
    `~/.config/agent-suite/suite.env`). It must define `REGISTA_DSN`,
-   `REGISTA_KEY_PATH`, `DOSSIER_SESSION_SECRET`, `DOSSIER_PROJECTS`,
+    `REGISTA_KEY_PATH`, `REGISTA_TRUST_LOG_PROJECT`,
+    `REGISTA_TRUST_GENESIS_PATH`, `DOSSIER_SESSION_SECRET`, `DOSSIER_PROJECTS`,
    `DOSSIER_ADMIN_PRINCIPALS`, and the `DOSSIER_LDAP_*` launch settings.
    The LDAP CA path must exist locally; generation fails closed if it does not.
 2. Run `python scripts/gen-k8s-secret.py`. It writes two Secret manifests and

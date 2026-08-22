@@ -11,19 +11,37 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from helpers import ALICE
-from regista.testing import InMemoryRegista
+from regista.testing import InMemoryRegista, make_v6_keyset, open_v6_epoch
 
 from dossier.app import create_app
 from dossier.auth.backends import LocalBackend
 from dossier.config import Settings
 from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 from dossier.multi import GatewayRegistry
 
 _CRLF_RE = re.compile(r'name="csrf_token"\s+value="([^"]+)"')
 
 _PROJECT = "dossier_test"
 _PROJECT_SLUG = "dossier-test"
+
+# Every principal used by the shared in-memory integration fixture is explicit.
+# The v6 helper intentionally does not infer acceptances from keyset contents.
+_TEST_PRINCIPALS = (
+    "human:alice",
+    "human:bob",
+    "human:carol",
+    "human:dave",
+    "agent:relay",
+    "agent:glm",
+    "agent:kimi",
+    "agent:notes",
+    "agent:seven",
+    "agent:glm-2",
+    "agent:author",
+    "agent:reviewer",
+    "agent:undeclared",
+    "agent:anonymous",
+)
 
 
 def extract_csrf(html: str) -> str:
@@ -45,13 +63,29 @@ def login(client: TestClient, username: str = "alice", password: str = "s3cret")
     return csrf
 
 
+def make_v6_gateway(
+    tmp_path: Path,
+    project: str = _PROJECT,
+    *,
+    principals: tuple[str, ...] = _TEST_PRINCIPALS,
+    human_signing: str = "warn",
+) -> RegistaGateway:
+    """Build a provisioned in-memory v6 gateway for integration tests."""
+    keyset = make_v6_keyset(
+        tmp_path,
+        principals=principals,
+        filename=f"keys_{project}.json",
+    )
+    reg = InMemoryRegista(project=project, hmac_key_path=keyset.path)
+    open_v6_epoch(reg, keyset, principals=principals)
+    gw = RegistaGateway(reg, project_name=project, human_signing=human_signing)  # type: ignore[arg-type]
+    gw.register_workflow()
+    return gw
+
+
 @pytest.fixture
 def gateway(tmp_path):
-    key_path = tmp_path / "keys.json"
-    generate_keyset(key_path)
-    reg = InMemoryRegista(project=_PROJECT, hmac_key_path=str(key_path))
-    gw = RegistaGateway(reg, project_name=_PROJECT)
-    gw.register_workflow()
+    gw = make_v6_gateway(tmp_path)
     InMemoryRegista._catalog.clear()
     yield gw
     InMemoryRegista._catalog.clear()
@@ -89,6 +123,7 @@ def _users_file(tmp_path: Path) -> Path:
                     "display_name": "Alice",
                     "password": _hash_pw("s3cret"),
                     "groups": [],
+                    "principal_id": "human:alice",
                 }
             ]
         ),

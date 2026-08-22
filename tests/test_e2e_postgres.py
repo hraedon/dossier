@@ -7,7 +7,6 @@ import pytest
 from dossier.auth.backends import Principal
 from dossier.auth.resolver import principal_to_actor
 from dossier.gateway import RegistaGateway
-from dossier.keys import generate_keyset
 
 pytestmark = pytest.mark.postgres
 
@@ -16,20 +15,27 @@ DSN = "postgresql://regista_test:regista_test@localhost:5432/regista_test"
 
 def _human(stable_id, display_name):
     return principal_to_actor(
-        Principal(stable_id=stable_id, display_name=display_name, source="local")
+        Principal(
+            stable_id=stable_id,
+            display_name=display_name,
+            source="local",
+            principal_id=f"human:{stable_id}",
+        )
     )
 
 
 @pytest.fixture(scope="module")
 def pg_gateway(tmp_path_factory):
     from regista import Regista
-    from regista.testing import drop_project_schema
+    from regista.testing import drop_project_schema, make_v6_keyset, open_v6_epoch
 
     key_path = tmp_path_factory.mktemp("keys") / "keys.json"
-    generate_keyset(key_path)
+    principals = ("human:alice", "human:bob", "human:carol", "human:dave")
+    keyset = make_v6_keyset(key_path.parent, principals=principals, filename=key_path.name)
     project = f"dossier_e2e_{uuid.uuid4().hex[:8]}"
     try:
-        reg = Regista.create_project(DSN, project, hmac_key_path=str(key_path))
+        reg = Regista.create_project(DSN, project, hmac_key_path=keyset.path)
+        open_v6_epoch(reg, keyset, principals=principals)
     except Exception as exc:
         pytest.skip(f"Postgres unavailable: {exc}")
     gw = RegistaGateway(reg)
@@ -83,11 +89,11 @@ def test_full_review_lifecycle_verified_chain(pg_gateway):
     ]
 
     by_transition = {e.transition: e for e in events}
-    assert by_transition["created"].actor_id == "alice"
+    assert by_transition["created"].actor_id == "human:alice"
     assert by_transition["created"].actor_kind == "human"
-    assert by_transition["start"].actor_id == "bob"
-    assert by_transition["adversarial_pass"].actor_id == "carol"
-    assert by_transition["accept"].actor_id == "dave"
+    assert by_transition["start"].actor_id == "human:bob"
+    assert by_transition["adversarial_pass"].actor_id == "human:carol"
+    assert by_transition["accept"].actor_id == "human:dave"
     assert by_transition["accept"].actor_metadata["display_name"] == "Dave"
     assert by_transition["comment"].payload["body"].startswith("triaged")
 

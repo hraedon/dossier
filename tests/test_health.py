@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from dossier.config import Settings
 
 _PROJECT = "dossier_test"
@@ -95,6 +97,54 @@ def test_healthz_never_replays_the_chain(app, client, monkeypatch):
     chain = next(c for c in body["checks"] if c["name"] == "chain_integrity")
     assert chain["status"] == "skip"
     assert "on-demand" in chain["detail"]
+
+
+def test_health_reports_partial_principal_lifecycle_config(tmp_path):
+    from dossier.health import build_health
+
+    settings = replace(_settings(tmp_path), trust_log_project="trust-log")
+
+    class _Registry:
+        def list_projects(self):
+            return []
+
+    body = build_health(settings, _Registry())
+    check = next(c for c in body["checks"] if c["name"] == "principal_lifecycle")
+    assert check["status"] == "fail"
+    assert "REGISTA_TRUST_GENESIS_PATH" in check["detail"]
+
+
+def test_health_probes_the_separate_principal_lifecycle_gateway(tmp_path):
+    from dossier.health import build_health
+
+    genesis = tmp_path / "trust-genesis.json"
+    genesis.write_text("{}", encoding="utf-8")
+    settings = replace(
+        _settings(tmp_path),
+        trust_log_project="trust-log",
+        trust_genesis_path=str(genesis),
+    )
+
+    class _Gateway:
+        def has_lifecycle_ops(self):
+            return True
+
+        lifecycle_handle_key = 1
+
+        def verify_lifecycle_trust(self):
+            return None
+
+    class _Registry:
+        def list_projects(self):
+            return ["work"]
+
+        def get(self, project):
+            assert project == "work"
+            return _Gateway()
+
+    body = build_health(settings, _Registry())
+    check = next(c for c in body["checks"] if c["name"] == "principal_lifecycle")
+    assert check["status"] == "ok"
 
 
 def test_health_annotates_graded_environment(tmp_path):

@@ -17,7 +17,9 @@ one this module refuses to let happen quietly. It provides:
 * :func:`resolve_signing_identity` — can this actor be signed for per-actor, and
   under which key?
 * :class:`HumanSigningPolicy` — ``require`` (refuse the write) or ``warn``
-  (allow it, loudly, everywhere).
+  (attempt the legacy symmetric fallback, loudly, where the backend still
+  supports it). Clean v6 epochs reject that fallback and dossier translates
+  the rejection into the same actionable refusal.
 * :exc:`HumanSigningRefusedError` — an operator-actionable refusal naming the exact
   provisioning command.
 
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Literal, Protocol
 
 from .actors import Actor
@@ -38,11 +41,25 @@ logger = logging.getLogger("dossier.signing")
 
 HumanSigningPolicy = Literal["require", "warn"]
 
+
+class HumanSigningOutcome(StrEnum):
+    """Outcome stages for a human signing decision.
+
+    ``FALLBACK_ATTEMPTED`` is emitted before the gateway calls regista. It is
+    deliberately distinct from ``FALLBACK_WRITTEN`` because clean v6 may reject
+    the shared-key fallback. ``FALLBACK_REFUSED`` means no event was appended.
+    """
+
+    PER_ACTOR = "per_actor"
+    FALLBACK_ATTEMPTED = "fallback_attempted"
+    FALLBACK_WRITTEN = "fallback_written"
+    FALLBACK_REFUSED = "fallback_refused"
+
 #: Schemes that carry non-repudiation: the signer holds a private key nobody
-#: else has, and a third party can verify with only the public half. Mirrors
-#: regista's ``asymmetric_scheme_ids()`` but is resolved from regista at call
-#: time so a new PQC scheme registered there is honoured here too.
-_FALLBACK_ASYMMETRIC_SCHEMES = frozenset({"ed25519"})
+#: else has, and a third party can verify with only the public half. The locked
+#: regista 0.7.1 public contract exposes Ed25519 for this path; extend this
+#: versioned set only when a future public regista API declares another scheme.
+_ASYMMETRIC_SCHEMES = frozenset({"ed25519"})
 
 #: The provisioning command an operator runs to close the gap. Kept as one
 #: string so the refusal message, the doctor detail, and the docs cannot drift.
@@ -58,13 +75,7 @@ PROVISION_HINT = (
 
 def asymmetric_schemes() -> frozenset[str]:
     """Signing schemes that bind an event to a key only the actor holds."""
-    try:
-        from regista._signing_scheme import asymmetric_scheme_ids
-
-        ids = frozenset(asymmetric_scheme_ids())
-    except Exception:  # pragma: no cover - regista always ships this today
-        return _FALLBACK_ASYMMETRIC_SCHEMES
-    return ids or _FALLBACK_ASYMMETRIC_SCHEMES
+    return _ASYMMETRIC_SCHEMES
 
 
 class _KeyExporter(Protocol):
@@ -92,19 +103,28 @@ class SigningIdentity:
         return self.key_id is not None
 
 
+@dataclass(frozen=True, slots=True)
+class HumanSigningResult:
+    """A signing decision plus the outcome stage known so far."""
+
+    identity: SigningIdentity
+    outcome: HumanSigningOutcome
+
+
 class HumanSigningRefusedError(Exception):
     """A human write was refused because it could only be signed symmetrically.
 
-    Raised only under ``HumanSigningPolicy = "require"``. The message is written
-    for the operator who has to fix it, not for the end user: it names the
-    identity, says what is missing, and gives the provisioning command. Nothing
-    has been written to the event log when this is raised — the check runs before
-    the regista call.
+    Raised when a human write cannot be attributed to an active asymmetric key.
+    The message is written for the operator who has to fix it, not for the end
+    user: it names the identity, says what is missing, and gives the provisioning
+    command. Nothing has been written to the event log when this is raised — the
+    check runs before the regista call or translates a clean-v6 refusal.
     """
 
     def __init__(self, actor: Actor, identity: SigningIdentity) -> None:
         self.actor = actor
         self.identity = identity
+        self.outcome = HumanSigningOutcome.FALLBACK_REFUSED
         if actor.principal_id is None:
             missing = (
                 f"identity {actor.actor_id!r} has no regista principal_id recorded, "
@@ -195,6 +215,43 @@ def resolve_signing_identity(exporter: _KeyExporter, actor: Actor) -> SigningIde
     )
 
 
+def assess(
+    exporter: _KeyExporter,
+    actor: Actor,
+    *,
+    policy: HumanSigningPolicy,
+    operation: str,
+) -> HumanSigningResult:
+    """Apply *policy* and report the signing outcome stage.
+
+    Under ``require`` an unbound identity raises :exc:`HumanSigningRefusedError`
+    before anything is written. Under ``warn`` the gateway is allowed to try the
+    write, but the result is not known until regista returns.
+    """
+    identity = resolve_signing_identity(exporter, actor)
+    if identity.per_actor:
+        return HumanSigningResult(identity, HumanSigningOutcome.PER_ACTOR)
+    if policy == "require":
+        raise HumanSigningRefusedError(actor, identity)
+    logger.warning(
+        "provenance.human_signature_fallback_attempted",
+        extra={
+            "actor_id": actor.actor_id,
+            "actor_kind": actor.actor_kind,
+            "principal_id": actor.principal_id,
+            "operation": operation,
+            "reason": identity.reason,
+            "outcome": HumanSigningOutcome.FALLBACK_ATTEMPTED.value,
+            "consequence": (
+                "write outcome is not known; a legacy backend may write a shared-"
+                "key event, while clean v6 may refuse the fallback"
+            ),
+            "remediation": PROVISION_HINT,
+        },
+    )
+    return HumanSigningResult(identity, HumanSigningOutcome.FALLBACK_ATTEMPTED)
+
+
 def enforce(
     exporter: _KeyExporter,
     actor: Actor,
@@ -202,36 +259,55 @@ def enforce(
     policy: HumanSigningPolicy,
     operation: str,
 ) -> SigningIdentity:
-    """Apply *policy* to a human write and return the identity to sign under.
+    """Compatibility wrapper returning the selected signing identity."""
+    return assess(exporter, actor, policy=policy, operation=operation).identity
 
-    Under ``require`` an unbound identity raises :exc:`HumanSigningRefusedError`
-    before anything is written. Under ``warn`` the write proceeds but the
-    downgrade is logged at WARNING with a stable event name
-    (``provenance.human_signature_downgraded``) so it is greppable, alertable,
-    and — via :attr:`SigningIdentity.reason` — renderable in the UI and the
-    doctor. It is never silent.
-    """
-    identity = resolve_signing_identity(exporter, actor)
-    if identity.per_actor:
-        return identity
-    if policy == "require":
-        raise HumanSigningRefusedError(actor, identity)
+
+def log_human_signing_fallback_written(
+    actor: Actor,
+    identity: SigningIdentity,
+    operation: str,
+) -> None:
+    """Record that a warn-policy shared-key event was actually appended."""
     logger.warning(
-        "provenance.human_signature_downgraded",
+        "provenance.human_signature_fallback_written",
         extra={
             "actor_id": actor.actor_id,
             "actor_kind": actor.actor_kind,
             "principal_id": actor.principal_id,
             "operation": operation,
-            "reason": identity.reason,
+            "key_id": identity.key_id,
+            "outcome": HumanSigningOutcome.FALLBACK_WRITTEN.value,
             "consequence": (
-                "signed with the shared store key; the signature is symmetric "
-                "and cannot attribute this action to this human"
+                "event was written with the shared store key; the signature is "
+                "symmetric and cannot attribute this action to this human"
             ),
             "remediation": PROVISION_HINT,
         },
     )
-    return identity
+
+
+def log_human_signing_fallback_refused(
+    actor: Actor,
+    identity: SigningIdentity,
+    operation: str,
+) -> None:
+    """Record that clean v6 rejected the attempted shared-key fallback."""
+    logger.warning(
+        "provenance.human_signature_fallback_refused",
+        extra={
+            "actor_id": actor.actor_id,
+            "actor_kind": actor.actor_kind,
+            "principal_id": actor.principal_id,
+            "operation": operation,
+            "key_id": identity.key_id,
+            "outcome": HumanSigningOutcome.FALLBACK_REFUSED.value,
+            "consequence": (
+                "no event was written; clean v6 refused the shared-key fallback"
+            ),
+            "remediation": PROVISION_HINT,
+        },
+    )
 
 
 def parse_policy(raw: str, *, prod: bool) -> HumanSigningPolicy:

@@ -4,11 +4,13 @@ import base64
 import json
 import logging
 import os
-import re
 import secrets
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from regista import RegistaError as RegistaError  # type: ignore[attr-defined]
+from regista import validate_principal_id
 
 from ._platform import open_no_follow
 
@@ -16,21 +18,22 @@ logger = logging.getLogger("dossier.keys")
 
 _ED25519_PUBLIC_KEY_LEN = 32
 _ED25519_PRIVATE_KEY_LEN = 32
-_PRINCIPAL_ID_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 _PRINCIPAL_ID_MAX_LEN = 256
 
 
 def _validate_principal_id(principal_id: str) -> None:
-    if not principal_id:
-        raise ValueError("principal_id is required")
     if len(principal_id) > _PRINCIPAL_ID_MAX_LEN:
         raise ValueError(
             f"principal_id must be at most {_PRINCIPAL_ID_MAX_LEN} characters"
         )
-    if not _PRINCIPAL_ID_RE.match(principal_id):
-        raise ValueError(
-            "principal_id must be alphanumeric, dot, hyphen, or underscore only"
-        )
+    # regista owns the canonical v6 principal grammar. Keeping a second, older
+    # regex here would accept identities that v6 cannot sign. Keep the import
+    # outside this conversion so a broken spine dependency is not misreported as
+    # an invalid principal id.
+    try:
+        validate_principal_id(principal_id)
+    except (RegistaError, ValueError) as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def generate_ed25519_keypair() -> tuple[bytes, bytes]:

@@ -11,7 +11,9 @@ from typing import Any, Final
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.templating import Jinja2Templates
-from regista import ErrorCode, LifecycleContractError, RegistaError, WorkItem
+from regista import ErrorCode as ErrorCode  # type: ignore[attr-defined]
+from regista import LifecycleContractError, WorkItem
+from regista import RegistaError as RegistaError  # type: ignore[attr-defined]
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.staticfiles import StaticFiles
 
@@ -23,6 +25,7 @@ from .administration import (
     read_admin_summary,
     read_project_list,
 )
+from .attribution import event_delegation_claim
 from .auth.backends import CredentialBackend, Principal
 from .auth.resolver import principal_to_actor
 from .auth.sessions import issue_csrf_token, session_middleware, verify_csrf
@@ -58,6 +61,9 @@ from .knowledge import (
     list_notes,
     search_notes,
     verify_note,
+)
+from .lifecycle_http import (
+    decode_b64 as _decode_b64,
 )
 from .lifecycle_http import (
     decode_public_key as _decode_public_key,
@@ -1136,7 +1142,7 @@ def create_app(
         }
 
         try:
-            wi, _ = gw.create_issue(
+            wi, _created_event = gw.create_issue(
                 actor=actor,
                 work_item_type=work_item_type,
                 custom_fields=custom_fields,
@@ -1226,6 +1232,7 @@ def create_app(
                     "principal_id": actor.principal_id,
                     "transition": transition_name,
                     "reason": exc.identity.reason,
+                    "outcome": exc.outcome.value,
                 },
             )
             return _render_issue_detail_error(
@@ -1261,8 +1268,8 @@ def create_app(
                 last_ev = events[-1] if events else None
                 on_behalf_principal: str | None = None
                 if last_ev is not None:
-                    ob = getattr(last_ev, "on_behalf_of", None)
-                    if isinstance(ob, dict):
+                    ob = event_delegation_claim(last_ev)
+                    if ob is not None:
                         pid = ob.get("principal_id")
                         if pid:
                             on_behalf_principal = str(pid)
@@ -1996,6 +2003,28 @@ def create_app(
             )
         try:
             result = gw.submit_possession_proof(operation_id, proof)
+        except LifecycleContractError as exc:
+            _handle_lifecycle_error(exc)
+        return JSONResponse(result)
+
+    @app.post(
+        "/admin/p/{project}/lifecycle/{operation_id}/rotation-authorization",
+        response_model=None,
+    )
+    async def submit_rotation_authorization_route(
+        project: str,
+        operation_id: str,
+        request: Request,
+        actor: Actor = Depends(current_actor_or_redirect),
+        _: None = Depends(verify_csrf),
+    ) -> Response:
+        """Submit the superseded key's detached signature for a rotation."""
+        require_admin(actor)
+        gw = resolve_gateway(project, actor)
+        body = _require_json_object(await _read_json(request))
+        signature = _decode_b64(_require_str(body, "old_key_signature"), "old_key_signature")
+        try:
+            result = gw.submit_rotation_authorization(operation_id, signature)
         except LifecycleContractError as exc:
             _handle_lifecycle_error(exc)
         return JSONResponse(result)

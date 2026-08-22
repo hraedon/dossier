@@ -19,10 +19,15 @@ make dev            # or: python scripts/dev-install.py
 ```
 
 installs `regista-hraedon==<SUITE.lock [spine].version>` from PyPI (today
-`0.5.4`), then `ruff` and `-e ".[dev]"` (pytest, httpx, mypy, ldap3, and the
+`0.7.1`), then `ruff` and `-e ".[dev]"` (pytest, httpx, mypy, ldap3, and the
 pinned `agent-suite-conformance` kit). CI runs the **same**
 `scripts/dev-install.py` in both the Linux (`check`) and `windows-test` lanes,
 so "works on my machine" means "works in CI".
+
+The declared runtime requirement is `regista-hraedon>=0.7.1,<0.8` because this
+code calls public APIs introduced in 0.7.1. The exact lock pins that published
+release and its tag commit; never pin an unpublished version or moving sibling
+SHA. Use `DEV_AGAINST=sibling` only for deliberate paired development.
 
 `SUITE.lock`'s `[spine]` section is the vendored, in-repo copy of the umbrella
 `agent-suite/SUITE.lock` pin — it **must agree** with that umbrella's

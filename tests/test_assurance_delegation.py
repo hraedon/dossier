@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 import regista
 from regista import Event
+from regista._signing import canonicalize
 
 from dossier import assurance as assurance_mod
 from dossier.assurance import (
@@ -36,13 +37,55 @@ def _event(
     actor_metadata: dict[str, Any] | None = None,
     event_seq: int = 0,
 ) -> Event:
+    event_id = uuid.uuid4()
+    work_item_id = uuid.uuid4()
+    metadata = dict(actor_metadata) if actor_metadata is not None else None
+    producer_lineage = None
+    if metadata is not None:
+        producer_lineage = metadata.pop("model_lineage", None)
+        if not metadata:
+            metadata = None
+    actor_id = "human:test-actor" if actor_kind == "human" else "agent:test-actor"
+    entity_seq = event_seq + 1
+    digest = "sha256:" + ("0" * 64)
+    envelope = {
+        "type": "regista.event",
+        "version": 6,
+        "project_instance_id": str(uuid.uuid4()),
+        "trust_domain_id": str(uuid.uuid4()),
+        "event_id": str(event_id),
+        "entity": {"kind": "work_item", "id": str(work_item_id)},
+        "entity_seq": entity_seq,
+        "actor": {"principal_id": actor_id, "kind": actor_kind, "metadata": metadata},
+        "signing": {
+            "scheme_id": "ed25519",
+            "key_id": "pk_test",
+            "key_binding_event_hash": digest,
+        },
+        "authorization": {"mode": "direct", "credentials": []},
+        "workflow": None,
+        "occurred_at": "2026-01-01T00:00:00.000000Z",
+        "transition": transition,
+        "payload": None,
+        "chain": {
+            "hash_algorithm": "sha-256",
+            "previous_entity_event_hash": None if entity_seq == 1 else digest,
+            "previous_project_event_hash": digest,
+        },
+        "producer": {
+            "harness": "dossier-test",
+            "harness_version": "dossier-test/1",
+            "model": f"model-{producer_lineage}" if producer_lineage else None,
+            "model_lineage": producer_lineage,
+        },
+    }
     return Event(
-        event_id=uuid.uuid4(),
-        work_item_id=uuid.uuid4(),
+        event_id=event_id,
+        work_item_id=work_item_id,
         event_seq=event_seq,
-        actor_id="test-actor",
+        actor_id=actor_id,
         actor_kind=actor_kind,
-        actor_metadata=actor_metadata,
+        actor_metadata=metadata,
         key_id="test-key",
         workflow_name="canonical",
         workflow_version=2,
@@ -51,6 +94,8 @@ def _event(
         payload=None,
         payload_canonical_hash=b"",
         signature=b"",
+        canonical_envelope=canonicalize(envelope),
+        scheme_id="ed25519",
     )
 
 
@@ -84,6 +129,7 @@ def test_delegation_is_the_only_path(monkeypatch: pytest.MonkeyPatch) -> None:
             "assurance_level": "independently_reviewed",
             "reviewer_lineage": "kimi",
             "author_lineages": ["glm"],
+            "agent_author_undeclared": False,
             "reason": "cross_lineage_review",
             "profile": str(profile),
         }
@@ -116,8 +162,8 @@ def test_delegation_passes_the_strict_gate_profile(
 # ── 2. Honest degradation (WI-014 preserved through the delegation) ───────
 
 
-def test_undeclared_reviewer_lineage_downgrades_and_says_why() -> None:
-    """regista calls this independent; dossier must not repeat that claim."""
+def test_undeclared_reviewer_lineage_is_already_fail_closed_in_v6() -> None:
+    """The v6 producer gate does not over-claim an undeclared reviewer."""
     events = [
         _event(actor_metadata={"model_lineage": "glm"}, event_seq=0),
         _event(
@@ -126,21 +172,18 @@ def test_undeclared_reviewer_lineage_downgrades_and_says_why() -> None:
             event_seq=1,
         ),
     ]
-    # Confirm the engine really does over-claim, so this test keeps meaning
-    # if regista's behaviour changes.
     raw = regista.gate_rationale(events, "strict")
-    assert str(raw["assurance_level"]) == "independently_reviewed"
+    assert str(raw["assurance_level"]) == "self_reviewed"
 
     verdict = compute_assurance_verdict(events)
     assert verdict.level == "self-reviewed"
-    assert verdict.regista_level == "independently_reviewed"
-    assert verdict.degraded is True
-    assert verdict.degradation_reason is not None
-    assert "reviewer declared no model lineage" in verdict.degradation_reason
+    assert verdict.regista_level == "self_reviewed"
+    assert verdict.degraded is False
+    assert verdict.degradation_reason is None
     assert verdict.independence_verifiable is False
 
 
-def test_undeclared_agent_author_downgrades_and_says_why() -> None:
+def test_undeclared_agent_author_is_reported_by_the_v6_gate() -> None:
     """An agent author with no declared lineage cannot be shown distinct."""
     events = [
         _event(actor_kind="agent", actor_metadata=None, event_seq=0),
@@ -152,15 +195,15 @@ def test_undeclared_agent_author_downgrades_and_says_why() -> None:
         ),
     ]
     verdict = compute_assurance_verdict(events)
-    assert verdict.regista_level == "independently_reviewed"
+    assert verdict.regista_level == "self_reviewed"
     assert verdict.level == "self-reviewed"
-    assert verdict.degraded is True
-    assert verdict.degradation_reason is not None
-    assert "without declaring a model lineage" in verdict.degradation_reason
+    assert verdict.degraded is False
+    assert verdict.degradation_reason is None
+    assert verdict.undeclared_agent_author is True
 
 
-def test_human_author_and_declared_agent_reviewer_stays_independent() -> None:
-    """A human and a model are trivially independent — no downgrade."""
+def test_human_author_and_declared_agent_reviewer_stays_conservative() -> None:
+    """Without a model author lineage, v6 cannot prove distinctness."""
     events = [
         _event(actor_kind="human", actor_metadata={"display_name": "Alice"}, event_seq=0),
         _event(
@@ -171,14 +214,40 @@ def test_human_author_and_declared_agent_reviewer_stays_independent() -> None:
         ),
     ]
     verdict = compute_assurance_verdict(events)
-    assert verdict.level == "independently-reviewed"
+    assert verdict.level == "self-reviewed"
     assert verdict.degraded is False
     assert verdict.degradation_reason is None
     assert verdict.independence_verifiable is True
 
 
-def test_accepted_independent_review_degrades_to_human_accepted() -> None:
-    """The accepted variant downgrades too, not just the un-accepted one."""
+def test_missing_v6_author_lineage_evidence_is_not_reconstructed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An older spine must not make every model author undeclared locally."""
+
+    monkeypatch.setattr(
+        assurance_mod,
+        "gate_rationale",
+        lambda _events, _profile: {
+            "assurance_level": "independently_reviewed",
+            "reviewer_lineage": "kimi",
+            "author_lineages": ["glm"],
+            # Deliberately omit the v6 ``agent_author_undeclared`` evidence.
+        },
+    )
+
+    verdict = compute_assurance_verdict([_event(actor_metadata=None)])
+
+    assert verdict.undeclared_agent_author is False
+    assert verdict.author_lineage_evidence_available is False
+    assert verdict.independence_verifiable is False
+    assert verdict.level == "self-reviewed"
+    assert verdict.degraded is True
+    assert "author-lineage evidence" in (verdict.degradation_reason or "")
+
+
+def test_accepted_review_without_author_lineage_is_human_accepted() -> None:
+    """A conservative v6 review remains human-accepted after acceptance."""
     events = [
         _event(actor_kind="agent", actor_metadata=None, event_seq=0),
         _event(
@@ -195,9 +264,9 @@ def test_accepted_independent_review_degrades_to_human_accepted() -> None:
         ),
     ]
     verdict = compute_assurance_verdict(events)
-    assert verdict.regista_level == "independently_and_accepted"
+    assert verdict.regista_level == "human_accepted"
     assert verdict.level == "human-accepted"
-    assert verdict.degraded is True
+    assert verdict.degraded is False
 
 
 def test_same_lineage_review_is_not_degraded() -> None:
@@ -274,15 +343,15 @@ def test_compute_assurance_level_is_the_verdict_level() -> None:
 # ── 3. The degradation reaches the human ─────────────────────────────────
 
 
-def test_issue_detail_renders_the_degradation_reason(client, gateway) -> None:
-    """A degraded verdict is visible in the UI, with its reason."""
+def test_issue_detail_renders_the_conservative_v6_verdict(client, gateway) -> None:
+    """A v6 verdict that cannot prove independence is visible in the UI."""
     from conftest import login as _login
     from helpers import AGENT_KIMI
 
     from dossier.actors import Actor
 
     undeclared_agent = Actor(
-        actor_id="agent-anonymous",
+        actor_id="agent:anonymous",
         actor_kind="agent",
         display_name="Undeclared Agent",
     )
@@ -319,10 +388,8 @@ def test_issue_detail_renders_the_degradation_reason(client, gateway) -> None:
     assert resp.status_code == 200
     # The optimistic claim must not appear...
     assert "independently reviewed" not in resp.text
-    # ...the honest one, and the reason, must.
+    # ...the honest one must.
     assert "self-reviewed" in resp.text
-    assert "degraded assurance" in resp.text
-    assert "without declaring a model lineage" in resp.text
 
 
 def test_assurance_verdict_is_a_frozen_value() -> None:

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from regista import Event
+from regista import Event as Event  # type: ignore[attr-defined]
 
 from .actors import Actor
 from .contracts import CONTRACT_VERSION, ProviderDescriptor

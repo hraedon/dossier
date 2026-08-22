@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -442,13 +443,13 @@ class TestGJ4SeparationOfDuties:
         acknowledge the shared lineage explicitly; without the ack the review
         is rejected."""
         author = Actor(
-            actor_id="agent-author",
+            actor_id="agent:author",
             actor_kind="agent",
             display_name="Author Agent",
             model_lineage="relay",
         )
         reviewer = Actor(
-            actor_id="agent-reviewer",
+            actor_id="agent:reviewer",
             actor_kind="agent",
             display_name="Reviewer Agent",
             model_lineage="relay",
@@ -471,13 +472,13 @@ class TestGJ4SeparationOfDuties:
         agent-authored work is rejected unless the shared/undeclared lineage
         is explicitly acknowledged."""
         author = Actor(
-            actor_id="agent-author",
+            actor_id="agent:author",
             actor_kind="agent",
             display_name="Author Agent",
             model_lineage="relay",
         )
         undeclared = Actor(
-            actor_id="agent-undeclared",
+            actor_id="agent:undeclared",
             actor_kind="agent",
             display_name="Undeclared Agent",
             model_lineage=None,
@@ -500,13 +501,13 @@ class TestGJ4SeparationOfDuties:
         the missing acknowledgment — with ``same_lineage_acknowledged`` the
         adversarial pass succeeds and the item advances to human review."""
         author = Actor(
-            actor_id="agent-author",
+            actor_id="agent:author",
             actor_kind="agent",
             display_name="Author Agent",
             model_lineage="relay",
         )
         reviewer = Actor(
-            actor_id="agent-reviewer",
+            actor_id="agent:reviewer",
             actor_kind="agent",
             display_name="Reviewer Agent",
             model_lineage="relay",
@@ -528,13 +529,13 @@ class TestGJ4SeparationOfDuties:
     ) -> None:
         """Every review verdict carries a non-empty review note."""
         author = Actor(
-            actor_id="agent-author",
+            actor_id="agent:author",
             actor_kind="agent",
             display_name="Author Agent",
             model_lineage="relay",
         )
         reviewer = Actor(
-            actor_id="agent-reviewer",
+            actor_id="agent:reviewer",
             actor_kind="agent",
             display_name="Reviewer Agent",
             model_lineage="glm",
@@ -781,15 +782,14 @@ class TestGJ5UnderstandAgentActivity:
         }
 
     def _attest_session(self, gateway: Any, session_id: str = _SESSION_ID) -> Any:
-        return gateway._reg.append_event(
-            work_item_id=uuid.UUID(session_id),
-            actor_id=AGENT_R.actor_id,
-            actor_kind="agent",
-            actor_metadata={"role": "agent", "phase": "session_attestation"},
+        return gateway.append_note_event(
+            actor=replace(AGENT_R, on_behalf_of=self._on_behalf(session_id)),
+            entity_id=uuid.UUID(session_id),
             transition="session_attestation",
-            payload=self._session_attestation_payload(session_id),
-            on_behalf_of=self._on_behalf(session_id),
-            entity_kind="session",
+            payload={
+                **self._session_attestation_payload(session_id),
+                "on_behalf_of": self._on_behalf(session_id),
+            },
         )
 
     def _begin_tool_call(
@@ -801,18 +801,18 @@ class TestGJ5UnderstandAgentActivity:
         session_id: str = _SESSION_ID,
     ) -> uuid.UUID:
         wi, _ = gateway.create_issue(
-            actor=AGENT_R,
+            actor=replace(AGENT_R, on_behalf_of=self._on_behalf(session_id)),
             work_item_type="bug",
             custom_fields={"title": f"Tool call: {tool}"},
         )
-        gateway._reg.append_event(
+        gateway.append_work_item_event(
+            actor=replace(AGENT_R, on_behalf_of=self._on_behalf(session_id)),
             work_item_id=wi.work_item_id,
-            actor_id=AGENT_R.actor_id,
-            actor_kind="agent",
-            actor_metadata={"role": "agent", "phase": "begin"},
             transition="tool_call_begin",
-            payload=self._tool_call_begin_payload(tool=tool, files=files, session_id=session_id),
-            on_behalf_of=self._on_behalf(session_id),
+            payload={
+                **self._tool_call_begin_payload(tool=tool, files=files, session_id=session_id),
+                "on_behalf_of": self._on_behalf(session_id),
+            },
         )
         return wi.work_item_id
 
@@ -827,16 +827,20 @@ class TestGJ5UnderstandAgentActivity:
         stdout: str = "done",
         session_id: str = _SESSION_ID,
     ) -> Any:
-        return gateway._reg.append_event(
+        return gateway.append_work_item_event(
+            actor=replace(AGENT_R, on_behalf_of=self._on_behalf(session_id)),
             work_item_id=work_item_id,
-            actor_id=AGENT_R.actor_id,
-            actor_kind="agent",
-            actor_metadata={"role": "agent", "phase": "end"},
             transition="tool_call_end",
-            payload=self._tool_call_end_payload(
-                tool=tool, files=files, exit_code=exit_code, stdout=stdout, session_id=session_id
-            ),
-            on_behalf_of=self._on_behalf(session_id),
+            payload={
+                **self._tool_call_end_payload(
+                    tool=tool,
+                    files=files,
+                    exit_code=exit_code,
+                    stdout=stdout,
+                    session_id=session_id,
+                ),
+                "on_behalf_of": self._on_behalf(session_id),
+            },
         )
 
     def _seed_clean_session(self, gateway: Any) -> str:
