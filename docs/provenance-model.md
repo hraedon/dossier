@@ -36,8 +36,7 @@ the face. dossier calls `regista.gate_rationale(events, "strict")` (regista's
 public API since 0.5.3, regista Plan 027) and renders the answer. The runtime
 floor is `regista-hraedon>=0.7.1,<0.8` because dossier also consumes the public
 trust-log verification and lifecycle authority APIs. The exact `SUITE.lock`
-version/SHA pins the published 0.7.1 release pair
-until regista 0.7.1 is published.
+version/SHA pins the published 0.7.2 release pair.
 
 `src/dossier/assurance.py` is the only seam. It does two things and nothing else:
 
