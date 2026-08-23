@@ -49,7 +49,7 @@ regista is the spine (a sibling library, `/projects/regista`; published to PyPI
 as `regista-hraedon`, import name still `regista`). regista needs Postgres 15+;
 its in-memory backend is for tests only, never for a real multi-user instance.
 Dossier's declared runtime floor is `regista-hraedon>=0.7.1,<0.8`; the exact
-0.7.1 lock/SHA is the published clean-v6 lifecycle baseline.
+0.7.2 lock/SHA is the published genesis-gate baseline.
 
 **Develop against the locked substrate (Plan 019 B2).** `SUITE.lock` is the
 single source of truth for *what regista to develop against*:
@@ -61,7 +61,7 @@ make lint typecheck # ruff + mypy
 ```
 
 `make dev` (and both CI test lanes, and the container image) install regista at
-the released version `SUITE.lock` `[spine]` pins — today `0.7.1` — not `main` or
+the released version `SUITE.lock` `[spine]` pins — today `0.7.2` — not `main` or
 an editable checkout, so integration skew surfaces before interop time. For
 deliberate cross-member work, set `DEV_AGAINST=main|<ref>|sibling`. See
 `docs/develop-against-lock.md`.
@@ -70,8 +70,9 @@ deliberate cross-member work, set `DEV_AGAINST=main|<ref>|sibling`. See
 
 The canonical lifecycle is declared in regista's `canonical.workflow.yaml`
 (shipped from regista, registered verbatim by dossier — Plan 010). Currently
-**v2** (v2 added the optional `display_key` custom field; v1 had no custom
-fields on `bug`/`task`). States: `open / in_progress / blocked / deferred /
+**v3** (v3 separates negative `request_changes` findings from positive review
+assurance; v2 added the optional `display_key` custom field). States: `open /
+in_progress / blocked / deferred /
 in_review / in_human_review / done`. `done` is reachable **only** through the
 two-stage review (`in_review → in_human_review → done`), except the pre-work
 triage close (`close_from_open`). `deferred` (Plan 008) is a non-terminal idle

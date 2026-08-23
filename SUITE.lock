@@ -38,13 +38,13 @@ repo = "hraedon/regista"
 # Must equal agent-suite/SUITE.lock [components.regista].version.
 # Regenerate from the release tag; never pin an unpublished version or a moving
 # sibling SHA here.
-version = "0.7.1"
+version = "0.7.2"
 # The git SHA of regista this dossier release was tested against == the umbrella's
-# [components.regista].revision. For 0.7.1 the revision is the v0.7.1 release-tag
+# [components.regista].revision. For 0.7.2 the revision is the v0.7.2 release-tag
 # commit itself (the lock was generated from the tag, not from post-tag main).
 # Resolve the local sibling with: git -C ../regista checkout <sha>
-sha = "8dd7b3464b0316f0f3a36e46dee64e36ceac6dbf"
-describe = "v0.7.1"
+sha = "82fb5c82cebbe51cd4e03ff432ed1b5fa8494da0"
+describe = "v0.7.2"
 # Declared runtime floor for the lifecycle and verification APIs dossier uses.
 pyproject_floor = "regista-hraedon>=0.7.1,<0.8"
 
