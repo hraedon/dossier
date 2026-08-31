@@ -36,7 +36,7 @@
 {% endif %}
 {%- endmacro %}
 
-{% macro user_menu(actor, csrf_token) -%}
+{% macro user_menu(actor, csrf_token, current_path) -%}
 <details class="ds-user-menu">
   <summary class="ds-user-menu__trigger" aria-label="User menu for {{ actor.display_name }}">
     <span class="ds-topbar__actor">{{ actor.display_name }}</span>
@@ -44,6 +44,7 @@
   </summary>
   <div class="ds-user-menu__menu">
     <a href="/me/identity">my identity</a>
+    <a href="/me/notifications"{% if current_path == "/me/notifications" %} class="is-active" aria-current="page"{% endif %}>my notifications</a>
     <a href="/me/signing-history">signing history</a>
     <form method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

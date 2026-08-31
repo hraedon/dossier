@@ -87,6 +87,14 @@ def test_rendered_shell_has_accessible_landmarks_and_current_area(client) -> Non
     assert 'href="/activity" class="ds-primary-nav__item is-active"' in response.text
     assert 'aria-current="page"' in response.text
     assert 'aria-label="User menu for Alice"' in response.text
+    assert 'href="/me/notifications">my notifications</a>' in response.text
+
+    response = client.get("/me/notifications")
+    assert response.status_code == 200
+    assert (
+        'href="/me/notifications" class="is-active" aria-current="page">'
+        "my notifications</a>"
+    ) in response.text
 
 
 def test_all_areas_are_available_links(client) -> None:
