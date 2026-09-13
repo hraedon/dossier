@@ -29,8 +29,8 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "httpx>=0.27",             # test client
-    "ruff>=0.16,<1",
-    "mypy>=1.10",
+    "ruff>=0.16,<0.17",
+    "mypy>=2.3,<3",
     "ldap3>=2.9",              # LDAP/AD auth tests (mocked + integration)
     # CLI contract v1 conformance kit (Plan 018 WI-2 / Plan 019 B1). A published
     # PyPI wheel; consumed only by the conformance tests, never imported by

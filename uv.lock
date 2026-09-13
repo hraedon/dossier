@@ -248,13 +248,13 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "ldap3", marker = "extra == 'auth-ldap'", specifier = ">=2.9" },
     { name = "ldap3", marker = "extra == 'dev'", specifier = ">=2.9" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=2.3,<3" },
     { name = "pynacl", specifier = ">=1.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "regista-hraedon", specifier = ">=0.7.1,<0.8" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16,<1" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.16,<0.17" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.29" },
 ]
 provides-extras = ["auth-ldap", "dev"]
