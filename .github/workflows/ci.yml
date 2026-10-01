@@ -51,6 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gate walks history when publication.toml is absent; refuses shallow
 
       # Canonical denylist-driven gate: scans all tracked files for the tokens in
       # the DOSSIER_FORBIDDEN_IDENTIFIERS secret (the shared canonical work-domain
