@@ -12,9 +12,23 @@ Two complementary checks:
    whitespace-separated list of real identifiers — hostnames, emails, service
    accounts, principal handles, personal names), every tracked text file
    outside ``samples/`` is scanned for those identifiers. This catches real
-   names that leaked into docs, tests, or reflections. It is a no-op (exit 0)
-   until the secret is configured, so it never blocks a fresh clone or a fork
-   without the secret.
+   names that leaked into docs, tests, or reflections.
+
+   Unconfigured behaviour depends on ``publication.toml``. In a repo declaring
+   ``private-until-review`` (or with no declaration at all) a missing secret is a
+   no-op (exit 0), so a fresh clone or a fork without the secret is never
+   blocked. In a repo declaring ``visibility = "public"`` it is a **failure**
+   (exit 1): an unconfigured gate there prints "skipping" and exits 0, which is
+   indistinguishable from a clean tree — a silent pass on exactly the repos where
+   a leak is irreversible. That asymmetry was documented in publication.toml for
+   months before it was implemented here.
+
+   In ``--staged`` mode (the pre-commit hook) the scan reads the **staged index
+   blobs** (``git show :0:<path>``), never the working tree: the commit records
+   the index, and worktree bytes can legitimately differ from it (``git add
+   -p``, staging then editing). Scanning the worktree let a staged forbidden
+   identifier hide behind a clean unstaged copy — and blocked clean commits
+   whose worktree copy was dirty (WI-031).
 
    **Multi-word identifiers are double-quoted** (``"two words"``) and match any
    separator run — spaced, hyphenated, underscored, dotted, or wrapped across a
@@ -35,6 +49,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -55,6 +70,26 @@ _SKIP_DIRS = frozenset({".venv"})
 # guard matches the first path component so a legitimate nested code dir named
 # ``samples`` (e.g. ``tests/samples/``) is not a false positive.
 _GUARDED_DIRS = frozenset({"samples"})
+
+# The plumbing declaration. Read here for ONE purpose: deciding whether an
+# unconfigured gate is a benign no-op or a silent pass. check_publication_plumbing.py
+# remains the authority on everything else in this file.
+# Always-on guards that need no denylist and no configuration.
+#
+# An editor swap file holds the BUFFER of the file being edited -- a secret typed
+# and not yet saved is in there. Vim's collision sequence (.swo, .swn, ... after
+# .swp is taken) means suffix matching alone misses the ones a busy session
+# leaves behind.
+#
+# A root-level .env is the classic credential leak; .env.example is the
+# deliberately tracked template and is exempt. Scoped to the ROOT so a fixture
+# like tests/fixtures/.env.broken stays possible.
+#
+# From touchstone, which had both while the template guarded only samples/.
+_EDITOR_SWAP_SUFFIXES = frozenset({".swp", ".swo"})
+_VIM_COLLISION_SUFFIX = re.compile(r"\.s[a-w][a-z]\Z")
+
+_DECLARATION_FILENAME = "publication.toml"
 
 
 @dataclass(frozen=True)
@@ -198,6 +233,21 @@ def _is_binary(chunk: bytes) -> bool:
     return b"\x00" in chunk
 
 
+def _strip_bom(text: str) -> str:
+    """Drop a leading U+FEFF left by an explicit-endian UTF-16 decode.
+
+    The ``utf-16-le`` / ``utf-16-be`` codecs do not consume the byte-order mark,
+    so it survives as a stray character at the start of line 1 and lands in
+    violation reports. (``utf-8-sig`` strips its own.) It does not hide anything
+    -- matching is substring-based, so an identifier at offset 0 is still found,
+    verified against both variants -- but a report that prints an invisible
+    character before the offending text is a report people mistrust.
+
+    From vitrine, which had it and the template did not.
+    """
+    return text[1:] if text.startswith("\ufeff") else text
+
+
 def scan_files(
     identifiers: frozenset[str],
     paths: list[Path],
@@ -215,6 +265,12 @@ def scan_files(
     unreadable file lets one containing a forbidden identifier pass, which is
     precisely the fails-open case this gate exists to prevent.
 
+    **Fail-closed default**: when the caller omits *unreadable*, the function
+    owns an internal collector and raises :class:`GateError` after scanning if
+    any path was unreadable. Callers that supply their own list (the CLI, for
+    detailed reporting) retain full control and receive the paths without an
+    exception.
+
     The out-parameter is deliberate. This script is COPIED into every repo in the
     estate and several of them test ``scan_files`` directly, so returning a tuple
     instead of a list broke seven repositories' test suites at once. An optional
@@ -222,6 +278,7 @@ def scan_files(
     the CLI fail closed on an unreadable file.
     """
     violations: list[Violation] = []
+    owns_collector = unreadable is None
     if unreadable is None:
         unreadable = []
     for path in paths:
@@ -231,7 +288,11 @@ def scan_files(
         # looks like an unreadable file. The target itself can carry a forbidden
         # identifier, so it is scanned rather than skipped.
         if path.is_symlink():
-            target = os.readlink(path)
+            try:
+                target = os.readlink(path)
+            except OSError:
+                unreadable.append(path)
+                continue
             for violation in scan_text(target, identifiers):
                 violations.append(replace(violation, path=path, line=target))
             continue
@@ -249,8 +310,15 @@ def scan_files(
         except OSError:
             unreadable.append(path)
             continue
+        text = _strip_bom(text)
         for violation in scan_text(text, identifiers):
             violations.append(replace(violation, path=path))
+    if owns_collector and unreadable:
+        names = ", ".join(str(p) for p in unreadable[:5])
+        raise GateError(
+            f"{len(unreadable)} tracked file(s) could not be read ({names}); "
+            "the gate cannot clear a tree it could not fully scan"
+        )
     return violations
 
 
@@ -284,6 +352,36 @@ def _run_git(args: list[str]) -> str:
     except OSError as exc:
         raise GateError(f"could not run git ({' '.join(args)}): {exc}") from exc
     return result.stdout
+
+
+def _run_git_bytes(args: list[str]) -> bytes:
+    """Run a git command and return raw stdout bytes.
+
+    The bytes twin of _run_git, for blob content: ``text=True`` would translate
+    newlines and force a decode before the binary/BOM sniff can run, so blob
+    reads must stay binary. Same GateError contract — a failure is a clean
+    refusal, never a traceback.
+    """
+    try:
+        result = subprocess.run(args, capture_output=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+        raise GateError(
+            f"git command failed ({' '.join(args)}): exit {exc.returncode}: {stderr.strip()}"
+        ) from exc
+    except OSError as exc:
+        raise GateError(f"could not run git ({' '.join(args)}): {exc}") from exc
+    return result.stdout
+
+
+def _read_staged_blob(path: Path) -> bytes:
+    """Content of the stage-0 index blob for *path* — the bytes a commit records.
+
+    ``:0:<path>`` names the index entry explicitly (the bare ``:<path>`` form is
+    ambiguous with rev-syntax magic like ``:/text``). For a staged symlink the
+    blob is the link's target string, matching the scan_files symlink semantics.
+    """
+    return _run_git_bytes(["git", "show", f":0:{path.as_posix()}"])
 
 
 def _paths_from_git(args: list[str]) -> list[Path]:
@@ -336,16 +434,69 @@ def collect_staged_paths() -> list[Path]:
 
     Scans only what is about to be committed rather than the whole tree, so the
     local gate is fast enough to run on every commit. Deletions are excluded
-    (``--diff-filter=ACM``) because there is nothing to scan. ``--no-renames``
+    (``--diff-filter=ACMT``) because there is nothing to scan. Type changes (T) ARE
+    included: re-staging a regular file as a symlink whose target names a forbidden
+    identifier is otherwise invisible to the hook. ``--no-renames``
     decomposes renames into add+delete so the new path (e.g. a file moved into
     ``samples/``) is included as an addition and caught by the always-on guard.
     """
     return _paths_from_git(
         [
             "git", "diff", "--cached", "--name-only",
-            "--diff-filter=ACM", "--no-renames", "-z",
+            "--diff-filter=ACMT", "--no-renames", "-z",
         ]
     )
+
+
+def scan_staged_blobs(
+    identifiers: frozenset[str],
+    paths: list[Path],
+    *,
+    unreadable: list[Path] | None = None,
+) -> list[Violation]:
+    """Scan the staged (stage-0) index blobs at *paths* for forbidden identifiers.
+
+    The pre-commit twin of scan_files, reading ``git show :0:<path>`` instead of
+    the working tree. The distinction is the point (WI-031): a commit records
+    the INDEX, and worktree bytes legitimately diverge from it (``git add -p``
+    partial stages, staging then editing). Scanning worktree bytes let a staged
+    forbidden identifier be hidden by overwriting the file with clean unstaged
+    content — the hook cleared bytes no commit was going to record and let the
+    forbidden blob into history. The inverse also held: a clean index under a
+    dirty or deleted worktree copy was blocked for content that was never being
+    committed.
+
+    Binary and BOM handling match scan_files. A staged symlink needs no special
+    case: its index blob IS the target string, which is exactly what scan_files
+    scans via os.readlink.
+
+    Same fail-closed contract as scan_files: a staged path whose blob cannot be
+    read is collected into *unreadable* when a list is supplied; otherwise the
+    function owns the collector and raises :class:`GateError` after scanning.
+    """
+    violations: list[Violation] = []
+    owns_collector = unreadable is None
+    if unreadable is None:
+        unreadable = []
+    for path in paths:
+        try:
+            blob = _read_staged_blob(path)
+        except GateError:
+            unreadable.append(path)
+            continue
+        chunk = blob[:_BINARY_SNIFF_LEN]
+        if _is_binary(chunk):
+            continue
+        text = _strip_bom(blob.decode(_sniff_encoding(chunk) or "utf-8", errors="replace"))
+        for violation in scan_text(text, identifiers):
+            violations.append(replace(violation, path=path))
+    if owns_collector and unreadable:
+        names = ", ".join(str(p) for p in unreadable[:5])
+        raise GateError(
+            f"{len(unreadable)} staged blob(s) could not be read ({names}); "
+            "the gate cannot clear an index it could not fully scan"
+        )
+    return violations
 
 
 def print_report(violations: list[Violation]) -> None:
@@ -358,12 +509,338 @@ def print_report(violations: list[Violation]) -> None:
 
 
 def leaked_tracked_files(paths: list[Path], guarded: frozenset[str]) -> list[Path]:
-    """Tracked files whose root component is a guarded (gitignored) data dir.
+    """Tracked paths reserved for runtime data, operator secrets, or editor swap files.
 
-    Matches only the first path component so a nested code directory that happens
-    to be named ``samples`` (e.g. ``tests/samples/``) is not a false positive.
+    Three always-on rules, none of which needs a denylist:
+
+    * an **editor swap file** anywhere -- it holds the buffer of the file being
+      edited, so a secret typed and not yet saved is inside it;
+    * a first path component in *guarded* -- matched on the root only, so a
+      nested code directory named ``samples`` (e.g. ``tests/samples/``) is not a
+      false positive;
+    * a **root-level ``.env``** or ``.env.<something>``, except the deliberately
+      tracked ``.env.example``.
     """
-    return [p for p in paths if p.parts and p.parts[0] in guarded]
+    leaked: list[Path] = []
+    for path in paths:
+        is_vim_collision = bool(
+            path.name.startswith(".") and _VIM_COLLISION_SUFFIX.fullmatch(path.suffix)
+        )
+        if path.suffix in _EDITOR_SWAP_SUFFIXES or is_vim_collision:
+            leaked.append(path)
+            continue
+        if path.parts and path.parts[0] in guarded:
+            leaked.append(path)
+            continue
+        if len(path.parts) == 1 and (
+            path.name == ".env"
+            or (path.name.startswith(".env.") and path.name != ".env.example")
+        ):
+            leaked.append(path)
+    return leaked
+
+
+# Set by main() from --staged. In staged mode the publication verdict must come
+# from the INDEX -- the bytes the commit records -- not the worktree: otherwise a
+# commit that stages visibility="public" while the worktree still says
+# "private-until-review" (the publication flip, exactly where this matters) is
+# judged private and skipped. A one-element list so main() can set it without a
+# global statement.
+_DECLARATION_FROM_INDEX: list[bool] = [False]
+
+
+def _staged_declaration_text() -> str | None:
+    """The stage-0 index content of the declaration, or None if it is not staged.
+
+    Absence from the index is the only None. A conflicted entry, a non-regular
+    entry (symlink, submodule) or an undecodable blob is a GateError: those are
+    present-but-unreadable, not "never opted in".
+    """
+    listing = _run_git(
+        ["git", "ls-files", "--stage", "-z", "--", f":(top,literal){_DECLARATION_FILENAME}"]
+    )
+    entries = [e for e in listing.split("\0") if e]
+    if not entries:
+        return None
+    if len(entries) != 1:
+        raise GateError(
+            f"{_DECLARATION_FILENAME} has a conflicted index entry; the gate cannot "
+            "tell whether this repo is public, so it will not pass."
+        )
+    meta = entries[0].split("\t", 1)[0].split()
+    if len(meta) != 3 or meta[2] != "0" or meta[0] not in ("100644", "100755"):
+        raise GateError(
+            f"{_DECLARATION_FILENAME} is staged but is not a regular file; the gate "
+            "cannot tell whether this repo is public, so it will not pass."
+        )
+    # Bytes, decoded as UTF-8 here: _run_git decodes with the LOCALE codec, which
+    # on Windows (cp1252) accepts any byte and would hide a non-UTF-8 blob.
+    blob_argv = ["git", "cat-file", "blob", meta[1]]
+    try:
+        blob = subprocess.run(blob_argv, capture_output=True, check=True).stdout
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise GateError(
+            f"could not read the staged {_DECLARATION_FILENAME} ({exc}); the gate "
+            "cannot tell whether this repo is public, so it will not pass."
+        ) from exc
+    try:
+        return blob.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise GateError(
+            f"the staged {_DECLARATION_FILENAME} is not valid UTF-8 ({exc}); the gate "
+            "cannot tell whether this repo is public, so it will not pass."
+        ) from exc
+
+
+def _git_or_none(args: list[str]) -> str | None:
+    """Return the stdout of a git command, or None when it fails (optional lookups)."""
+    try:
+        return _run_git(args)
+    except GateError:
+        return None
+    except UnicodeDecodeError:
+        # Present but not UTF-8 text: never a clean "private-until-review", and
+        # must not read as "absent" either, or a corrupt last declaration would
+        # launder a public one. A non-empty non-declaration says exactly that.
+        return "\ufffd"
+
+
+def _text_declares_private(text: str) -> bool:
+    """True only when a declaration cleanly names "private-until-review".
+
+    Anything else -- public, an unknown value, a missing key, unparseable text --
+    is not a safe last word before a deletion: a public -> garbage -> delete
+    sequence would otherwise launder a public declaration into "never opted in".
+    """
+    try:
+        section = tomllib.loads(text).get("publication")
+    except tomllib.TOMLDecodeError:
+        return False
+    declared = section.get("visibility") if isinstance(section, dict) else None
+    if not isinstance(declared, str):
+        return False
+    return declared.strip().casefold() == "private-until-review"
+
+
+def _absent_declaration_verdict() -> bool:
+    """Verdict for a repo whose declaration is ABSENT: False, unless that is unsafe.
+
+    Absence is the "never opted in" skip. But deleting a declaration that said
+    public does not make the remote private: it only disarms the gate. So the
+    whole history decides, not one log query: a commit WITH a declaration is safe
+    only if it cleanly says "private-until-review"; a commit WITHOUT one is safe
+    only if every parent is safe (a root commit without one is safe -- never opted
+    in). The state being judged (the index or worktree with no declaration) has
+    HEAD as its parent, so absence is a skip exactly when HEAD is safe. This covers
+    plain and merge deletions, laundering through an invalid declaration, and a
+    merge that joins an unsafe absent lineage to a private one. To leave the
+    publication system, declare "private-until-review" and remove the file in a
+    later commit.
+
+    Best effort on shallow clones: history beyond the graft is invisible here and
+    the shallow root counts as a root.
+    """
+    if _git_or_none(["git", "rev-parse", "--verify", "-q", "HEAD"]) is None:
+        return False
+    graph: dict[str, list[str]] = {}
+    order: list[str] = []
+    for line in _run_git(["git", "rev-list", "--topo-order", "--parents", "HEAD"]).splitlines():
+        if line.strip():
+            commit, *parents = line.split()
+            graph[commit] = parents
+            order.append(commit)
+    head = order[0]
+    # Bare "git", as _run_git passes it: the argv is a variable, as there.
+    # %(objectmode) (git >= 2.45): a symlink or gitlink at publication.toml is
+    # reported as a blob too, and its target string could read as a private
+    # declaration. Only a regular file is a declaration, as on every other path.
+    check_argv = ["git", "cat-file", "--batch-check=%(objectmode) %(objecttype) %(objectname)"]
+    batch_argv = ["git", "cat-file", "--batch"]
+    try:
+        check_proc = subprocess.run(
+            check_argv,
+            input="".join(f"{c}:{_DECLARATION_FILENAME}\n" for c in order).encode(),
+            capture_output=True,
+            check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise GateError(f"could not read the declaration history ({exc})") from exc
+    checked = check_proc.stdout.decode("utf-8", "replace").splitlines()
+    if len(checked) != len(order):
+        raise GateError("could not read the declaration history (short batch-check output)")
+    present: dict[str, str | None] = {}
+    for commit, row in zip(order, checked, strict=True):
+        fields = row.split()
+        if row.endswith(" missing"):
+            present[commit] = None
+        elif len(fields) != 3 or fields[0] not in ("100644", "100755") or fields[1] != "blob":
+            present[commit] = ""  # present but not a regular file: never a clean private
+        else:
+            present[commit] = fields[2]
+    blobs = sorted({oid for oid in present.values() if oid})
+    private_blob: dict[str, bool] = {}
+    if blobs:
+        try:
+            out = subprocess.run(
+                batch_argv,
+                input="".join(f"{oid}\n" for oid in blobs).encode(),
+                capture_output=True,
+                check=True,
+            ).stdout
+        except (subprocess.CalledProcessError, OSError) as exc:
+            raise GateError(f"could not read the declaration history ({exc})") from exc
+        pos = 0
+        for oid in blobs:
+            header_end = out.index(b"\n", pos)
+            size = int(out[pos:header_end].split()[2])
+            data = out[header_end + 1 : header_end + 1 + size]
+            pos = header_end + 1 + size + 1
+            try:
+                private_blob[oid] = _text_declares_private(data.decode("utf-8"))
+            except UnicodeDecodeError:
+                private_blob[oid] = False
+    safe: dict[str, bool] = {}
+    for commit in reversed(order):  # --topo-order lists children first
+        entry = present[commit]
+        if entry is not None:
+            safe[commit] = bool(entry) and private_blob.get(entry, False)
+        else:
+            safe[commit] = all(safe.get(p, True) for p in graph[commit])
+    if safe[head]:
+        return False
+    raise GateError(
+        f"{_DECLARATION_FILENAME} is absent, but this history declared a visibility "
+        'other than "private-until-review" without a later clean private '
+        "declaration; removing a declaration does not make the remote private, so "
+        "the gate will not treat it as never opted in. Restore it, or declare "
+        '"private-until-review" before removing it.'
+    )
+
+
+def _declares_public() -> bool:
+    """True when this repo's publication.toml declares public visibility.
+
+    Governs whether a missing denylist is a no-op or a hard failure. The
+    distinction is the whole point: a private-until-review repo must stay
+    clonable and committable without the secret, but a PUBLIC repo whose gate is
+    unconfigured is a silent pass — the scan prints "skipping" and exits 0, and
+    nothing downstream can tell that apart from a clean tree.
+
+    Absence of the file is False (fail-open): a repo that never opted into the
+    publication system is not suddenly blocked. A file that is PRESENT but
+    unparseable is a GateError, not False — that repo did opt in, and guessing
+    its visibility is exactly the coin-flip this function exists to remove.
+    """
+    try:
+        repo_root = Path(_run_git(["git", "rev-parse", "--show-toplevel"]).strip())
+    except GateError as exc:
+        # Fail closed. This used to return False ("not public"), which turned a
+        # broken or missing git into a skip in --message-file / --rev-range mode:
+        # those modes return straight after the verdict, so nothing later
+        # surfaced the error and a public repo exited 0 having scanned nothing.
+        raise GateError(
+            "could not resolve the repository root, so the gate cannot read the "
+            f"publication declaration and will not pass: {exc}"
+        ) from exc
+
+    text: str | None
+    if _DECLARATION_FROM_INDEX[0]:
+        text = _staged_declaration_text()
+        if text is None:
+            return _absent_declaration_verdict()
+    else:
+        path = repo_root / _DECLARATION_FILENAME
+        # Only genuine absence is the "never opted in" skip. A path that exists
+        # but is not a regular file (a directory, or a symlink -- dangling or
+        # not) used to take the same branch via `not path.is_file()`, so a
+        # stray directory or link silently disarmed a public repo's gate.
+        if not os.path.lexists(path):
+            return _absent_declaration_verdict()
+        if path.is_symlink() or not path.is_file():
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is present but is not a regular file; the "
+                "gate cannot tell whether this repo is public, so it will not pass."
+            )
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is present but could not be read ({exc}); "
+                "the gate cannot tell whether this repo is public, so it will not pass."
+            ) from exc
+    try:
+        raw = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise GateError(
+            f"{_DECLARATION_FILENAME} is present but could not be parsed ({exc}); "
+            "the gate cannot tell whether this repo is public, so it will not pass."
+        ) from exc
+
+    section = raw.get("publication")
+    if not isinstance(section, dict):
+        raise GateError(
+            f"{_DECLARATION_FILENAME} has no [publication] table; the gate cannot "
+            "tell whether this repo is public, so it will not pass."
+        )
+    # The set of legal visibilities is closed, and owned by Visibility in
+    # check_publication_plumbing.py. Compare against it rather than against the
+    # bare string "public": anything outside the set is a GateError, not a quiet
+    # "not public".
+    #
+    # This used to be `str(section.get("visibility", "")).strip() == "public"`,
+    # which coerced every other shape into the fail-OPEN branch. On a public repo
+    # that silently disarmed the gate -- the exact "nothing was scanned and CI is
+    # green" failure this function exists to prevent. A wrong-cased value
+    # ("Public"), a missing visibility key, an empty string, and a non-string
+    # (visibility = true) all took that branch. The declaration flip is precisely
+    # the commit where this matters: a case typo or a dropped line in the
+    # publication-review commit disarmed every later run.
+    if "visibility" not in section:
+        raise GateError(
+            f"{_DECLARATION_FILENAME} has a [publication] table but no visibility "
+            "key; the gate cannot tell whether this repo is public, so it will "
+            "not pass."
+        )
+    declared = section["visibility"]
+    if not isinstance(declared, str):
+        raise GateError(
+            f"{_DECLARATION_FILENAME} declares visibility={declared!r}, which is "
+            f"{type(declared).__name__} rather than a string; the gate cannot tell "
+            "whether this repo is public, so it will not pass."
+        )
+    normalised = declared.strip().casefold()
+    if normalised == "public":
+        return True
+    if normalised == "private-until-review":
+        return False
+    raise GateError(
+        f"{_DECLARATION_FILENAME} declares visibility={declared!r}, which is not "
+        'one of "public" or "private-until-review"; the gate cannot tell whether '
+        "this repo is public, so it will not pass."
+    )
+
+
+def _unconfigured(reason: str) -> None:
+    """Handle a denylist that is unset or unusable.
+
+    Returns quietly (caller no-ops) for a non-public repo; raises GateError for a
+    public one.
+    """
+    if _declares_public():
+        raise GateError(
+            f"{reason} but {_DECLARATION_FILENAME} declares visibility=\"public\". "
+            "A public repo with an unconfigured gate is a silent pass, so this is "
+            # The env-name placeholder below sits on a line of its own. The longest
+            # name in the estate is 52 characters, and folding it into a prose line
+            # pushes the SUBSTITUTED file past 100 columns while the template itself
+            # still looks clean. (This comment may not name the placeholder: it would
+            # be substituted too, and would itself go over.)
+            "a failure, not a skip. Provide the denylist via the "
+            "DOSSIER_FORBIDDEN_IDENTIFIERS environment variable "
+            "(in CI, the secret of that name: org-level where the repo is in an "
+            "org, otherwise a repo-level secret)."
+        )
+    print(f"{reason}; skipping identifier gate.", file=sys.stderr)
 
 
 def _resolve_identifiers() -> frozenset[str] | None:
@@ -374,22 +851,13 @@ def _resolve_identifiers() -> frozenset[str] | None:
     """
     raw = os.environ.get("DOSSIER_FORBIDDEN_IDENTIFIERS", "")
     if not raw.strip():
-        # Split so the line still fits at 100 columns after the per-repo env-var
-        # substitution: the longest name in the estate is 52 characters, 19 more
-        # than the canonical one, which pushed this over the limit in two repos.
-        print(
-            "DOSSIER_FORBIDDEN_IDENTIFIERS is empty or unset; "
-            "skipping identifier gate.",
-            file=sys.stderr,
-        )
+        _unconfigured("DOSSIER_FORBIDDEN_IDENTIFIERS is empty or unset")
         return None
     identifiers = parse_identifier_set(raw)
     if not identifiers:
-        print(
-            "DOSSIER_FORBIDDEN_IDENTIFIERS contained no usable "
-            f"identifiers (minimum length is {MIN_IDENTIFIER_LENGTH} "
-            "characters); skipping gate.",
-            file=sys.stderr,
+        _unconfigured(
+            "DOSSIER_FORBIDDEN_IDENTIFIERS contained no usable identifiers "
+            f"(minimum length is {MIN_IDENTIFIER_LENGTH} characters)"
         )
         return None
     return identifiers
@@ -453,49 +921,44 @@ def _run(args: argparse.Namespace) -> int:
     #    catches a ``git add -f samples/...`` leak regardless of secret config.
     leaked = leaked_tracked_files(paths, _GUARDED_DIRS)
     if leaked:
-        print("Tracked files under a gitignored data directory detected:", file=sys.stderr)
+        print("Tracked paths that must never be committed:", file=sys.stderr)
         for p in sorted(leaked, key=str):
             print(f"  {p}", file=sys.stderr)
         print(
-            "\nThese paths are gitignored by convention (samples/ holds real "
-            "identifier-bearing data — hostnames, service accounts, principal "
-            "handles). Remove them from the index: git rm --cached -r <path>.",
+            "\nThese are gitignored by convention, and .gitignore is advisory — "
+            "git add -f walks straight past it. A guarded data directory holds "
+            "real identifier-bearing data (hostnames, service accounts, principal "
+            "handles); an editor swap file holds the BUFFER of the file being "
+            "edited, secrets typed but not yet saved included; a root-level .env "
+            "holds credentials (.env.example is the exempt template).\n\n"
+            "Remove them from the index: git rm --cached -r <path>.",
             file=sys.stderr,
         )
         return 1
 
     # 2. Secret-driven: scan tracked text files (outside guarded dirs) for
-    #    forbidden identifiers. No-op until the secret is configured.
-    raw = os.environ.get("DOSSIER_FORBIDDEN_IDENTIFIERS", "")
-    if not raw.strip():
-        # Split so the line still fits at 100 columns after the per-repo env-var
-        # substitution: the longest name in the estate is 52 characters, 19 more
-        # than the canonical one, which pushed this over the limit in two repos.
-        print(
-            "DOSSIER_FORBIDDEN_IDENTIFIERS is empty or unset; "
-            "skipping identifier gate.",
-            file=sys.stderr,
-        )
-        return 0
-
-    identifiers = parse_identifier_set(raw)
-    if not identifiers:
-        print(
-            "DOSSIER_FORBIDDEN_IDENTIFIERS contained no usable "
-            f"identifiers (minimum length is {MIN_IDENTIFIER_LENGTH} "
-            "characters); skipping gate.",
-            file=sys.stderr,
-        )
+    #    forbidden identifiers. A no-op until the secret is configured — EXCEPT in
+    #    a repo declaring public visibility, where _resolve_identifiers raises
+    #    rather than let an unconfigured gate report a green pass.
+    #
+    #    This path used to duplicate the resolver inline, so the tree scan and the
+    #    message scans could drift apart in exactly the semantics that matter.
+    identifiers = _resolve_identifiers()
+    if identifiers is None:
         return 0
 
     scan_paths = [p for p in paths if not any(part in _SKIP_DIRS for part in p.parts)]
     unreadable: list[Path] = []
-    violations = scan_files(identifiers, scan_paths, unreadable=unreadable)
+    # --staged judges the index blobs (what the commit records), never the
+    # worktree; the CI default scans the checked-out tracked tree (WI-031).
+    scan = scan_staged_blobs if args.staged else scan_files
+    violations = scan(identifiers, scan_paths, unreadable=unreadable)
     if violations:
         print_report(violations)
         return 1
     if unreadable:
-        print("Tracked files could not be read; the gate cannot clear them:", file=sys.stderr)
+        what = "Staged blobs" if args.staged else "Tracked files"
+        print(f"{what} could not be read; the gate cannot clear them:", file=sys.stderr)
         for p in sorted(unreadable, key=str):
             print(f"  {p}", file=sys.stderr)
         print(
@@ -533,6 +996,7 @@ def main(argv: list[str] | None = None) -> int:
         "hook), e.g. origin/main..HEAD.",
     )
     args = parser.parse_args(argv)
+    _DECLARATION_FROM_INDEX[0] = bool(args.staged)
 
     try:
         return _run(args)
