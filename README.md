@@ -1,5 +1,12 @@
 # dossier
 
+> **Frozen 2026-10-04 — maintenance only.** This project still works and stays
+> in use where it is already wired in, but it gets security and break-fix
+> changes only: no new features and no new plans. Active development on
+> delegated agent work has moved to a successor control plane that doesn't
+> depend on this suite. The core library, regista, ships one final reduced
+> 0.8.0 release and then parks too.
+
 The lightest human-facing **work-item tracker** that earns its keep as a
 **provenance instrument**. A small team logs, assigns, and tracks issues through a
 web UI; underneath, every change is a signed, hash-chained event with a real actor
