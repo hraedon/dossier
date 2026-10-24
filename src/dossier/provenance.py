@@ -537,9 +537,14 @@ def read_session_summaries(
         tc_events = tc_by_session.get(sid, [])
         tool_calls = build_tool_call_trail(tc_events)
 
-        timestamps = [e.timestamp for e in tc_events if e.timestamp]
-        start_time = min(timestamps) if timestamps else getattr(att_ev, "timestamp", None)
-        end_time = max(timestamps) if timestamps else None
+        begins = [e.timestamp for e in tc_events if e.transition == _TOOL_CALL_BEGIN
+                  and e.timestamp]
+        ends = [e.timestamp for e in tc_events
+                if e.transition in (_TOOL_CALL_END, _TOOL_CALL_FAIL) and e.timestamp]
+        start_time = min(begins) if begins else None
+        if not tc_events:
+            start_time = getattr(att_ev, "timestamp", None)
+        end_time = max(ends) if ends else None
 
         degraded = any(tc.status in ("running", "orphaned-end") for tc in tool_calls)
         # The list view reports the chain + trail verdict. Per-event signature
@@ -659,9 +664,14 @@ def read_session_detail(
         harnesses = extract_harnesses(att_ev)
         attested_at = getattr(att_ev, "timestamp", None)
 
-    timestamps = [e.timestamp for e in tc_events if e.timestamp]
-    start_time = min(timestamps) if timestamps else attested_at
-    end_time = max(timestamps) if timestamps else None
+    begins = [e.timestamp for e in tc_events if e.transition == _TOOL_CALL_BEGIN
+              and e.timestamp]
+    ends = [e.timestamp for e in tc_events
+            if e.transition in (_TOOL_CALL_END, _TOOL_CALL_FAIL) and e.timestamp]
+    start_time = min(begins) if begins else None
+    if not tc_events:
+        start_time = attested_at
+    end_time = max(ends) if ends else None
     degraded = any(tc.status in ("running", "orphaned-end") for tc in tool_calls)
 
     summary = SessionSummary(

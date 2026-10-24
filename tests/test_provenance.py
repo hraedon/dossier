@@ -12,6 +12,7 @@ Fixtures mirror cairn's real event shape (agent-provenance):
 from __future__ import annotations
 
 import hashlib
+import re
 import uuid
 from copy import deepcopy
 from dataclasses import replace
@@ -765,6 +766,70 @@ def test_orphaned_end_session_renders_unknown_start_and_actual_end(client, gatew
     index = client.get("/sessions", params={"project": "dossier-test"})
     assert index.status_code == 200
     assert "verified, trail incomplete" in index.text
+    cells = re.findall(r"<td\b[^>]*>(.*?)</td>", index.text, re.DOTALL)
+    assert cells[4].strip() == "—"
+    assert cells[5].strip() == format_timestamp(event.timestamp)
+    assert summaries[0].start_time is None
+    assert summaries[0].end_time == event.timestamp
+    assert detail.summary.start_time is None
+    assert detail.summary.end_time == event.timestamp
+
+
+@pytest.mark.parametrize(
+    "mode",
+    ["attestation-only", "paired", "begin-only", "early-orphan-then-paired",
+     "paired-then-orphan-fail", "begin-then-orphan-end"],
+)
+def test_session_times_come_from_matching_event_kinds(client, gateway, mode):
+    from dossier.web import format_timestamp
+
+    attestation = _attest_session(gateway)
+    orphan = None
+    if mode == "early-orphan-then-paired":
+        issue, _ = gateway.create_issue(
+            actor=_agent_for_session(_SESSION_ID), work_item_type="bug",
+            custom_fields={"title": "Synthetic early orphan"},
+        )
+        orphan = _end_tool_call(gateway, issue.work_item_id)
+    begin = end = None
+    if mode != "attestation-only":
+        wid = _begin_tool_call(gateway)
+        begin = gateway.read_events_by_transition("tool_call_begin")[0]
+        if mode not in ("begin-only", "begin-then-orphan-end"):
+            end = _end_tool_call(gateway, wid)
+    if mode in ("paired-then-orphan-fail", "begin-then-orphan-end"):
+        issue, _ = gateway.create_issue(
+            actor=_agent_for_session(_SESSION_ID), work_item_type="bug",
+            custom_fields={"title": "Synthetic later orphan"},
+        )
+        if mode == "paired-then-orphan-fail":
+            orphan = _fail_tool_call(gateway, issue.work_item_id)
+        else:
+            orphan = _end_tool_call(gateway, issue.work_item_id)
+        end = orphan
+    expected_start = begin.timestamp if begin else attestation.timestamp
+    expected_end = end.timestamp if end else None
+    _login(client)
+    response = client.get("/sessions", params={"project": "dossier-test"})
+    assert response.status_code == 200
+    cells = re.findall(r"<td\b[^>]*>(.*?)</td>", response.text, re.DOTALL)
+    assert cells[4].strip() == (format_timestamp(expected_start) or "—")
+    assert cells[5].strip() == (format_timestamp(expected_end) or "—")
+    summary = read_session_summaries(gateway, "dossier-test")[0]
+    detail = read_session_detail(gateway, _SESSION_ID, "dossier-test")
+    assert detail is not None
+    for view in (summary, detail.summary):
+        assert view.start_time == expected_start
+        assert view.end_time == expected_end
+        assert view.degraded is (orphan is not None or mode == "begin-only")
+    expected_status = "gap-detected" if summary.degraded else "verified"
+    assert summary.verification.status == detail.verification.status == expected_status
+    expected_checked = {
+        "attestation-only": 1, "paired": 3, "begin-only": 2,
+        "early-orphan-then-paired": 4, "paired-then-orphan-fail": 4,
+        "begin-then-orphan-end": 3,
+    }
+    assert detail.verification.signatures_checked == expected_checked[mode]
 
 
 def test_session_detail_route_not_found(client, gateway):
