@@ -32,7 +32,11 @@
     <div class="ds-chain__event ds-trail__event">
       <div class="ds-chain__rule ds-trail__rule--{{ tc.status }}"></div>
       <div class="ds-chain__row">
+        {% if tc.begin_timestamp %}
         <time class="ds-chain__time mono tnum">{{ format_timestamp(tc.begin_timestamp) }}</time>
+        {% else %}
+        <span class="ds-chain__time mono tnum">start unknown</span>
+        {% endif %}
         <span class="ds-chain__action mono">{{ tc.tool }}</span>
         <span class="ds-pill {{ tool_call_status_class(tc.status) }}"><span class="ds-pill__dot"></span>{{ tc.status }}</span>
         {% if tc.harness_name %}

@@ -55,8 +55,8 @@
         <td>{{ session_principal_display(s) }}</td>
         <td class="mono">{{ harness_display(s.harnesses) }}</td>
         <td class="mono tnum">{{ s.event_count }}</td>
-        <td class="mono tnum">{{ format_timestamp(s.start_time) }}</td>
-        <td class="mono tnum">{{ format_timestamp(s.end_time) }}</td>
+        <td class="mono tnum">{{ format_timestamp(s.start_time) if s.start_time is not none else "—" }}</td>
+        <td class="mono tnum">{{ format_timestamp(s.end_time) if s.end_time is not none else "—" }}</td>
         <td>
           <span class="ds-pill {{ verification_pill_class(s.verification.status) }}"
                 title="{{ s.verification.reasons | join('; ') }}">
