@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from conftest import login as _login
 from helpers import AGENT_R
 from regista import Event
@@ -298,6 +300,72 @@ def test_build_tool_call_trail_pairs_begin_end():
     assert trail[0].tool == "Edit"
     assert trail[0].status == "completed"
     assert trail[0].exit_code == 0
+
+
+@pytest.mark.parametrize("transition", ["tool_call_end", "tool_call_fail"])
+def test_orphaned_end_keeps_the_begin_absent_and_reports_gap(transition):
+    ended = datetime(2026, 10, 24, 12, 34, 56, tzinfo=UTC)
+    event = _make_event(
+        transition=transition, timestamp=ended, event_seq=2,
+        payload={"tool": "SyntheticTool", "result_summary": {"error": "synthetic failure"}},
+    )
+    original = deepcopy(event)
+    trail = build_tool_call_trail([event])
+    assert len(trail) == 1
+    assert trail[0].begin_timestamp is None
+    assert trail[0].end_timestamp == ended
+    assert trail[0].status == "orphaned-end"
+    assert trail[0].error == "synthetic failure"
+    verdict = compute_verification(True, trail)
+    assert verdict.status == "gap-detected"
+    assert len(verdict.degradation_flags) == 1
+    assert "has an end without a begin" in verdict.degradation_flags[0]
+    assert event == original
+
+
+@pytest.mark.parametrize("transition", ["tool_call_end", "tool_call_fail"])
+def test_trail_out_of_order_duplicates_preserve_latest_paired_events(transition):
+    wid = uuid.uuid4()
+    early = _make_event(work_item_id=wid, event_seq=1, payload={"tool": "older"})
+    begin = _make_event(work_item_id=wid, event_seq=2, payload={"tool": "latest"})
+    old_end = _make_event(
+        work_item_id=wid, transition=transition, event_seq=3,
+        payload={"result_summary": {"exit_code": 3}},
+    )
+    end = _make_event(
+        work_item_id=wid, transition=transition, event_seq=4,
+        payload={"result_summary": {"exit_code": 4}},
+    )
+    events = [end, early, old_end, begin, end]
+    original = deepcopy(events)
+    trail = build_tool_call_trail(events)
+    assert len(trail) == 1
+    assert trail[0].begin_timestamp == begin.timestamp
+    assert trail[0].end_timestamp == end.timestamp
+    assert trail[0].tool == "latest"
+    assert trail[0].exit_code == 4
+    assert trail[0].status == ("failed" if transition == "tool_call_fail" else "completed")
+    assert compute_verification(True, trail).status == "verified"
+    assert events == original
+
+
+@pytest.mark.parametrize(
+    "chain,findings,expected",
+    [("intact", [], "gap-detected"), ("broken", [], "unverified"),
+     ("unknown", [], "unverifiable"), ("unknown", ["invalid signature"], "unverified")],
+)
+def test_orphan_gap_preserves_signature_and_chain_precedence(chain, findings, expected):
+    from dossier.provenance import ChainIntegrity, SignatureReport
+
+    trail = build_tool_call_trail([_make_event(transition="tool_call_end")])
+    verdict = compute_verification(
+        ChainIntegrity(chain), trail, signatures=SignatureReport(findings=findings, checked=1),
+    )
+    assert verdict.status == expected
+    assert len(verdict.degradation_flags) == 1
+    assert "has an end without a begin" in verdict.degradation_flags[0]
+    assert verdict.signatures_checked == 1
+    assert verdict.signature_findings == findings
 
 
 def test_build_tool_call_trail_degraded_begin_without_end():
@@ -653,6 +721,50 @@ def test_session_detail_route_failed_shows_error(client, gateway):
     assert resp.status_code == 200
     assert "failed" in resp.text.lower()
     assert "exit code 1" in resp.text
+
+
+@pytest.mark.parametrize("transition", ["tool_call_end", "tool_call_fail"])
+def test_orphaned_end_session_renders_unknown_start_and_actual_end(client, gateway, transition):
+    from dossier.web import format_timestamp
+
+    _attest_session(gateway)
+    issue, _ = gateway.create_issue(
+        actor=_agent_for_session(_SESSION_ID), work_item_type="bug",
+        custom_fields={"title": "Synthetic orphaned tool call"},
+    )
+    if transition == "tool_call_end":
+        event = _end_tool_call(gateway, issue.work_item_id, tool="SyntheticTool")
+    else:
+        event = _fail_tool_call(
+            gateway, issue.work_item_id, tool="SyntheticTool", error="synthetic failure",
+        )
+    _login(client)
+    response = client.get(f"/p/dossier-test/sessions/{_SESSION_ID}")
+    assert response.status_code == 200
+    assert "start unknown" in response.text
+    assert f"ended: {format_timestamp(event.timestamp)}" in response.text
+    assert "has an end without a begin" in response.text
+    assert "verified, trail incomplete" in response.text
+    assert (
+        '<span class="ds-pill ds-pill--warn"><span class="ds-pill__dot"></span>'
+        'orphaned-end</span>'
+    ) in response.text
+    assert "Every attested event in this session replays" not in response.text
+    if transition == "tool_call_fail":
+        assert "synthetic failure" in response.text
+
+    summaries = read_session_summaries(gateway, "dossier-test")
+    detail = read_session_detail(gateway, _SESSION_ID, "dossier-test")
+    assert summaries[0].degraded is True
+    assert summaries[0].verification.status == "gap-detected"
+    assert detail is not None and detail.summary.degraded is True
+    assert detail.verification.status == "gap-detected"
+    assert detail.tool_calls[0].begin_timestamp is None
+    assert detail.tool_calls[0].end_timestamp == event.timestamp
+
+    index = client.get("/sessions", params={"project": "dossier-test"})
+    assert index.status_code == 200
+    assert "verified, trail incomplete" in index.text
 
 
 def test_session_detail_route_not_found(client, gateway):

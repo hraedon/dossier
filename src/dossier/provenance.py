@@ -288,9 +288,6 @@ def build_tool_call_trail(events: list[Event]) -> list[ToolCallEntry]:
             elif ev.transition in (_TOOL_CALL_END, _TOOL_CALL_FAIL):
                 end_ev = ev
 
-        if begin_ev is None and end_ev is not None:
-            begin_ev = end_ev
-
         base_ev = begin_ev or end_ev
         if base_ev is None:
             continue
@@ -311,6 +308,8 @@ def build_tool_call_trail(events: list[Event]) -> list[ToolCallEntry]:
 
         if end_ev is None:
             status = "running"
+        elif begin_ev is None:
+            status = "orphaned-end"
         elif end_ev.transition == _TOOL_CALL_FAIL:
             status = "failed"
         else:
@@ -542,7 +541,7 @@ def read_session_summaries(
         start_time = min(timestamps) if timestamps else getattr(att_ev, "timestamp", None)
         end_time = max(timestamps) if timestamps else None
 
-        degraded = any(tc.status == "running" for tc in tool_calls)
+        degraded = any(tc.status in ("running", "orphaned-end") for tc in tool_calls)
         # The list view reports the chain + trail verdict. Per-event signature
         # verification is deliberately left to the detail view: it is one call
         # per event, and an estate-wide list must not turn into thousands of
@@ -663,7 +662,7 @@ def read_session_detail(
     timestamps = [e.timestamp for e in tc_events if e.timestamp]
     start_time = min(timestamps) if timestamps else attested_at
     end_time = max(timestamps) if timestamps else None
-    degraded = any(tc.status == "running" for tc in tool_calls)
+    degraded = any(tc.status in ("running", "orphaned-end") for tc in tool_calls)
 
     summary = SessionSummary(
         session_id=session_id,

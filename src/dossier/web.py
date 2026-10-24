@@ -278,6 +278,7 @@ def tool_call_status_class(status: str) -> str:
         "completed": "ds-pill--ok",
         "failed": "ds-pill--crit",
         "running": "ds-pill--warn",
+        "orphaned-end": "ds-pill--warn",
     }.get(status, "ds-pill--muted")
 
 
