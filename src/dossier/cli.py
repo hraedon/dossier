@@ -272,7 +272,7 @@ def _emit_health(health: dict[str, Any], *, use_json: bool) -> int:
             print(f"  {check['name']}: {check['status']}{detail}")
 
     failed = [c for c in health["checks"] if c["status"] == "fail"]
-    return 1 if failed else 0
+    return 1 if health.get("ok") is False or failed else 0
 
 
 def _cmd_install_service(args: argparse.Namespace) -> int:

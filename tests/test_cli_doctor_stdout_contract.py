@@ -19,7 +19,9 @@ detail).
 
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -88,6 +90,115 @@ def test_doctor_prefers_running_service_health(monkeypatch):
 
     assert _read_running_health() == payload
     assert response.closed is True
+
+
+def _report_payload(summary: object, status: str | None) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "component": "dossier",
+        "version": "synthetic",
+        "environment": "test",
+        "ok": summary,
+        "degraded": False,
+        "regista": {"reachable": True, "project": "synthetic", "chain_ok": None},
+        "checks": [] if status is None else [
+            {"name": "synthetic", "status": status, "detail": None},
+        ],
+    }
+    if summary == "missing-summary":
+        payload.pop("ok")
+    return payload
+
+
+def _run_report_only_doctor(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict[str, object],
+    *,
+    json_output: bool,
+    http_503: bool = False,
+) -> int:
+    """Exercise real main/argparse/reporting without settings or external I/O."""
+    monkeypatch.setattr("dossier.config.load_suite_env", lambda: None)
+
+    def forbidden_settings(*args: object, **kwargs: object) -> None:
+        pytest.fail("a parsed running-service report must not read settings or use a backend")
+
+    monkeypatch.setattr("dossier.config.load_settings", forbidden_settings)
+    monkeypatch.setenv("DOSSIER_BASE_URL", "http://dossier.example.test")
+    response = _HealthResponse(payload)
+    error_body = io.BytesIO(json.dumps(payload).encode("utf-8"))
+    calls: list[str] = []
+
+    def report_response(url: str, *, timeout: float) -> _HealthResponse:
+        assert url == "http://dossier.example.test/healthz"
+        assert timeout == 1.0
+        calls.append(url)
+        if http_503:
+            raise urllib.error.HTTPError(url, 503, "synthetic unhealthy", {}, error_body)
+        return response
+
+    monkeypatch.setattr("urllib.request.urlopen", report_response)
+    result = main(["doctor", "--json"] if json_output else ["doctor"])
+    assert len(calls) == 1
+    if http_503:
+        assert error_body.closed
+    else:
+        assert response.closed
+        error_body.close()
+    return result
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize(("summary", "status", "expected"), [
+    (False, None, 1), (False, "ok", 1), (False, "warn", 1), (False, "skip", 1),
+    (False, "fail", 1), (True, "fail", 1),
+    (True, None, 0), (True, "ok", 0), (True, "warn", 0), (True, "skip", 0),
+    (None, None, 0), (0, None, 0), ("false", None, 0), ("missing-summary", None, 0),
+])
+def test_doctor_exit_honors_false_summary_without_rewriting_report(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    summary: object, status: str | None, expected: int, json_output: bool,
+) -> None:
+    payload = _report_payload(summary, status)
+    expected_json = json.dumps(payload, indent=2) + "\n"
+
+    assert _run_report_only_doctor(monkeypatch, payload, json_output=json_output) == expected
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert json.dumps(payload, indent=2) + "\n" == expected_json
+    if json_output:
+        assert captured.out == expected_json
+    else:
+        expected_text = (
+            "dossier synthetic — component health\n"
+            "  environment: test\n"
+            "  regista: reachable=True project=synthetic chain_ok=None\n"
+        )
+        if status is not None:
+            expected_text += f"  synthetic: {status}\n"
+        assert captured.out == expected_text
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+@pytest.mark.parametrize(("summary", "status", "expected"), [
+    (False, None, 1), (True, "fail", 1), (True, None, 0),
+])
+def test_doctor_consumes_mocked_503_report_without_changing_http_policy(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    summary: bool, status: str | None, expected: int, json_output: bool,
+) -> None:
+    payload = _report_payload(summary, status)
+
+    assert _run_report_only_doctor(
+        monkeypatch, payload, json_output=json_output, http_503=True,
+    ) == expected
+
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    if json_output:
+        assert captured.out == json.dumps(payload, indent=2) + "\n"
+    else:
+        assert captured.out.startswith("dossier synthetic — component health\n")
 
 
 def _set_cli_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
