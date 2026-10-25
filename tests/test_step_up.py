@@ -19,7 +19,12 @@ from dossier.auth.step_up import (
 )
 
 SECRET = "test-session-secret"
-NOW = datetime.now(UTC)
+
+
+@pytest.fixture
+def now() -> datetime:
+    """Capture one fresh instant per test, independent of collection duration."""
+    return datetime.now(UTC)
 
 
 class TestProtectedOperations:
@@ -45,51 +50,51 @@ class TestProtectedOperations:
 
 
 class TestStepUpSignature:
-    def test_signature_deterministic(self):
-        sig1 = compute_step_up_signature(SECRET, NOW, "digest1", "alice")
-        sig2 = compute_step_up_signature(SECRET, NOW, "digest1", "alice")
+    def test_signature_deterministic(self, now: datetime):
+        sig1 = compute_step_up_signature(SECRET, now, "digest1", "alice")
+        sig2 = compute_step_up_signature(SECRET, now, "digest1", "alice")
         assert sig1 == sig2
 
-    def test_signature_binds_to_digest(self):
-        sig1 = compute_step_up_signature(SECRET, NOW, "digest1", "alice")
-        sig2 = compute_step_up_signature(SECRET, NOW, "digest2", "alice")
+    def test_signature_binds_to_digest(self, now: datetime):
+        sig1 = compute_step_up_signature(SECRET, now, "digest1", "alice")
+        sig2 = compute_step_up_signature(SECRET, now, "digest2", "alice")
         assert sig1 != sig2
 
-    def test_signature_binds_to_principal(self):
-        sig1 = compute_step_up_signature(SECRET, NOW, "digest1", "alice")
-        sig2 = compute_step_up_signature(SECRET, NOW, "digest1", "bob")
+    def test_signature_binds_to_principal(self, now: datetime):
+        sig1 = compute_step_up_signature(SECRET, now, "digest1", "alice")
+        sig2 = compute_step_up_signature(SECRET, now, "digest1", "bob")
         assert sig1 != sig2
 
-    def test_signature_binds_to_auth_time(self):
-        sig1 = compute_step_up_signature(SECRET, NOW, "digest1", "alice")
-        later = NOW + timedelta(seconds=1)
+    def test_signature_binds_to_auth_time(self, now: datetime):
+        sig1 = compute_step_up_signature(SECRET, now, "digest1", "alice")
+        later = now + timedelta(seconds=1)
         sig2 = compute_step_up_signature(SECRET, later, "digest1", "alice")
         assert sig1 != sig2
 
-    def test_signature_binds_to_secret(self):
-        sig1 = compute_step_up_signature(SECRET, NOW, "digest1", "alice")
-        sig2 = compute_step_up_signature("other-secret", NOW, "digest1", "alice")
+    def test_signature_binds_to_secret(self, now: datetime):
+        sig1 = compute_step_up_signature(SECRET, now, "digest1", "alice")
+        sig2 = compute_step_up_signature("other-secret", now, "digest1", "alice")
         assert sig1 != sig2
 
 
 class TestProduceEvidence:
-    def test_produce_evidence(self):
+    def test_produce_evidence(self, now: datetime):
         evidence = produce_step_up_evidence(
             SECRET,
-            NOW,
+            now,
             "digest1",
             "alice",
         )
-        assert evidence.auth_time == NOW
+        assert evidence.auth_time == now
         assert evidence.operation_digest == "digest1"
         assert evidence.principal_id == "alice"
         assert evidence.method == "password_reentry"
         assert len(evidence.signature) == 64
 
-    def test_produce_evidence_custom_method(self):
+    def test_produce_evidence_custom_method(self, now: datetime):
         evidence = produce_step_up_evidence(
             SECRET,
-            NOW,
+            now,
             "digest1",
             "alice",
             method="entra_mfa",
@@ -98,8 +103,8 @@ class TestProduceEvidence:
 
 
 class TestVerifyEvidence:
-    def test_valid_evidence(self):
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+    def test_valid_evidence(self, now: datetime):
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         valid, error = verify_step_up_evidence(
             SECRET,
             evidence,
@@ -109,8 +114,8 @@ class TestVerifyEvidence:
         assert valid is True
         assert error is None
 
-    def test_wrong_digest(self):
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+    def test_wrong_digest(self, now: datetime):
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         valid, error = verify_step_up_evidence(
             SECRET,
             evidence,
@@ -120,8 +125,8 @@ class TestVerifyEvidence:
         assert valid is False
         assert "different operation" in (error or "")
 
-    def test_wrong_principal(self):
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+    def test_wrong_principal(self, now: datetime):
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         valid, error = verify_step_up_evidence(
             SECRET,
             evidence,
@@ -131,9 +136,9 @@ class TestVerifyEvidence:
         assert valid is False
         assert "different principal" in (error or "")
 
-    def test_forged_signature(self):
+    def test_forged_signature(self, now: datetime):
         evidence = StepUpEvidence(
-            auth_time=NOW,
+            auth_time=now,
             operation_digest="digest1",
             principal_id="alice",
             signature="forged" * 8,
@@ -147,8 +152,8 @@ class TestVerifyEvidence:
         assert valid is False
         assert "signature is invalid" in (error or "")
 
-    def test_stale_evidence(self):
-        old_time = NOW - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
+    def test_stale_evidence(self, now: datetime):
+        old_time = now - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
         evidence = produce_step_up_evidence(SECRET, old_time, "digest1", "alice")
         valid, error = verify_step_up_evidence(
             SECRET,
@@ -198,11 +203,11 @@ class TestIsAuthRecent:
     def test_none_auth_time(self):
         assert is_auth_recent(None) is False
 
-    def test_recent_auth(self):
-        assert is_auth_recent(NOW) is True
+    def test_recent_auth(self, now: datetime):
+        assert is_auth_recent(now) is True
 
-    def test_old_auth(self):
-        old = NOW - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
+    def test_old_auth(self, now: datetime):
+        old = now - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
         assert is_auth_recent(old) is False
 
     def test_future_auth(self):
@@ -216,8 +221,8 @@ class TestIsAuthRecent:
 
 
 class TestEvidenceSerialization:
-    def test_round_trip(self):
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+    def test_round_trip(self, now: datetime):
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         data = evidence.to_dict()
         restored = StepUpEvidence.from_dict(data)
         assert restored.auth_time == evidence.auth_time
@@ -245,11 +250,11 @@ class TestDossierApprovalVerifier:
 
         return SimpleNamespace(approver_id=approver_id, step_up_evidence=evidence_json)
 
-    def test_valid_evidence_returns_true(self):
+    def test_valid_evidence_returns_true(self, now: datetime):
         import json
 
         verifier = self._make_verifier()
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         approval = self._make_approval("alice", json.dumps(evidence.to_dict()))
         assert verifier.verify_approval(self._make_operation("digest1"), approval) is True
 
@@ -268,39 +273,39 @@ class TestDossierApprovalVerifier:
         approval = self._make_approval("alice", "not-json{{{")
         assert verifier.verify_approval(self._make_operation(), approval) is False
 
-    def test_wrong_digest_returns_false(self):
+    def test_wrong_digest_returns_false(self, now: datetime):
         import json
 
         verifier = self._make_verifier()
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         approval = self._make_approval("alice", json.dumps(evidence.to_dict()))
         # Operation has a different digest.
         assert verifier.verify_approval(self._make_operation("digest2"), approval) is False
 
-    def test_wrong_principal_returns_false(self):
+    def test_wrong_principal_returns_false(self, now: datetime):
         import json
 
         verifier = self._make_verifier()
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         # Approval claims bob, but evidence is bound to alice.
         approval = self._make_approval("bob", json.dumps(evidence.to_dict()))
         assert verifier.verify_approval(self._make_operation("digest1"), approval) is False
 
-    def test_forged_signature_returns_false(self):
+    def test_forged_signature_returns_false(self, now: datetime):
         import json
 
         verifier = self._make_verifier()
-        evidence = produce_step_up_evidence(SECRET, NOW, "digest1", "alice")
+        evidence = produce_step_up_evidence(SECRET, now, "digest1", "alice")
         data = evidence.to_dict()
         data["signature"] = "forged" * 8
         approval = self._make_approval("alice", json.dumps(data))
         assert verifier.verify_approval(self._make_operation("digest1"), approval) is False
 
-    def test_stale_evidence_returns_false(self):
+    def test_stale_evidence_returns_false(self, now: datetime):
         import json
 
         verifier = self._make_verifier()
-        old_time = NOW - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
+        old_time = now - timedelta(seconds=DEFAULT_STEP_UP_MAX_AGE_SECONDS + 10)
         evidence = produce_step_up_evidence(SECRET, old_time, "digest1", "alice")
         approval = self._make_approval("alice", json.dumps(evidence.to_dict()))
         assert verifier.verify_approval(self._make_operation("digest1"), approval) is False
